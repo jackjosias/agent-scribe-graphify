@@ -57,8 +57,16 @@
 
 ```mermaid
 graph TD
-    H[🧑 Humain] -->|tape:| I[[TENOR INIT::<br/>init-tenor SKILL.md]]
-    I -->|force le LLM à lire| T[[init-tenor<br/>SKILL.md]]
+    subgraph MULTI[🧑 🧑 🧑 N HUMAINS — N TERMINAUX]
+        H1[Humain 1] -->|tape:| I1[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        H2[Humain 2] -->|tape:| I2[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        H3[Humain N] -->|tape:| I3[[TENOR INIT::<br/>init-tenor SKILL.md]]
+    end
+
+    I1 -->|force le LLM à lire| T[[init-tenor<br/>SKILL.md]]
+    I2 --> T
+    I3 --> T
+
     T -->|exécute| TENOR[tenor-init]
 
     TENOR --> B[SCRIBE-RAG<br/>Mémoire causale]
@@ -70,13 +78,25 @@ graph TD
     D --> G[.agent/rules/]
     D --> H[.agent/workflow/]
 
-    style H fill:#f39c12,stroke:#e67e22,color:#fff
-    style I fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
+    B -.-> M[🔒 MULTI-AGENT<br/>Lock • Claims • Sync<br/>Worktree • Workflow ACK]
+    C -.-> M
+    D -.-> M
+
+    M ---> P[(📁 MÊME CODEBASE<br/>Fichiers partagés<br/>Zéro régression)]
+
+    style H1 fill:#f39c12,stroke:#e67e22,color:#fff
+    style H2 fill:#f39c12,stroke:#e67e22,color:#fff
+    style H3 fill:#f39c12,stroke:#e67e22,color:#fff
+    style I1 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
+    style I2 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
+    style I3 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
     style T fill:#9b59b6,stroke:#8e44ad,color:#fff
     style TENOR fill:#e74c3c,stroke:#c0392b,color:#fff
     style B fill:#3498db,stroke:#2980b9,color:#fff
     style C fill:#2ecc71,stroke:#27ae60,color:#fff
     style D fill:#e67e22,stroke:#d35400,color:#fff
+    style M fill:#e91e63,stroke:#c2185b,color:#fff
+    style P fill:#2c3e50,stroke:#1a252f,color:#fff
 ```
 
 ### Responsabilités des composants
