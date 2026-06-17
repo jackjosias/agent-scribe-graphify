@@ -10,6 +10,22 @@
   <img src="https://img.shields.io/badge/Graphify-v0.6.2-purple?logo=graph" alt="Graphify 0.6.2">
 </p>
 
+**Bundle portable d'infrastructure agentique**
+
+## 📋 Table des matières
+
+- [✨ Fonctionnalités](#-fonctionnalités)
+- [🏗️ Architecture](#️-architecture)
+- [⚡ Quick Start](#-quick-start-pour-les-pressés)
+- [📦 Installation](#-installation--tutoriel-complet)
+- [🚀 Utilisation quotidienne](#-utilisation-quotidienne)
+- [👥 Mode Multi-Agent](#-mode-multi-agent)
+- [🔄 Portabilité](#-portabilité)
+- [🤝 Contribuer](#-contribuer)
+- [❓ FAQ / Dépannage](#-faq--dépannage)
+- [📄 Licence](#-licence)
+- [❓ FAQ / Dépannage](#-faq--dépannage)
+
 **Bundle portable d'infrastructure agentique** — copiez `.agent/` dans n'importe quel projet et bénéficiez instantanément de SCRIBE, Graphify et du protocole TENOR.
 
 > **Un seul dossier. Aucune dépendance externe. Aucune installation globale.**
