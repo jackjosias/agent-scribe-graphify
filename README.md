@@ -148,6 +148,105 @@ graph TD
 
 ---
 
+## 👥 Mode Multi-Agent — plusieurs LLMs, même codebase
+
+Une fonctionnalité clé du bundle : lancer **1, 3, 5 terminaux ou plus** simultanément, chacun avec son propre agent (Codex CLI, Claude Code, OpenCode...), et les faire travailler sur **le même projet, les mêmes fichiers, sans rien casser**.
+
+### Comment ça marche
+
+```text
+┌─ TERMINAL 1 ─┐    ┌─ TERMINAL 2 ─┐    ┌─ TERMINAL 3 ─┐
+│  OpenCode     │    │  Claude Code  │    │  Codex CLI    │
+│  Agent A      │    │  Agent B      │    │  Agent C      │
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                   │
+       └───────────────────┬───────────────────┘
+                          ▼
+              ┌─────────────────────┐
+              │   SCRIBE Lock       │
+              │   Coordination      │
+              │   Sync & Worktree   │
+              └─────────────────────┘
+                          │
+                          ▼
+              ┌─────────────────────┐
+              │   MÊME CODEBASE     │
+              │   Fichiers partagés │
+              │   Zéro régression   │
+              └─────────────────────┘
+```
+
+### Règles de coordination — chaque agent les respecte
+
+| Situation | Comportement |
+|:----------|:-------------|
+| **Agent A** travaille sur `auth/login.ts` | Prend un **claim** sur `auth` → les autres agents évitent ce fichier |
+| **Agent B** veut modifier `auth/login.ts` | Doit **attendre** ou demander un **rebase** via sync |
+| **Agent A** et **Agent B** travaillent sur des fichiers différents | ✅ OK — claims différents, pas de conflit |
+| **Agent C** veut écrire dans le SCRIBE | Doit d'abord avoir un **workflow ack** à jour, puis **lock acquire** |
+| Avant de livrer | Chaque agent lance `scribe worktree --strict` pour vérifier l'absence de conflit |
+
+### Workflow complet pour l'humain
+
+**1. Ouvrez N terminaux**
+
+```bash
+# Terminal 1
+cd /chemin/du/projet
+# Lancez votre agent (OpenCode, Codex CLI, Claude Code...)
+
+# Terminal 2 (identique)
+cd /chemin/du/projet
+# Lancez un second agent
+
+# Terminal 3, 4, 5... idem
+```
+
+**2. Chaque agent s'initialise**
+
+```text
+Vous : [TENOR INIT::[.agent/skills/init-tenor/SKILL.md]]
+Agent : 📋 SCRIBE-CHECK TENOR V4 — MACHINE PROOF
+        Agent session : cli-20260617-A1
+```
+
+Chaque terminal reçoit un **ID unique** (A1, B2, C3...) généré par `scribe whoami`.
+
+**3. Chaque agent prend un claim**
+
+Avant de toucher un fichier, l'agent réserve sa zone :
+```bash
+.agent/workflow/scribe/scribe coordination claim --scope "auth" --agent "cli-20260617-A1"
+```
+
+**4. Synchronisation avant livraison**
+
+```bash
+.agent/workflow/scribe/scribe sync --agent "cli-20260617-A1" --type cli
+.agent/workflow/scribe/scribe worktree --strict
+```
+
+**5. Résultat — zéro conflit, zéro régression**
+
+Les agents :
+- **Ne s'écrasent pas** les fichiers mutuellement (claims + locks)
+- **Lisert le SCRIBE** avant chaque modification (mémoire des erreurs passées)
+- **Consultent Graphify** avant de lire des fichiers (blast radius connu)
+- **Synchronisent** avant de livrer (worktree detecte les conflits)
+
+### Pourquoi ça ne casse jamais
+
+| Mécanisme | Protection |
+|:----------|:-----------|
+| **Claims** | Chaque agent déclare sa zone de travail → les autres savent où il opère |
+| **Lock** | Verrouille le SCRIBE pendant une écriture → pas d'écrasement mémoire |
+| **Sync** | Synchronise l'état avant chaque action → personne ne travaille sur un état périmé |
+| **Worktree** | Vérifie les conflits avant livraison → pas de régression silencieuse |
+| **Workflow ACK** | Un agent sans ack frais ne peut pas écrire dans le SCRIBE |
+| **Graphify** | Voir le blast radius avant de modifier → éviter les cassures en chaîne |
+
+---
+
 ## 📦 Installation — Tutoriel complet
 
 ### Prérequis
