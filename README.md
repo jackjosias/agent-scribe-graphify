@@ -178,6 +178,175 @@ BM25 scores → [Cosine scores si hybride] → Negative matching → Fusion 8 fa
 
 **Gate qualité** : `8/8` checks obligatoires (`≥ 7/8` pour BM25 canonique).
 
+---
+
+#### 🕸️ Graphify — Pipeline en 6 étapes (AST + LLM + NetworkX)
+
+Version installée : **`0.6.2`** (package PyPI `graphifyy`, géré par `pipx`).
+
+```
+detect → transcribe → extract (AST + LLM) → build (NetworkX) → cluster + analyze → export
+```
+
+| Étape | Méthode | Coût |
+|:------|:--------|:-----|
+| **detect** | Scan filesystem + classification par extension (25 types de fichiers) | Gratuit |
+| **transcribe** | OpenAI Whisper (modèle `base`) pour audio/vidéo | GPU/CPU |
+| **extract (AST)** | Parsers syntaxiques natifs — fonctions, classes, imports, variables, signatures | **Gratuit** (déterministe) |
+| **extract (sémantique)** | LLM — sous-agents Claude (parallèle, 20-25 fichiers/chunk) ou Kimi K2.6 | Tokens LLM |
+| **build** | Construction graphe **NetworkX** (`Graph` ou `DiGraph` si `--directed`) | Gratuit |
+| **cluster** | Community detection → détection de **communautés** + score de cohésion | Gratuit |
+| **analyze** | **God-nodes** (degré centralité), **connexions surprenantes** (cross-community), questions suggérées | Gratuit |
+| **export** | Multi-format : `graph.json`, `graph.html` (interactif), `graph.svg`, `graph.graphml`, `cypher.txt` (Neo4j), vault Obsidian, wiki crawlable | Gratuit |
+
+**Mécanismes clés** :
+
+- **Cache SHA256** : les fichiers non modifiés sont réutilisés entre sessions — pas de re-extraction inutile
+- **Watch mode** : surveille le dossier en arrière-plan (debounce 3s) — code modifié → re-extraction AST + rebuild en < 3s
+- **Serveur MCP** : expose `query_graph`, `get_node`, `get_neighbors`, `get_community`, `god_nodes`, `graph_stats`, `shortest_path` pour les agents LLM
+- **Traqueur de coût** : cumul des tokens consommés dans `graphify-out/cost.json`
+- **Hooks durcis** : les hooks Codex/Gemini sont patchés pour consommer `stdin` avant de répondre (via `scribe_graphify_hooks.py`)
+
+**Fichiers de sortie** :
+```
+graphify-out/
+├── GRAPH_REPORT.md      ← Résumé ~500 tokens (god-nodes, communautés, blast radius)
+├── graph.json            ← Graphe complet NetworkX (Node-Link)
+├── graph.html            ← Visualisation interactive (navigateur)
+├── cache/                ← Cache SHA256 des fichiers déjà traités
+└── cost.json             ← Coût cumulatif en tokens
+```
+
+**Requêtage par l'agent LLM** :
+```bash
+graphify query "architecture auth"       # BFS traversal (profondeur 3)
+graphify query "..." --dfs               # DFS traversal (profondeur 6)
+graphify path "FonctionA" "FonctionB"    # Plus court chemin (networkx.shortest_path)
+graphify explain "NomModule"             # Explication d'un nœud
+graphify update .                        # Mise à jour incrémentale (SHA256 diff)
+graphify watch .                         # Watcher arrière-plan temps réel
+```
+
+---
+
+#### 🔒 Multi-Agent — Coordination par fichiers (lock atomique + claims sémantiques)
+
+Tout le système de coordination est basé sur le **filesystem** : pas de base de données, pas de daemon, pas de serveur. Chaque agent écrit et lit dans `scribe-out/`.
+
+##### Lock — acquisition atomique (`scribe_lock.py`)
+
+| Propriété | Valeur |
+|:----------|:-------|
+| Mécanisme | **`O_WRONLY | O_CREAT | O_EXCL`** — création atomique au niveau du noyau |
+| Fichier | `scribe-out/locks/scribe.lock` (JSON) |
+| TTL par défaut | **30 minutes** |
+| Surface par défaut | `scribe-memory` |
+| Vérification stale | PID mort (`os.kill(pid, 0)`) OU TTL expiré |
+
+**Règles** :
+- **`lock acquire`** refusé si pas de **Workflow ACK** à jour (`ACK_OK` requis)
+- **`lock release`** refuse de relâcher le lock d'un **autre agent** (vérifie `agent` + `surface`)
+- Stale locks automatiquement nettoyés par `active_lock()`
+
+##### Claims — coordination sémantique (`scribe_coordination.py`)
+
+| Propriété | Valeur |
+|:----------|:-------|
+| Fichier | `scribe-out/coordination/claims/<claim_id>.json` |
+| ID claim | `SHA256(claim)[:12]` — format: `<nom>-<sha256[:12]>` |
+| TTL | **1800 secondes** (30 min) |
+| Événements | `scribe-out/coordination/events.jsonl` |
+
+**Logique de conflit** :
+- **Même claim sémantique** → **REFUS** (return code 2)
+- **Fichiers partagés** entre claims différents → **AUTORISÉ** avec warning `shared_files_detected: yes` + obligation de `rebase before delivery`
+- Claims sans `expires_at` → traités comme **stale**
+- Nettoyage automatique des stale claims à chaque `coordination status`
+
+##### Sync — vérification d'état (`scribe_state.py`)
+
+| Propriété | Valeur |
+|:----------|:-------|
+| Fichier | `scribe-out/state.json` |
+| Écriture | Atomique via `.tmp.<PID>.tmp` → `replace()` |
+| SHA256 | Du fichier `AGENT-MEMOIRE_PROJECT_STATUS.scribe` |
+
+**Verdicts** :
+- `IN_SYNC` : tout est à jour
+- `STALE_HASH` : le SCRIBE a été modifié depuis le dernier sync
+- `STALE_STATE_MISSING` : pas de fichier state
+- `INVALID_WRITE_KIND` : `write_kind` non reconnu
+
+##### Worktree — classification Git (`scribe_worktree.py`)
+
+Exécute `git status --short --untracked-files=all` et classifie :
+1. **tracked_changes** : fichiers suivis modifiés
+2. **untracked_source_candidates** : non suivis mais code source (`.py`, `.ts`, `.js`, `.json`, `.md`...)
+3. **generated_noise** : exclus (`__pycache__/`, `dist/`, `node_modules/`, `scribe-out/`, `graphify-out/`, `*.pyc`...)
+4. **other_untracked** : ni source, ni généré
+
+**Surface Map** (prédéfinie) : `auth`, `websocket`, `frontend`, `tests`, `scribe`, `integration`
+**Surface Violation** : si l'agent modifie des fichiers hors de sa surface déclarée → `SURFACE_VIOLATION`
+
+##### Identité / Présence (`scribe_identity.py`)
+
+```python
+agent_id = f"{type}-{YYYYMMDD}-{sha256(PID + hostname + time_ns)[:12]}"
+```
+- Fichier présence : `scribe-out/presence/<agent_id>.json`
+- TTL : **120 secondes**
+- Heartbeat : mis à jour à chaque `scribe whoami`
+- Stale détecté : PID mort OU TTL expiré
+
+##### Workflow ACK (`scribe_workflow_ack.py`)
+
+Calcule un **SHA256** de **10 fichiers** de workflow (AGENTS.md, rules, SKILL.md, docs...).
+- `ACK_OK` : tout est à jour
+- `ACK_STALE` : les fichiers ont changé depuis le dernier ack
+- `ACK_REQUIRED` : l'agent n'a jamais fait `workflow read`
+
+**Verrouillage en chaîne** : impossible d'acquérir un lock sans ACK_OK → impossible d'écrire dans le SCRIBE sans workflow à jour.
+
+##### Séquence type d'un agent avant implémentation
+
+```bash
+# 1. Vérifier workflow
+scribe workflow check --agent "<ID>"
+
+# 2. Réclamer une zone
+scribe coordination claim \
+  --agent "<ID>" --claim "auth:login" \
+  --task "refacto login" --expected-file "src/auth/login.ts"
+
+# 3. Vérifier lock + sync
+scribe lock status
+scribe sync --agent "<ID>" --type cli
+
+# 4. Vérifier worktree
+scribe worktree --surface auth --agent "<ID>" --limit 80
+
+# 5. [Implémentation...]
+
+# 6. Libérer le claim
+scribe coordination finish \
+  --agent "<ID>" --claim "auth:login" \
+  --summary "refacto terminée" --changed-file "src/auth/login.ts"
+```
+
+##### Garanties
+
+| Mécanisme | Garantie |
+|:----------|:---------|
+| `O_EXCL` | Atomicité au niveau du noyau — pas de race condition sur le lock |
+| `SHA256` | Détection de toute modification, même d'un seul octet |
+| `PID check` | Lock libéré automatiquement si le processus meurt |
+| `TTL` | Claim/libération automatique après 30 min sans heartbeat |
+| `Workflow gate` | Pas d'écriture SCRIBE sans avoir relu les règles |
+| `Surface violation` | Agent détecté s'il sort de sa zone déclarée |
+| `Shared files` | Warn + rebase obligatoire avant livraison |
+
+---
+
 ### Cycle de vie complet — quand le LLM écrit ou lit quoi
 
 ```text
