@@ -57,10 +57,10 @@
 
 ```mermaid
 graph TD
-    subgraph MULTI[🧑 🧑 🧑 N HUMAINS — N TERMINAUX]
-        H1[Humain 1] -->|tape:| I1[[TENOR INIT::<br/>init-tenor SKILL.md]]
-        H2[Humain 2] -->|tape:| I2[[TENOR INIT::<br/>init-tenor SKILL.md]]
-        H3[Humain N] -->|tape:| I3[[TENOR INIT::<br/>init-tenor SKILL.md]]
+    subgraph MULTI[🧑 1 HUMAIN — N TERMINAUX]
+        H1[Terminal 1<br/>codex-cli] -->|tape:| I1[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        H2[Terminal 2<br/>claude-code] -->|tape:| I2[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        H3[Terminal N<br/>opencode] -->|tape:| I3[[TENOR INIT::<br/>init-tenor SKILL.md]]
     end
 
     I1 -->|force le LLM à lire| T[[init-tenor<br/>SKILL.md]]
