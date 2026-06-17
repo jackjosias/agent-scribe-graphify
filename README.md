@@ -106,10 +106,77 @@ graph TD
 | **init-tenor** | Markdown (SKILL.md) | 🔑 **Porte d'entrée** — lu en premier par le LLM sur `[TENOR INIT::...]`, déclenche toute l'initialisation |
 | **TENOR Protocol** | YAML, Markdown | 8 règles absolues + 29 protocoles contextuels + self-audit + auto-mutation |
 | **SCRIBE (SEL)** | Python, YAML | Moteur de mémoire causale : bootstrap, doctor, lock, whoami, workflow, coordination |
-| **SCRIBE-RAG** | BM25, FastAPI | Interface de retrieval : query, explain, challenge, context, gate, eval |
+| **SCRIBE-RAG** | BM25 + Transformers | Interface de retrieval dual-mode : query, explain, challenge, context, gate, eval |
 | **Graphify** | Python, AST | Analyse structurelle temps réel : carte des dépendances, god-nodes, blast radius |
 | **Rules** | Markdown | Règles always-on injectées à chaque réponse (`scribe.md`, `graphify.md`) |
 | **MCP Chrome** | Markdown | Protocole de test navigateur/visuel (alternative à Playwright) |
+
+### Moteurs de recherche — détail technique
+
+#### 🔧 SEL — Scoring propriétaire à 11 paliers (ni BM25, ni TF-IDF)
+
+Le moteur interne du SCRIBE utilise un **système de scoring cumulatif** défini dans `scribe_search.py` :
+
+| Palier | Condition | Points |
+|:-------|:----------|:------|
+| 1 | ID exact correspond | +120 |
+| 2 | Query dans le titre | +35 |
+| 3 | Query dans l'abstract | +18 |
+| 4 | Query dans le texte complet | +10 |
+| 5 | Tokens chevauchants × min(count, 3) | +3 × overlap |
+| 6 | Tokens chevauchants dans le titre | +8 × len |
+| 7 | Tokens chevauchants dans l'abstract | +5 × len |
+| 8 | Fuzzy match (ratio ≥ 0.86 ou distance ≤ 2) | +6 × min(len, 3) |
+| 9 | Fuzzy primaire | +4 × min(len, 3) |
+| 10 | Coverage ≥ 50% des tokens query | +4 |
+| 11 | Tier "hot" + overlap trouvé | +2 |
+
+**Seuil de pertinence** : score < 6 → résultat éliminé.
+
+**Enrichissement lexical** :
+- 52 synonymes manuels (ex: `fiabilite` → reliability, reliable...)
+- 5 groupes conceptuels (`context_friction`, `hot_pressure`, `local_retrieval`, `scale_perf`)
+- Racine morphologique par suppression de 11 suffixes
+- Fuzzy matching : `SequenceMatcher.ratio() ≥ 0.86` OU `edit_distance ≤ 2`
+
+**Index inversé** maison avec 4 types d'arêtes : causal, evidence, consultation, journal.
+Construction parallélisée sur 2 workers. Version d'index : `INDEX_VERSION = 3`.
+
+#### ⚡ RAG — BM25 canonique + hybride optionnel
+
+**Mode BM25 (par défaut)** — Formule standard avec :
+- `k1 = 1.5`, `b = 0.75`
+- IDF : `log(1 + (N - df + 0.5) / (df + 0.5))`
+- Score normalisé entre 0 et 1
+- 7 groupes de synonymes (auth, storage, cookie, bug, refresh, client, token)
+- 27 stopwords
+
+**Mode Hybride** (`--with-embeddings`) — Active le modèle **`all-MiniLM-L6-v2`** (~80 Mo, vecteurs 384 dimensions) via `sentence-transformers` :
+- Cosine similarity par dot product normalisé
+- Cache modèle : `@lru_cache(maxsize=1)` — chargé une seule fois
+- Fallback gracieux si `sentence-transformers` absent
+
+**Fusion pondérée à 8 facteurs** (dans `rag_scoring.py`) :
+
+| Facteur | Poids BM25 (query) | Poids Hybride (query) |
+|:--------|:-------------------|:----------------------|
+| BM25 | **0.35** | 0.22 |
+| Sémantique (cosine) | 0.0 | **0.24** |
+| Centralité causale | 0.18 | 0.15 |
+| Tier (hot/warm/cold) | 0.13 | 0.10 |
+| Qualité evidence | 0.07 | 0.06 |
+| Scope match | 0.07 | 0.06 |
+| Failure boost | 0.08 | 0.07 |
+| Negative (ghosts) | 0.12 | 0.10 |
+
+En mode `challenge`, le poids `negative` monte à **0.35** (BM25) ou **0.32** (hybride) pour bloquer les plans risqués.
+
+**Pipeline de retrieval** :
+```
+BM25 scores → [Cosine scores si hybride] → Negative matching → Fusion 8 facteurs → Top-5
+```
+
+**Gate qualité** : `8/8` checks obligatoires (`≥ 7/8` pour BM25 canonique).
 
 ### Cycle de vie complet — quand le LLM écrit ou lit quoi
 
