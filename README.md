@@ -1,5 +1,15 @@
 # 🧠 agent-scribe-graphify
 
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/licence-MIT-green" alt="Licence MIT">
+  <img src="https://img.shields.io/badge/status-stable-brightgreen" alt="Statut stable">
+  <img src="https://img.shields.io/badge/SEL%20tests-81%20OK-success" alt="SEL 81 OK">
+  <img src="https://img.shields.io/badge/RAG%20tests-25%20OK-success" alt="RAG 25 OK">
+  <img src="https://img.shields.io/badge/gate-8%2F8-success" alt="Gate 8/8">
+  <img src="https://img.shields.io/badge/Graphify-v0.6.2-purple?logo=graph" alt="Graphify 0.6.2">
+</p>
+
 **Bundle portable d'infrastructure agentique** — copiez `.agent/` dans n'importe quel projet et bénéficiez instantanément de SCRIBE, Graphify et du protocole TENOR.
 
 > **Un seul dossier. Aucune dépendance externe. Aucune installation globale.**
@@ -503,6 +513,26 @@ Les agents :
 
 ---
 
+## ⚡ Quick Start (pour les pressés)
+
+```bash
+# 1. Copier le bundle dans votre projet
+cp -r .agent/ /chemin/vers/mon-projet/
+
+# 2. Initialiser
+cd /chemin/vers/mon-projet/
+.agent/workflow/scribe/scribe bootstrap
+
+# 3. Dans votre interface agent, tapez :
+#    [TENOR INIT::[.agent/skills/init-tenor/SKILL.md]]
+#
+# 4. Prêt. Donnez des instructions au LLM.
+```
+
+> **Temps total : ~30 secondes.** Le LLM fait le reste tout seul.
+
+---
+
 ## 📦 Installation — Tutoriel complet
 
 ### Prérequis
@@ -681,6 +711,61 @@ Ce bundle est vivant — il évolue avec les retours du terrain, les besoins ré
 ```
 
 > **Le bundle est MIT — libre, ouvert, construit par et pour la communauté.**
+
+---
+
+## ❓ FAQ / Dépannage
+
+### Q : Le LLM ne lit pas `init-tenor/SKILL.md` en premier
+
+**Cause** : Vous utilisez peut-être une plateforme qui ne lit pas `[TENOR INIT::...]` comme instruction prioritaire.
+**Solution** : Assurez-vous que le fichier `.agent/skills/init-tenor/SKILL.md` existe bien. Vous pouvez aussi rappeler au LLM : *"Lis d'abord `.agent/skills/init-tenor/SKILL.md`."*
+
+### Q : `bootstrap` ne fait rien
+
+**Cause** : Le bundle a déjà été initialisé. `bootstrap` est idempotent — il ne fait que créer ce qui manque.
+**Solution** : C'est normal. Lancez `scribe doctor` pour vérifier l'état de santé.
+
+### Q : Erreur "command not found: scribe"
+
+**Cause** : Vous n'êtes pas à la racine du projet qui contient `.agent/`.
+**Solution** : Vérifiez que vous êtes bien dans le dossier où `.agent/` a été copié. Le chemin canonique est `.agent/workflow/scribe/scribe`.
+
+### Q : Le lock refuse mon lock acquire
+
+**Cause probable** : Votre agent n'a pas fait `workflow read` avant.
+**Solution** :
+```bash
+.agent/workflow/scribe/scribe workflow read --agent "<ID>" --type cli
+.agent/workflow/scribe/scribe workflow check --agent "<ID>"
+.agent/workflow/scribe/scribe lock acquire --agent "<ID>" --session "<JOURNAL-ID>"
+```
+
+### Q : Deux LLMs se marchent dessus sur le même fichier
+
+**Remède** : Chaque agent doit prendre un **claim** avant de travailler :
+```bash
+.agent/workflow/scribe/scribe coordination claim \
+  --agent "<ID>" --claim "ma:zone" \
+  --expected-file "src/mon-fichier.ts"
+```
+
+### Q : Le SCRIBE a été modifié par un autre agent, mon état est périmé
+
+**Solution** :
+```bash
+.agent/workflow/scribe/scribe sync --agent "<ID>" --type cli
+.agent/workflow/scribe/scribe-rag build --force
+.agent/workflow/scribe/scribe-rag context
+```
+
+### Q : Graphify ne trouve pas mes fichiers
+
+**Solution** : Vérifiez que `graphify update .` est lancé depuis la racine du projet. Les fichiers dans `.agent/` sont exclus par `.graphifyignore`.
+
+### Q : Les badges ne s'affichent pas sur GitHub
+
+**Solution** : Les badges utilisent `shields.io` — ils fonctionnent sans configuration. Si votre repo est privé, les badges s'affichent quand même.
 
 ---
 
