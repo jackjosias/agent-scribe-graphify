@@ -1,0 +1,16 @@
+diff --git a/graphify/__main__.py b/graphify/__main__.py
+--- a/graphify/__main__.py
++++ b/graphify/__main__.py
+@@
+ _GEMINI_HOOK = {
+     "matcher": "read_file|list_directory",
+     "hooks": [
+         {
+             "type": "command",
+             "command": (
+-                r"""echo '{"decision":"allow"}' # graphify hook"""
++                r"""python3 -c 'import sys, json; sys.stdin.read(); print(json.dumps({"decision":"allow"}))' # graphify hook"""
+             ),
+         }
+     ],
+ }

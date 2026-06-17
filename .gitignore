@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Runtime artefacts agent
+scribe-out/
+graphify-out/
+
+# OS
+.DS_Store
+Thumbs.db

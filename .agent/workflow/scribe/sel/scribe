@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+sys.dont_write_bytecode = True
+
+
+MEMORY_COMMANDS = {
+    "hot",
+    "context",
+    "stats",
+    "explain",
+    "related",
+    "query",
+    "challenge",
+    "eval",
+    "compact",
+    "review-hot",
+    "promote",
+    "export",
+    "archive",
+    "dashboard",
+}
+
+
+def context_uses_quick_mode(argv: list[str]) -> bool:
+    for index, arg in enumerate(argv):
+        if arg == "--mode":
+            return index + 1 >= len(argv) or argv[index + 1] == "quick"
+        if arg.startswith("--mode="):
+            return arg.split("=", 1)[1] == "quick"
+    return True
+
+
+def main() -> int:
+    bundle_root = Path(__file__).resolve().parent
+    scripts_dir = bundle_root / "scripts"
+    if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
+        print("Usage:")
+        print("Note: use .agent/workflow/scribe/scribe and .agent/workflow/scribe/scribe-rag from the project root; sel/ and rag/ launchers are internal engines.")
+        print("  scribe doctor [SCRIBE_PATH] [--output REPORT] [--suggest-fix]")
+        print("  scribe guard [SCRIBE_PATH] -- <command> [args...]")
+        print("  scribe install [TARGET_PATH] [--force] [--dry-run] [--with-root-adapters]")
+        print("  scribe bootstrap [--root PATH]")
+        print("  scribe tenor-init [--root PATH] [--agent NAME] [--type cli|extension|api|unknown]")
+        print("  scribe clean --dry-run|--apply [--graphify] [--agent-cache]")
+        print("  scribe lock acquire|release|status")
+        print("  scribe sync|whoami")
+        print("  scribe workflow read|check|status")
+        print("  scribe coordination claim|finish|status")
+        print("  scribe hot|context|stats|explain|related|query|challenge|eval|compact|review-hot|promote|export|archive|dashboard")
+        print("  scribe graph [--build] [--query TEXT] [--budget N]")
+        print("  scribe graphify-hooks [--apply] [--template PATH] [--trusted-hooks PATH]")
+        print("  scribe benchmark [--entities 1000,10000] [--queries N] [--json]")
+        print("  scribe worktree [--strict]")
+        return 0
+
+    command = sys.argv.pop(1)
+    scripts = {
+        "doctor": "scribe_doctor.py",
+        "guard": "scribe_guard.py",
+        "install": "scribe_install.py",
+        "bootstrap": "scribe_bootstrap.py",
+        "tenor-init": "scribe_tenor_init.py",
+        "clean": "scribe_clean.py",
+        "lock": "scribe_lock.py",
+        "sync": "scribe_state.py",
+        "whoami": "scribe_identity.py",
+        "workflow": "scribe_state.py",
+        "coordination": "scribe_coordination.py",
+        "coord": "scribe_coordination.py",
+        "graph": "scribe_bundle_graph.py",
+        "worktree": "scribe_worktree.py",
+        "benchmark": "scribe_benchmark.py",
+        "graphify-hooks": "scribe_graphify_hooks.py",
+    }
+    for memory_command in MEMORY_COMMANDS:
+        scripts[memory_command] = "scribe_memory.py"
+    if command == "context" and context_uses_quick_mode(sys.argv[1:]):
+        scripts[command] = "scribe_context_quick.py"
+    script = scripts.get(command)
+    if script is None:
+        print(f"Unknown scribe command: {command}", file=sys.stderr)
+        print(
+            "Available commands: doctor, guard, install, bootstrap, tenor-init, clean, hot, context, stats, explain, related, query, "
+            "challenge, eval, compact, review-hot, promote, export, archive, dashboard, lock, sync, whoami, workflow, coordination, graph, graphify-hooks, benchmark, worktree",
+            file=sys.stderr,
+        )
+        return 2
+
+    if command in MEMORY_COMMANDS and script == "scribe_memory.py":
+        sys.argv.insert(1, command)
+    if command in {"sync", "workflow"}:
+        sys.argv.insert(1, command)
+    sys.path.insert(0, str(scripts_dir))
+    if script == "scribe_context_quick.py":
+        from scribe_context_quick import main as quick_main
+
+        return quick_main()
+
+    import runpy
+
+    runpy.run_path(str(scripts_dir / script), run_name="__main__")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

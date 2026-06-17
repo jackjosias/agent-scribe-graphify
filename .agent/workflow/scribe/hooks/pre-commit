@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+set -eu
+
+if command -v git >/dev/null 2>&1; then
+  root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+else
+  root="$(pwd)"
+fi
+
+cd "$root"
+exec .agent/workflow/scribe/scribe-rag gate

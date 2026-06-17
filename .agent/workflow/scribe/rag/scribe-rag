@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve()
+SCRIPTS_DIR = SCRIPT.parent / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+from rag_autodream import run_autodream
+from rag_autodream_format import format_autodream_json, format_autodream_report
+from rag_autodream_io import AutoDreamConfig
+from rag_challenge import challenge
+from rag_compact import format_explain, format_results
+from rag_context import context as format_context
+from rag_eval import format_eval, run_eval
+from rag_gate import gate
+from rag_index import RAG_INDEX_PATH, build_index, is_fresh, read_index, requested_index_mode
+from rag_interface import DEFAULT_SCRIBE, doctor, source_snapshot
+from rag_preflight import preflight
+from rag_scoring import retrieve
+from rag_whoami import format_whoami
+
+
+def current_index(force: bool = False, *, with_embeddings: bool | None = None):
+    requested_mode = requested_index_mode(with_embeddings)
+    if not force:
+        index = read_index()
+        snapshot = source_snapshot()
+        if is_fresh(index, snapshot, requested_mode):
+            return index
+    return build_index(force=force, with_embeddings=bool(with_embeddings))
+
+
+def cmd_build(args):
+    index = build_index(force=args.force, with_embeddings=args.with_embeddings)
+    stats = index.get("stats", {})
+    print("SCRIBE-RAG BUILD")
+    print(f"  index: {RAG_INDEX_PATH}")
+    print(f"  mode: {index.get('mode')}")
+    print(f"  entities: {stats.get('entities')}")
+    print(f"  negative_terms: {stats.get('negative_terms')}")
+    if index.get("embedding_dimension"):
+        print(f"  dimension: {index.get('embedding_dimension')}")
+    if index.get("embedding_error"):
+        print(f"  warning: {index.get('embedding_error')}")
+    print(f"  source_line_count: {index.get('source_line_count')}")
+    return 0
+
+
+def cmd_query(args):
+    index = current_index(with_embeddings=args.with_embeddings)
+    print(format_results(f"SCRIBE-RAG QUERY: {args.text}", retrieve(args.text, index, top_k=args.limit, context=args.context)))
+    return 0
+
+
+def cmd_context(args):
+    index = current_index(with_embeddings=args.with_embeddings)
+    print(format_context(index, module=args.module))
+    return 0
+
+
+def cmd_explain(args):
+    index = current_index(with_embeddings=args.with_embeddings)
+    for entity in index.get("entities", []):
+        if entity.get("id") == args.entity_id:
+            print(format_explain(entity, verbose=args.verbose))
+            return 0
+    print(f"ID introuvable: {args.entity_id}", file=sys.stderr)
+    return 2
+
+
+def cmd_challenge(args):
+    index = current_index(with_embeddings=args.with_embeddings)
+    _, lines = challenge(args.plan, index, limit=args.limit)
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_eval(args):
+    index = current_index(force=args.force, with_embeddings=args.with_embeddings)
+    print(format_eval(run_eval(index)))
+    return 0
+
+
+def cmd_gate(args):
+    index = current_index(force=not args.no_force, with_embeddings=args.with_embeddings)
+    result = gate(index, min_passed=args.min_passed)
+    print("\n".join(result.lines))
+    return result.code
+
+
+def cmd_doctor(args):
+    print(doctor(), end="")
+    index = read_index()
+    if index:
+        print(f"SCRIBE-RAG: index fresh for sha {index.get('source_sha256')}")
+    else:
+        print("SCRIBE-RAG: index absent")
+    return 0
+
+
+def cmd_whoami(args):
+    print(format_whoami(), end="")
+    return 0
+
+
+def cmd_preflight(args):
+    try:
+        index = current_index(force=args.force, with_embeddings=args.with_embeddings)
+    except FileNotFoundError as exc:
+        missing = Path(exc.filename) if getattr(exc, "filename", None) else DEFAULT_SCRIBE
+        print("SCRIBE-RAG PREFLIGHT")
+        print(f"error    : SCRIBE absent: {missing}")
+        print("verdict  : STOP")
+        print("next     : run `.agent/workflow/scribe/scribe bootstrap` from the project root")
+        return 5
+    result = preflight(
+        index,
+        tier=args.tier,
+        plan=args.plan,
+        module=args.module,
+        limit=args.limit,
+        strict=args.strict,
+    )
+    print("\n".join(result.lines))
+    return result.code
+
+
+def cmd_autodream(args):
+    config = AutoDreamConfig(
+        read_only=args.read_only,
+        cancel_file=Path(args.cancel_file).resolve() if args.cancel_file else None,
+        max_files=args.max_files,
+        max_diff_bytes=args.max_diff_bytes,
+        max_read_bytes=args.max_read_bytes,
+        timeout_ms=args.timeout_ms,
+        max_output_lines=args.max_output_lines,
+        max_candidates=args.max_candidates,
+    )
+    report = run_autodream(config)
+    formatter = format_autodream_json if args.format == "json" else format_autodream_report
+    print(formatter(report))
+    return int(report.get("exit_code", 1))
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog="scribe-rag", description="Read-only compact retrieval layer over canonical SCRIBE SEL.", epilog="Note: use .agent/workflow/scribe/scribe and .agent/workflow/scribe/scribe-rag from the project root; sel/ and rag/ launchers are internal engines.")
+    sub = parser.add_subparsers(dest="command", required=True)
+    build = sub.add_parser("build")
+    build.add_argument("--force", action="store_true")
+    build.add_argument("--with-embeddings", action="store_true")
+    build.set_defaults(func=cmd_build)
+    query = sub.add_parser("query")
+    query.add_argument("text")
+    query.add_argument("--limit", type=int, default=5)
+    query.add_argument("--context", default="production")
+    query.add_argument("--with-embeddings", action="store_true", default=None)
+    query.set_defaults(func=cmd_query)
+    context = sub.add_parser("context")
+    context.add_argument("--module")
+    context.add_argument("--with-embeddings", action="store_true", default=None)
+    context.set_defaults(func=cmd_context)
+    explain = sub.add_parser("explain")
+    explain.add_argument("entity_id")
+    explain.add_argument("--verbose", action="store_true")
+    explain.add_argument("--with-embeddings", action="store_true", default=None)
+    explain.set_defaults(func=cmd_explain)
+    challenge_parser = sub.add_parser("challenge")
+    challenge_parser.add_argument("plan")
+    challenge_parser.add_argument("--limit", type=int, default=5)
+    challenge_parser.add_argument("--with-embeddings", action="store_true", default=None)
+    challenge_parser.set_defaults(func=cmd_challenge)
+    eval_parser = sub.add_parser("eval")
+    eval_parser.add_argument("--force", action="store_true")
+    eval_parser.add_argument("--with-embeddings", action="store_true", default=None)
+    eval_parser.set_defaults(func=cmd_eval)
+    gate_parser = sub.add_parser("gate")
+    gate_parser.add_argument("--min-passed", type=int, default=8)
+    gate_parser.add_argument("--no-force", action="store_true", help="Use a fresh existing index instead of forcing rebuild.")
+    gate_parser.add_argument("--with-embeddings", action="store_true", default=None)
+    gate_parser.set_defaults(func=cmd_gate)
+    doctor_parser = sub.add_parser("doctor")
+    doctor_parser.set_defaults(func=cmd_doctor)
+    whoami_parser = sub.add_parser("whoami")
+    whoami_parser.set_defaults(func=cmd_whoami)
+    preflight_parser = sub.add_parser("preflight")
+    preflight_parser.add_argument("plan", nargs="?")
+    preflight_parser.add_argument("--tier", default="STANDARD", choices=("READ_ONLY", "QUICK", "STANDARD", "CRITICAL"))
+    preflight_parser.add_argument("--module")
+    preflight_parser.add_argument("--limit", type=int, default=5)
+    preflight_parser.add_argument("--strict", action="store_true")
+    preflight_parser.add_argument("--force", action="store_true")
+    preflight_parser.add_argument("--with-embeddings", action="store_true", default=None)
+    preflight_parser.set_defaults(func=cmd_preflight)
+    autodream_parser = sub.add_parser("autodream", help="Run a user-approved read-only post-implementation review.")
+    autodream_parser.add_argument("--read-only", action="store_true", help="Required; AutoDream never writes files or memory.")
+    autodream_parser.add_argument("--format", choices=("text", "json"), default="text")
+    autodream_parser.add_argument("--cancel-file")
+    autodream_parser.add_argument("--max-files", type=int, default=500)
+    autodream_parser.add_argument("--max-diff-bytes", type=int, default=240_000)
+    autodream_parser.add_argument("--max-read-bytes", type=int, default=12_000_000)
+    autodream_parser.add_argument("--timeout-ms", type=int, default=5_000)
+    autodream_parser.add_argument("--max-output-lines", type=int, default=180)
+    autodream_parser.add_argument("--max-candidates", type=int, default=8)
+    autodream_parser.set_defaults(func=cmd_autodream)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

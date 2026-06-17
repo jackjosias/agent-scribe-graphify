@@ -1,0 +1,133 @@
+diff --git a/graphify/__main__.py b/graphify/__main__.py
+index 910f516..b37cd60 100644
+--- a/graphify/__main__.py
++++ b/graphify/__main__.py
+@@ -4,6 +4,7 @@ import json
+ import os
+ import platform
+ import re
++import shlex
+ import shutil
+ import sys
+ from pathlib import Path
+@@ -445,13 +446,11 @@ _GEMINI_HOOK = {
+         {
+             "type": "command",
+             "command": (
+-                'python -c "'
+-                "import sys,pathlib,json;"
+-                "e=pathlib.Path('graphify-out/graph.json').exists();"
+-                "d={'decision':'allow'};"
+-                "e and d.update({'additionalContext':'graphify: knowledge graph at graphify-out/. For focused questions, run `graphify query \"<question>\"` (scoped subgraph, usually much smaller than GRAPH_REPORT.md) instead of grepping raw files. Read GRAPH_REPORT.md only for broad architecture context.'});"
+-                "sys.stdout.write(json.dumps(d))"
+-                '"'
++                f"{shlex.quote(sys.executable)} -c \""
++                "import sys,json;"
++                "sys.stdin.read();"
++                "sys.stdout.write(json.dumps({'decision':'allow'}))"
++                "\" # graphify hook; use graphify query for focused graph context"
+             ),
+         }
+     ],
+@@ -2274,8 +2273,12 @@ def main() -> None:
+
+     elif cmd == "hook-check":
+         # Codex Desktop rejects hookSpecificOutput.additionalContext on PreToolUse.
+-        # Keep this as a cross-platform no-op so installed hooks never break Bash
+-        # tool calls. Graph guidance reaches the agent via AGENTS.md / skill instead.
++        # Consume hook stdin before exiting so editor hosts do not see BrokenPipe
++        # when they stream the tool payload into this intentionally silent hook.
++        try:
++            sys.stdin.read()
++        except Exception:
++            pass
+         sys.exit(0)
+     elif cmd == "check-update":
+         if len(sys.argv) < 3:
+diff --git a/tests/test_hooks.py b/tests/test_hooks.py
+index 873b202..1cd26ca 100644
+--- a/tests/test_hooks.py
++++ b/tests/test_hooks.py
+@@ -162,7 +162,7 @@ def test_hook_skips_head_on_exe():
+
+
+ def test_hook_check_no_additionalContext(tmp_path):
+-    """graphify hook-check must not emit additionalContext — Codex Desktop rejects it."""
++    """graphify hook-check must stay silent and consume Codex hook stdin."""
+     import sys
+     out = tmp_path / "graphify-out"
+     out.mkdir()
+@@ -171,6 +171,7 @@ def test_hook_check_no_additionalContext(tmp_path):
+     result = subprocess.run(
+         [sys.executable, "-m", "graphify", "hook-check"],
+         cwd=tmp_path,
++        input='{"tool_input":{"command":"rg x"}}',
+         capture_output=True,
+         text=True,
+     )
+@@ -178,3 +179,31 @@ def test_hook_check_no_additionalContext(tmp_path):
+     assert result.returncode == 0
+     assert result.stdout == ""
+     assert result.stderr == ""
++
++
++def test_hook_check_accepts_large_stdin_without_broken_pipe(tmp_path):
++    """A no-op hook that exits before reading stdin can break editor hosts."""
++    import sys
++    proc = subprocess.Popen(
++        [sys.executable, "-m", "graphify", "hook-check"],
++        cwd=tmp_path,
++        stdin=subprocess.PIPE,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        text=True,
++    )
++    broken_pipe = False
++    assert proc.stdin is not None
++    try:
++        proc.stdin.write("x" * 1_000_000)
++        proc.stdin.close()
++    except BrokenPipeError:
++        broken_pipe = True
++    stdout = proc.stdout.read() if proc.stdout is not None else ""
++    stderr = proc.stderr.read() if proc.stderr is not None else ""
++    returncode = proc.wait()
++
++    assert not broken_pipe
++    assert returncode == 0
++    assert stdout == ""
++    assert stderr == ""
+diff --git a/tests/test_install.py b/tests/test_install.py
+index d1f1deb..cb7852a 100644
+--- a/tests/test_install.py
++++ b/tests/test_install.py
+@@ -500,6 +500,29 @@ def test_gemini_install_writes_hook(tmp_path):
+     hooks = settings["hooks"]["BeforeTool"]
+     assert any("graphify" in str(h) for h in hooks)
+
++
++def test_gemini_hook_consumes_stdin_and_returns_allow(tmp_path):
++    import json as _json
++    import subprocess
++    from graphify.__main__ import gemini_install
++
++    gemini_install(tmp_path)
++    settings = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
++    command = settings["hooks"]["BeforeTool"][0]["hooks"][0]["command"]
++    result = subprocess.run(
++        command,
++        input='{"hook":"BeforeTool","tool":"read_file"}',
++        shell=True,
++        capture_output=True,
++        text=True,
++    )
++
++    assert result.returncode == 0
++    assert result.stderr == ""
++    assert _json.loads(result.stdout) == {"decision": "allow"}
++    assert "additionalContext" not in command
++    assert "sys.stdin.read()" in command
++
+ def test_gemini_install_idempotent(tmp_path):
+     from graphify.__main__ import gemini_install
+     gemini_install(tmp_path)
