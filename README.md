@@ -114,23 +114,44 @@ SCRIBE: prêt à recevoir votre mémoire causale ✅
 
 ## 🚀 Utilisation quotidienne
 
-### Interroger la mémoire projet
+### Pour l'humain — une seule phrase
 
-```bash
-.agent/workflow/scribe/scribe-rag query "quel bug a déjà été résolu sur X ?"
-.agent/workflow/scribe/scribe-rag explain "NomDuModule"
-.agent/workflow/scribe/scribe-rag challenge "je vais modifier Y, des risques ?"
+Dans votre interface agent (OpenCode, Codex CLI, Claude Code, Cursor, etc.),
+tapez simplement cette phrase pour lancer l'initialisation complète :
+
+```text
+[TENOR INIT::[.agent/skills/init-tenor/SKILL.md]]
 ```
 
-### Cartographier le code (Graphify)
+**C'est tout.** Le LLM hôte va :
+1. Lire le fichier `SKILL.md` pour comprendre le protocole
+2. Lancer `tenor-init --type cli` (ou `extension` selon votre interface)
+3. Charger le SCRIBE, Graphify, et toutes les règles
+4. Produire un `SCRIBE-CHECK TENOR V4 — MACHINE PROOF` pour prouver que tout est prêt
+5. Attendre vos instructions d'implémentation
 
-```bash
-graphify update .                   # Générer le graphe
-graphify query "architecture auth"  # Interroger en langage naturel
-graphify path "A" "B"               # Chemin entre deux fonctions
+> **Une seule entrée utilisateur. Aucune commande manuelle. Tout est automatisé côté agent.**
+
+#### Exemple de session
+
+```
+Vous : [TENOR INIT::[.agent/skills/init-tenor/SKILL.md]]
+Agent : 📋 SCRIBE-CHECK TENOR V4 — MACHINE PROOF
+        Agent session : cli-20260617-XXXX
+        Whoami proof  : OK
+        Workflow ack  : ACK_OK
+        Status init   : VALID
+        ✅ Prêt. Quelle est la prochaine tâche à implémenter ?
+
+Vous : Ajoute une fonction de validation email dans le module auth
+Agent : Je consulte le SCRIBE... Graphify analyse le codebase...
+        [Travail en cours...]
+        ✅ Implémentation terminée.
 ```
 
-### Dashboard SCRIBE
+### Pour l'humain — Dashboard (optionnel)
+
+Si vous voulez une interface web pour visualiser l'état du SCRIBE :
 
 ```bash
 .agent/workflow/scribe/scribe dashboard
