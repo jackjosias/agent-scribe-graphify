@@ -411,6 +411,43 @@ cd /nouveau/projet/
 
 ---
 
+## 🤝 Contribuer
+
+Ce bundle est vivant — il évolue avec les retours du terrain, les besoins réels et les cas d'usage que vous rencontrez.
+
+### Vous pouvez contribuer de plusieurs façons
+
+| Type de contribution | Comment faire |
+|:---------------------|:--------------|
+| **🐛 Signaler un bug** | Ouvrez une issue sur le repo GitHub avec le comportement observé et attendu |
+| **💡 Proposer une évolution** | Décrivez votre use case, ce que le bundle devrait permettre et pourquoi |
+| **🔧 Améliorer le code** | Fork, modifiez, et soumettez une Pull Request — scripts Python, règles, documentation |
+| **📝 Améliorer la doc** | Une section floue ? Un exemple manquant ? Une typo ? La doc est aussi importante que le code |
+| **🧪 Tester** | Testez le bundle sur vos projets et remontez les cas qui cassent |
+| **🌍 Partager** | Parlez du bundle autour de vous, plus on est à l'utiliser, plus il s'améliore |
+
+### Esprit du projet
+
+- **Le dossier `.agent/` doit rester portable** — pas de dépendances externes, pas d'installation globale
+- **Chaque contribution doit préserver la compatibilité ascendante** — ne pas casser les projets existants
+- **La simplicité > la complexité** — une solution simple qui marche vaut mieux qu'une solution élégante qui risque de casser
+- **La mémoire causale est sacrée** — ne pas écrire dans le SCRIBE sans raison, ne pas supprimer l'historique
+
+### Cycle de vie d'une contribution
+
+```text
+1. Ouvrez une issue   → Discussion sur le besoin ou le bug
+2. Fork + branche     → Travaillez sur votre modification
+3. Testez             → Vérifiez que SEL (81) et RAG (25) passent
+4. Pull Request       → Décrivez ce qui change et pourquoi
+5. Review             → Discussion, ajustements si nécessaire
+6. Merge              ✅ Contribution acceptée
+```
+
+> **Le bundle est MIT — libre, ouvert, construit par et pour la communauté.**
+
+---
+
 ## 📄 Licence
 
 Distribué sous licence **MIT**. Utilisation libre, modification autorisée, attribution requise.
