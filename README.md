@@ -82,47 +82,93 @@
 
 ```mermaid
 graph TD
-    subgraph MULTI[🧑 1 HUMAIN — N TERMINAUX]
-        H1[Terminal 1<br/>codex-cli] -->|tape:| I1[[TENOR INIT::<br/>init-tenor SKILL.md]]
-        H2[Terminal 2<br/>claude-code] -->|tape:| I2[[TENOR INIT::<br/>init-tenor SKILL.md]]
-        H3[Terminal N<br/>opencode] -->|tape:| I3[[TENOR INIT::<br/>init-tenor SKILL.md]]
+    HUMAIN[🧑 Humain] -->|ouvre N terminaux| TERM1[Terminal 1<br/>codex-cli]
+    HUMAIN --> TERM2[Terminal 2<br/>claude-code]
+    HUMAIN --> TERM3[Terminal N<br/>opencode]
+
+    subgraph INIT[① INITIALISATION — l'humain tape UNE phrase]
+        TERM1 -->|tape:| PHRASE1[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        TERM2 --> PHRASE2[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        TERM3 --> PHRASE3[[TENOR INIT::<br/>init-tenor SKILL.md]]
+        PHRASE1 -->|lit ce fichier en premier| SKILL[[init-tenor<br/>SKILL.md]]
+        PHRASE2 --> SKILL
+        PHRASE3 --> SKILL
     end
 
-    I1 -->|force le LLM à lire| T[[init-tenor<br/>SKILL.md]]
-    I2 --> T
-    I3 --> T
+    subgraph TENOR_INIT[② TENOR INIT — le LLM exécute]
+        SKILL -->|commande:| TENOR[tenor-init]
+        TENOR --> BOOT[bootstrap]
+        BOOT --> WHO[whoami]
+        WHO --> WACK[workflow ack]
+        WACK --> RAGCTX[scribe-rag context]
+        RAGCTX -->|produit:| PROOF[[SCRIBE-CHECK<br/>TENOR V4]]
+    end
 
-    T -->|exécute| TENOR[tenor-init]
+    PROOF -->|3 piliers activés| PILLARS
 
-    TENOR --> B[SCRIBE-RAG<br/>Mémoire causale]
-    TENOR --> C[Graphify<br/>Carte structurelle]
-    TENOR --> D[TENOR Protocol<br/>Règles & Protocoles]
+    subgraph PILLARS[③ 3 PILIERS — prêts à servir]
+        B[SCRIBE-RAG<br/>🧠 Mémoire causale]
+        C[Graphify<br/>🕸️ Carte structurelle]
+        D[TENOR Protocol<br/>⚖️ Règles & Protocoles]
+    end
 
-    B --> E[(AGENT-MEMOIRE<br/>PROJECT_STATUS.scribe)]
-    C --> F[(graph.json)]
-    D --> G[.agent/rules/]
-    D --> H[.agent/workflow/]
+    B --> E[(fichier<br/>AGENT-MEMOIRE<br/>PROJECT_STATUS.scribe)]
+    C --> F[(dossier<br/>graphify-out/)]
+    D --> G[(dossier<br/>.agent/rules/)]
+    D --> H[(dossier<br/>.agent/workflow/)]
 
-    B -.-> M[🔒 MULTI-AGENT<br/>Lock • Claims • Sync<br/>Worktree • Workflow ACK]
-    C -.-> M
-    D -.-> M
+    subgraph COORD[④ COORDINATION MULTI-AGENT]
+        LOCK[🔒 Lock<br/>O_EXCL atomique]
+        CLAIMS[📌 Claims<br/>sémantiques]
+        SYNC[🔄 Sync<br/>SHA256 state]
+        WT[🌿 Worktree<br/>Git classifié]
+    end
 
-    M ---> P[(📁 MÊME CODEBASE<br/>Fichiers partagés<br/>Zéro régression)]
+    B -.-> LOCK
+    C -.-> CLAIMS
+    D -.-> SYNC
+    D -.-> WT
 
-    style H1 fill:#f39c12,stroke:#e67e22,color:#fff
-    style H2 fill:#f39c12,stroke:#e67e22,color:#fff
-    style H3 fill:#f39c12,stroke:#e67e22,color:#fff
-    style I1 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
-    style I2 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
-    style I3 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:3px
-    style T fill:#9b59b6,stroke:#8e44ad,color:#fff
+    LOCK & CLAIMS & SYNC & WT --> RESULT
+
+    RESULT[(📁 MÊME CODEBASE<br/>Fichiers partagés<br/>✅ Zéro régression<br/>✅ Zéro conflit)]
+
+    style HUMAIN fill:#f39c12,stroke:#e67e22,color:#fff,stroke-width:3px
+    style TERM1 fill:#fdebd0,stroke:#e67e22,color:#333
+    style TERM2 fill:#fdebd0,stroke:#e67e22,color:#333
+    style TERM3 fill:#fdebd0,stroke:#e67e22,color:#333
+    style PHRASE1 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:2px
+    style PHRASE2 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:2px
+    style PHRASE3 fill:#e74c3c,stroke:#c0392b,color:#fff,stroke-width:2px
+    style SKILL fill:#9b59b6,stroke:#8e44ad,color:#fff
     style TENOR fill:#e74c3c,stroke:#c0392b,color:#fff
+    style BOOT fill:#e74c3c,stroke:#c0392b,color:#fff
+    style WHO fill:#e74c3c,stroke:#c0392b,color:#fff
+    style WACK fill:#e74c3c,stroke:#c0392b,color:#fff
+    style RAGCTX fill:#e74c3c,stroke:#c0392b,color:#fff
+    style PROOF fill:#2ecc71,stroke:#27ae60,color:#fff,stroke-width:3px
     style B fill:#3498db,stroke:#2980b9,color:#fff
     style C fill:#2ecc71,stroke:#27ae60,color:#fff
     style D fill:#e67e22,stroke:#d35400,color:#fff
-    style M fill:#e91e63,stroke:#c2185b,color:#fff
-    style P fill:#2c3e50,stroke:#1a252f,color:#fff
+    style LOCK fill:#e91e63,stroke:#c2185b,color:#fff
+    style CLAIMS fill:#e91e63,stroke:#c2185b,color:#fff
+    style SYNC fill:#e91e63,stroke:#c2185b,color:#fff
+    style WT fill:#e91e63,stroke:#c2185b,color:#fff
+    style RESULT fill:#2c3e50,stroke:#1a252f,color:#fff,stroke-width:2px
+
+    linkStyle 0,1,2 stroke:#f39c12,stroke-width:2px
+    linkStyle 3,4,5 stroke:#e74c3c,stroke-width:2px
+    linkStyle 6,7,8 stroke:#9b59b6,stroke-width:2px
 ```
+
+**Légende** :
+| Étape | Qui fait quoi |
+|:------|:--------------|
+| **①** | 🧑 L'humain ouvre 1, 3 ou 5 terminaux et tape **une seule phrase** dans chacun |
+| **②** | 🤖 Chaque LLM lit `init-tenor/SKILL.md` et exécute `tenor-init` → bootstrap → whoami → workflow ack → contexte chargé |
+| **③** | ✅ Les **3 piliers** sont activés : SCRIBE (mémoire), Graphify (structure), TENOR (règles) |
+| **④** | 🔒 La couche coordination multi-agent protège les écritures concurrentes |
+| **📁** | Résultat : tous les LLMs travaillent sur **le même codebase**, sans régression |
 
 ### Responsabilités des composants
 
