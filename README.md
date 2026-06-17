@@ -21,30 +21,83 @@
 
 ## 🏗️ Architecture
 
-```mermaid
-graph TD
-    A[Agent LLM] --> B[SCRIBE-RAG<br/>Mémoire causale]
-    A --> C[Graphify<br/>Carte structurelle]
-    A --> D[TENOR Protocol<br/>Règles & Protocoles]
-    B --> E[(AGENT-MEMOIRE<br/>PROJECT_STATUS.scribe)]
-    C --> F[(graph.json<br/>graph.html)]
-    D --> G[.agent/rules/]
-    D --> H[.agent/workflow/]
+### Arborescence du bundle `.agent/`
 
-    style A fill:#4a90d9,stroke:#2c5f8a,color:#fff
-    style B fill:#7b68ee,stroke:#5a4fcf,color:#fff
-    style C fill:#2ecc71,stroke:#27ae60,color:#fff
-    style D fill:#e74c3c,stroke:#c0392b,color:#fff
+```text
+.agent/
+├── skills/
+│   ├── init-tenor/        ← 🔑 PORTE D'ENTRÉE — le SKILL.md que le LLM lit
+│   │   └── SKILL.md           au premier appel [TENOR INIT::...]
+│   ├── graphify/           ← Compétences Graphify pour l'agent
+│   │   └── SKILL.md
+│   └── fallow/             ← Compétences auxiliaires
+│       └── SKILL.md
+│
+├── rules/
+│   ├── scribe.md           ← Règle always-on : SCRIBE obligatoire
+│   └── graphify.md         ← Règle always-on : Graphify avant grepping
+│
+├── workflow/
+│   ├── scribe/             ← 🔧 MOTEUR PRINCIPAL
+│   │   ├── scribe          ← CLI maintenance interne (bootstrap, doctor, lock...)
+│   │   ├── scribe-rag      ← CLI lecture agent (query, explain, challenge...)
+│   │   ├── hooks/          ← Git hooks pré-commit
+│   │   ├── sel/            ← Moteur SEL (Python) — documentation, scripts, tests
+│   │   ├── rag/            ← Interface RAG BM25 + tests
+│   │   └── sel/docs/       ← Documentation protocole complet
+│   ├── mcp/
+│   │   └── chrome-devtools.md ← Tests navigateur/visuel (MCP)
+│   ├── prd/                ← Product Requirements Document
+│   └── graphify.md         ← Workflow Graphify
+│
+└── scripts/                ← Scripts d'automatisation (bootstrap, watch, health)
 ```
 
-### Responsabilités par couche
+### Diagramme de flux — de l'humain à l'exécution
 
-| Couche | Technologie | Fonction |
-|:-------|:------------|:---------|
-| **SCRIBE (SEL)** | Python, YAML | Écriture et maintenance de la mémoire causale |
-| **SCRIBE-RAG** | BM25, FastAPI | Interrogation de la mémoire en langage naturel |
-| **Graphify** | Python, AST | Analyse structurelle et visualisation du code |
-| **TENOR** | YAML, Markdown | Règles, protocoles, auto-audit |
+```mermaid
+graph LR
+    H[🧑 Humain] -->|tape une phrase| I[init-tenor<br/>SKILL.md]
+    I -->|agent lit le protocole| T[Tenor-init]
+    T -->|bootstrap + whoami| W[Workflow ACK]
+    W -->|validé| R[🔁 Boucle agent]
+
+    subgraph R[🔁 Boucle agent prêt]
+        S[SCRIBE<br/>Mémoire causale] --> Q[scribe-rag<br/>query / challenge]
+        G[Graphify<br/>Carte AST] --> Q
+        Q -->|réponse| H
+    end
+
+    style H fill:#f39c12,stroke:#e67e22,color:#fff
+    style I fill:#9b59b6,stroke:#8e44ad,color:#fff
+    style T fill:#e74c3c,stroke:#c0392b,color:#fff
+    style W fill:#2ecc71,stroke:#27ae60,color:#fff
+    style S fill:#3498db,stroke:#2980b9,color:#fff
+    style G fill:#1abc9c,stroke:#16a085,color:#fff
+```
+
+**Explication du flux :**
+
+| Étape | Qui | Action |
+|:------|:----|:-------|
+| **1** | Humain | Tape `[TENOR INIT::[.agent/skills/init-tenor/SKILL.md]]` |
+| **2** | LLM hôte | Lit `init-tenor/SKILL.md` en premier (interdiction de lire autre chose avant) |
+| **3** | LLM hôte | Exécute `.agent/workflow/scribe/scribe tenor-init --type cli` |
+| **4** | **init-tenor** | Déclenche `bootstrap` → `whoami` → `workflow read` → `workflow check` |
+| **5** | **TENOR** | Produit le `SCRIBE-CHECK TENOR V4 — MACHINE PROOF` (preuve d'initialisation) |
+| **6** | Agent LLM | Prêt. Consulte le SCRIBE et Graphify pour vos implémentations |
+
+### Responsabilités des composants
+
+| Composant | Technologie | Fonction |
+|:----------|:------------|:---------|
+| **init-tenor** | Markdown (SKILL.md) | 🔑 Porte d'entrée — lut en premier par le LLM, déclenche toute l'initialisation |
+| **TENOR Protocol** | YAML, Markdown | 8 règles absolues + 29 protocoles contextuels + self-audit + auto-mutation |
+| **SCRIBE (SEL)** | Python, YAML | Moteur de mémoire causale : bootstrap, doctor, lock, whoami, workflow, coordination |
+| **SCRIBE-RAG** | BM25, FastAPI | Interface de retrieval : query, explain, challenge, context, gate, eval |
+| **Graphify** | Python, AST | Analyse structurelle temps réel : carte des dépendances, god-nodes, blast radius |
+| **Rules** | Markdown | Règles always-on injectées à chaque réponse (`scribe.md`, `graphify.md`) |
+| **MCP Chrome** | Markdown | Protocole de test navigateur/visuel (alternative à Playwright) |
 
 ---
 
