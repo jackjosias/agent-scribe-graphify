@@ -24,7 +24,6 @@
 - [🤝 Contribuer](#-contribuer)
 - [❓ FAQ / Dépannage](#-faq--dépannage)
 - [📄 Licence](#-licence)
-- [❓ FAQ / Dépannage](#-faq--dépannage)
 
 **Bundle portable d'infrastructure agentique** — copiez `.agent/` dans n'importe quel projet et bénéficiez instantanément de SCRIBE, Graphify et du protocole TENOR.
 
