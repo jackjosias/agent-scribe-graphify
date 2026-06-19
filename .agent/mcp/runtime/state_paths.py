@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -16,7 +17,7 @@ def _move_legacy_path(legacy: Path, target: Path) -> None:
     if target.exists() or not legacy.exists():
         return
     target.parent.mkdir(parents=True, exist_ok=True)
-    legacy.replace(target)
+    shutil.move(str(legacy), str(target))
 
 
 def prepare_state_dirs(project_root: Optional[Path] = None) -> Dict[str, Path]:
@@ -31,15 +32,9 @@ def prepare_state_dirs(project_root: Optional[Path] = None) -> Dict[str, Path]:
     legacy_scribe_out = agent / "scribe-out"
     legacy_graphify_out = agent / "graphify-out"
 
-    if legacy_runtime.exists() and not runtime.exists():
-        runtime.parent.mkdir(parents=True, exist_ok=True)
-        legacy_runtime.replace(runtime)
-    if legacy_scribe_out.exists() and not scribe_out.exists():
-        scribe_out.parent.mkdir(parents=True, exist_ok=True)
-        legacy_scribe_out.replace(scribe_out)
-    if legacy_graphify_out.exists() and not graphify_out.exists():
-        graphify_out.parent.mkdir(parents=True, exist_ok=True)
-        legacy_graphify_out.replace(graphify_out)
+    _move_legacy_path(legacy_runtime, runtime)
+    _move_legacy_path(legacy_scribe_out, scribe_out)
+    _move_legacy_path(legacy_graphify_out, graphify_out)
 
     runtime.mkdir(parents=True, exist_ok=True)
     scribe_out.mkdir(parents=True, exist_ok=True)
