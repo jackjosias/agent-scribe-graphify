@@ -18,7 +18,7 @@ Pas Graphify. Pas README. Pas SCRIBE. **Ce fichier d'abord.**
 Ce skill DOIT lancer l'initialisation machine à chaque TENOR INIT avant
 de considérer la session valide. Ne cherche pas à deviner si `.agent/` vient
 d'être copié: la commande est idempotente, donc elle est le test et la
-réparation portable. Elle initialise ou vérifie le SCRIBE projet, `scribe-out/`,
+réparation portable. Elle initialise ou vérifie le SCRIBE projet, `.agent/state/scribe-out/`,
 `.agent/rules/scribe.md`, le bloc `AGENTS.md`, `.graphifyignore` et les
 surfaces portables attendues.
 
@@ -317,7 +317,7 @@ tu n'as PAS le droit de lire :
 ```
 /home/*/.config/*/AGENTS.md
 ~/.gemini/GEMINI.md
-graphify-out/GRAPH_REPORT.md
+.agent/state/graphify-out/GRAPH_REPORT.md
 README.md
 AGENT-MEMOIRE_PROJECT_STATUS.scribe
 ```
@@ -339,10 +339,10 @@ ORDRE DE LECTURE STRICT (ne pas sauter, ne pas réorganiser) :
 1. .agent/skills/init-tenor/SKILL.md
    ← CE FICHIER — lu en premier, toujours
 
-2. /home/jack-josias/.gemini/GEMINI.md
+2. ${HOME}/.gemini/GEMINI.md
    ← TENOR global — protocole de lecture absolue
 
-3. graphify-out/GRAPH_REPORT.md
+3. .agent/state/graphify-out/GRAPH_REPORT.md
    ← graphe structurel — carte de l'architecture
 
 4. .agent/rules/scribe.md
@@ -504,7 +504,7 @@ Ne jamais inventer ou assumer une date.
 ### LECTURE ABSOLUE OBLIGATOIRE
 
 ```bash
-cat /home/jack-josias/.gemini/GEMINI.md
+cat ${HOME}/.gemini/GEMINI.md
 ```
 
 **🔴 Protocole de lecture absolue applicable ici.**
@@ -546,13 +546,13 @@ Elle te donne en 30 secondes ce qui prendrait 50 000 tokens :
 **Un LLM qui ne le lit pas = junior qui défriche à l'aveugle.**
 
 ```bash
-cat graphify-out/GRAPH_REPORT.md
+cat .agent/state/graphify-out/GRAPH_REPORT.md
 ```
 
 Si absent, générer d'abord :
 ```bash
 graphify update .
-cat graphify-out/GRAPH_REPORT.md
+cat .agent/state/graphify-out/GRAPH_REPORT.md
 ```
 
 **🔴 Protocole de lecture absolue applicable ici.**
@@ -890,7 +890,7 @@ PROCEED → Implémenter.
 
 ```bash
 # JAMAIS CES COMMANDES :
-git add .            # inclut .agent/, scribe-out/ → INTERDIT
+git add .            # inclut .agent/, .agent/state/scribe-out/ → INTERDIT
 git add .agent       # surfaces agentiques → INTERDIT
 git add graphify-out # artefacts générés → INTERDIT
 git add scribe-out   # état runtime → INTERDIT
@@ -906,7 +906,7 @@ git add src/styles/monStyle.scss
 .agent/skills/init-tenor/SKILL.md
 .agent/workflow/scribe/
 graphify-out/
-scribe-out/
+.agent/state/scribe-out/
 ```
 
 **AGENTS.md et .agent/rules/scribe.md :**
@@ -1030,10 +1030,10 @@ Rien d'autre ne compte.
 date +"%Y-%m-%d %H:%M:%S %Z %z"
 
 # 2. TENOR global
-cat /home/jack-josias/.gemini/GEMINI.md
+cat ${HOME}/.gemini/GEMINI.md
 
 # 3. Graphify
-cat graphify-out/GRAPH_REPORT.md
+cat .agent/state/graphify-out/GRAPH_REPORT.md
 
 # 4. Bootstrap + identité
 .agent/workflow/scribe/scribe bootstrap

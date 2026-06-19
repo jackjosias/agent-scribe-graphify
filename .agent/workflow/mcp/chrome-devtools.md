@@ -113,11 +113,11 @@ Commande officielle:
 codex mcp add chrome-devtools -- npx chrome-devtools-mcp@latest
 ```
 
-Configuration locale durcie observee sur cette machine:
+Configuration portable recommandee:
 
 ```toml
 [mcp_servers.chrome-devtools]
-command = "/home/jack-josias/.nvm/versions/node/v20.20.0/bin/chrome-devtools-mcp"
+command = "chrome-devtools-mcp"
 args = [
   "--browser-url=http://127.0.0.1:9222",
   "--no-usage-statistics",
@@ -126,7 +126,7 @@ args = [
 startup_timeout_sec = 60
 ```
 
-Pourquoi ce choix local:
+Pourquoi ce choix portable:
 
 - le chemin absolu evite les problemes de `PATH` quand Codex ne lance pas un
   shell interactif `nvm`;
@@ -409,7 +409,7 @@ Symptome: marche dans un terminal interactif, echoue dans Codex.
 Correction: utiliser le chemin absolu du binaire installe, comme:
 
 ```toml
-command = "/home/jack-josias/.nvm/versions/node/v20.20.0/bin/chrome-devtools-mcp"
+command = "chrome-devtools-mcp"
 ```
 
 ### `Transport closed` cote outil Codex, mais Chrome/CDP vivant
@@ -431,7 +431,7 @@ Verification de separation des couches:
 ```bash
 codex mcp get chrome-devtools
 curl -s http://127.0.0.1:9222/json/version
-/home/jack-josias/.nvm/versions/node/v20.20.0/bin/chrome-devtools-mcp --version
+chrome-devtools-mcp --version
 ```
 
 Si `curl` renvoie un `webSocketDebuggerUrl` et que le binaire repond, Chrome/CDP
@@ -447,7 +447,7 @@ pont de diagnostic ou de smoke test quand outil MCP natif est ferme.
 Handshake minimal:
 
 ```bash
-/home/jack-josias/.nvm/versions/node/v20.20.0/bin/chrome-devtools-mcp \
+chrome-devtools-mcp \
   --browser-url=http://127.0.0.1:9222 \
   --no-usage-statistics \
   --no-performance-crux
@@ -496,7 +496,7 @@ Verification:
 
 ```bash
 curl -s http://127.0.0.1:9223/json/version
-/home/jack-josias/.nvm/versions/node/v20.20.0/bin/chrome-devtools-mcp \
+chrome-devtools-mcp \
   --browser-url=http://127.0.0.1:9223 \
   --no-usage-statistics \
   --no-performance-crux
