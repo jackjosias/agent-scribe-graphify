@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 THIS_FILE = Path(__file__).resolve()
@@ -18,7 +19,7 @@ def load_catalog() -> dict:
 
 def server_command() -> dict:
     server_path = AGENT_ROOT / "mcp" / "server.py"
-    return {"name": "agent-scribe-graphify", "command": "python", "args": [str(server_path)], "transport": "stdio", "cwd": str(PROJECT_ROOT)}
+    return {"name": "agent-scribe-graphify", "command": sys.executable or "python3", "args": [str(server_path)], "transport": "stdio", "cwd": str(PROJECT_ROOT)}
 
 
 def generic_snippet() -> dict:

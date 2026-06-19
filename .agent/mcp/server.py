@@ -33,8 +33,10 @@ except Exception:
         session_status as db_session_status,
     )
 
+from runtime import patch_queue
+
 SERVER_NAME = "agent-scribe-graphify"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 ROOT = Path.cwd().resolve()
 AGENT_DIR = ROOT / ".agent"
 
@@ -166,12 +168,72 @@ def release_claim(agent_id: str, claim_id: str, summary: str = "") -> Dict[str, 
 
 
 def before_edit(agent_id: str, resource: str) -> Dict[str, Any]:
-    return ok(db_before_edit(agent_id=agent_id, resource=resource))
+    safe = patch_queue.safe_resource(resource)
+    current = patch_queue.file_hash(safe)
+    with patch_queue.connect() as con:
+        rows = [dict(row) for row in con.execute("SELECT * FROM claims WHERE resource=? AND status='active'", (safe,)).fetchall()]
+    owned = [row for row in rows if row.get("agent_id") == agent_id]
+    foreign = [row for row in rows if row.get("agent_id") != agent_id]
+    if any(row.get("mode") == "patch_queue" for row in owned):
+        return ok({"verdict": "DIRECT_EDIT_REFUSED", "policy": "PATCH_QUEUE_REQUIRED", "reason": "agent owns patch_queue claim", "owned_claims": owned, **current})
+    if any(row.get("mode") in {"write", "exclusive", "patch_queue"} for row in foreign):
+        return ok({"verdict": "DIRECT_EDIT_REFUSED", "policy": "PATCH_QUEUE_REQUIRED", "reason": "foreign write/patch claim active", "foreign_claims": foreign, **current})
+    if not any(row.get("mode") in {"write", "exclusive"} for row in owned):
+        return ok({"verdict": "DIRECT_EDIT_REFUSED_MISSING_CLAIM", "policy": "CLAIM_REQUIRED", "active_claims": rows, **current})
+    return ok({"verdict": "DIRECT_EDIT_ALLOWED", "claims": owned, "legacy_check": db_before_edit(agent_id=agent_id, resource=safe), **current})
 
 
 def finish_task(agent_id: str, summary: str = "") -> Dict[str, Any]:
+    pending = patch_queue.list_patches(status="proposed")["patches"] + patch_queue.list_patches(status="conflict")["patches"]
+    mine = [patch for patch in pending if patch.get("agent_id") == agent_id]
+    if mine:
+        return ok({"verdict": "FINISH_REFUSED_PENDING_PATCHES", "pending_patches": mine})
     return ok(db_finish_task(agent_id=agent_id, summary=summary))
 
+
+
+def file_hash(resource: str) -> Dict[str, Any]:
+    return ok({"verdict": "FILE_HASH", **patch_queue.file_hash(resource)})
+
+
+def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str) -> Dict[str, Any]:
+    return ok(patch_queue.propose_patch(agent_id=agent_id, target=target, base_hash=base_hash, diff_text=diff_text))
+
+
+def list_patches(target: str = "", status: str = "") -> Dict[str, Any]:
+    return ok(patch_queue.list_patches(target=target or None, status=status or None))
+
+
+def confirm_patch_applied(agent_id: str, patch_id: str, new_hash: str) -> Dict[str, Any]:
+    if not agent_id or not patch_id or not new_hash:
+        raise ToolError("agent_id, patch_id and new_hash are required")
+    patch_queue.ensure_schema()
+    with patch_queue.connect() as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            row = con.execute("SELECT * FROM patches_v2 WHERE patch_id=?", (patch_id,)).fetchone()
+            if not row:
+                raise ToolError("unknown patch_id")
+            if row["agent_id"] != agent_id:
+                raise ToolError("only patch owner can confirm it")
+            current = patch_queue.file_hash(row["target_path"])["hash"]
+            if current != new_hash:
+                raise ToolError("new_hash does not match current file hash")
+            con.execute("UPDATE patches_v2 SET status='applied',updated_at=? WHERE patch_id=?", (__import__("time").time(), patch_id))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+    return ok({"verdict": "PATCH_APPLIED_CONFIRMED", "patch_id": patch_id, "new_hash": new_hash})
+
+
+def reject_patch(agent_id: str, patch_id: str, reason: str) -> Dict[str, Any]:
+    if not agent_id or not patch_id or not reason:
+        raise ToolError("agent_id, patch_id and reason are required")
+    patch_queue.ensure_schema()
+    with patch_queue.connect() as con:
+        con.execute("UPDATE patches_v2 SET status='rejected',updated_at=?,reason=? WHERE patch_id=? AND agent_id=? AND status IN ('proposed','conflict')", (__import__("time").time(), reason, patch_id, agent_id))
+    return ok({"verdict": "PATCH_REJECTED", "patch_id": patch_id, "reason": reason})
 
 def installation_required(host_tool: str = "unknown") -> Dict[str, Any]:
     return ok({
@@ -196,6 +258,11 @@ TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "release_claim": release_claim,
     "before_edit": before_edit,
     "finish_task": finish_task,
+    "file_hash": file_hash,
+    "propose_patch": propose_patch,
+    "list_patches": list_patches,
+    "confirm_patch_applied": confirm_patch_applied,
+    "reject_patch": reject_patch,
     "installation_required": installation_required,
 }
 
@@ -213,6 +280,11 @@ def tool_schema(name: str) -> Dict[str, Any]:
         "release_claim": {"agent_id": "string", "claim_id": "string", "summary": "string"},
         "before_edit": {"agent_id": "string", "resource": "string"},
         "finish_task": {"agent_id": "string", "summary": "string"},
+        "file_hash": {"resource": "string"},
+        "propose_patch": {"agent_id": "string", "target": "string", "base_hash": "string", "diff_text": "string"},
+        "list_patches": {"target": "string", "status": "string"},
+        "confirm_patch_applied": {"agent_id": "string", "patch_id": "string", "new_hash": "string"},
+        "reject_patch": {"agent_id": "string", "patch_id": "string", "reason": "string"},
         "installation_required": {"host_tool": "string"},
     }[name]
     return {"type": "object", "properties": {k: {"type": v} for k, v in schemas.items()}, "additionalProperties": False}
