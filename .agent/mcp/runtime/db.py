@@ -10,6 +10,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
 
+try:
+    from .state_paths import prepare_state_dirs, project_root_from
+except Exception:
+    from state_paths import prepare_state_dirs, project_root_from  # type: ignore
+
 
 class CoordinationError(RuntimeError):
     pass
@@ -23,28 +28,8 @@ def new_id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def project_root_from(start: Optional[Path] = None) -> Path:
-    current = (start or Path.cwd()).resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / ".agent").is_dir():
-            return candidate
-    return current
-
-
 def paths(project_root: Optional[Path] = None) -> Dict[str, Path]:
-    root = project_root_from(project_root)
-    agent = root / ".agent"
-    runtime = agent / "runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
-    return {
-        "root": root,
-        "agent": agent,
-        "runtime": runtime,
-        "db": runtime / "coordination.sqlite",
-        "events": runtime / "events.log",
-        "scribe_out": agent / "scribe-out",
-        "graphify_out": agent / "graphify-out",
-    }
+    return prepare_state_dirs(project_root)
 
 
 @contextmanager
@@ -63,8 +48,6 @@ def connect(project_root: Optional[Path] = None) -> Iterator[sqlite3.Connection]
 
 def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
     p = paths(project_root)
-    p["scribe_out"].mkdir(parents=True, exist_ok=True)
-    p["graphify_out"].mkdir(parents=True, exist_ok=True)
     with connect(project_root) as con:
         con.executescript(
             """
@@ -121,7 +104,7 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
             """
         )
-    return {"ok": True, "db": str(p["db"]), "root": str(p["root"])}
+    return {"ok": True, "db": str(p["db"]), "root": str(p["root"]), "state": str(p["state"]), "runtime": str(p["runtime"]), "scribe_out": str(p["scribe_out"]), "graphify_out": str(p["graphify_out"])}
 
 
 def add_event(con: sqlite3.Connection, event_type: str, payload: Dict[str, Any], agent_id: Optional[str] = None) -> None:
