@@ -20,6 +20,7 @@ try:
         release_claim as db_release_claim,
         session_status as db_session_status,
     )
+    from runtime.state_paths import graphify_report_candidates
 except Exception:
     from .runtime.db import (  # type: ignore
         CoordinationError,
@@ -32,11 +33,12 @@ except Exception:
         release_claim as db_release_claim,
         session_status as db_session_status,
     )
+    from .runtime.state_paths import graphify_report_candidates  # type: ignore
 
 from runtime import patch_queue
 
 SERVER_NAME = "agent-scribe-graphify"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.2.1"
 ROOT = Path.cwd().resolve()
 AGENT_DIR = ROOT / ".agent"
 
@@ -141,21 +143,13 @@ def scribe_query(query: str, limit: int = 5) -> Dict[str, Any]:
 
 
 def graphify_query(query: str = "", resource: str = "") -> Dict[str, Any]:
-    graph_dir = AGENT_DIR / "graphify-out"
-    project_graph_dir = ROOT / "graphify-out"
-    candidates = [
-        graph_dir / "GRAPH_REPORT.md",
-        project_graph_dir / "GRAPH_REPORT.md",
-        graph_dir / "graph.json",
-        project_graph_dir / "graph.json",
-    ]
     found = []
-    for p in candidates:
+    for p in graphify_report_candidates(ROOT):
         if p.exists() and p.is_file():
             text = p.read_text(encoding="utf-8", errors="replace")
             found.append({"path": str(p), "excerpt": text[:12000]})
     if not found:
-        return ok({"verdict": "GRAPHIFY_UNAVAILABLE", "query": query, "resource": resource, "reason": "No graphify-out report found"})
+        return ok({"verdict": "GRAPHIFY_UNAVAILABLE", "query": query, "resource": resource, "reason": "No graphify report found in .agent/state/graphify-out or legacy locations"})
     return ok({"verdict": "GRAPHIFY_QUERY_DONE", "query": query, "resource": resource, "results": found})
 
 
@@ -189,7 +183,6 @@ def finish_task(agent_id: str, summary: str = "") -> Dict[str, Any]:
     if mine:
         return ok({"verdict": "FINISH_REFUSED_PENDING_PATCHES", "pending_patches": mine})
     return ok(db_finish_task(agent_id=agent_id, summary=summary))
-
 
 
 def file_hash(resource: str) -> Dict[str, Any]:
@@ -240,7 +233,7 @@ def installation_required(host_tool: str = "unknown") -> Dict[str, Any]:
         "verdict": "MCP_INSTALLATION_REQUIRED",
         "host_tool": host_tool,
         "server_name": SERVER_NAME,
-        "command": "python",
+        "command": sys.executable or "python3",
         "args": [".agent/mcp/server.py"],
         "message": "Autorise ce serveur MCP dans ton outil agentique, puis relance TENOR INIT.",
     })
