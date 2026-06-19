@@ -5,7 +5,7 @@
     "transport": "stdio",
     "command": "python3",
     "args": [
-      ".agent/mcp/server.py"
+      ".agent/mcp/server_entry.py"
     ],
     "working_directory": "project_root"
   },
@@ -51,7 +51,7 @@
       "agent-scribe-graphify": {
         "command": "python3",
         "args": [
-          ".agent/mcp/server.py"
+          ".agent/mcp/server_entry.py"
         ],
         "transport": "stdio"
       }

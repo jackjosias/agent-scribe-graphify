@@ -18,7 +18,7 @@ def load_catalog() -> dict:
 
 
 def server_command() -> dict:
-    server_path = AGENT_ROOT / "mcp" / "server.py"
+    server_path = AGENT_ROOT / "mcp" / "server_entry.py"
     return {"name": "agent-scribe-graphify", "command": sys.executable or "python3", "args": [str(server_path)], "transport": "stdio", "cwd": str(PROJECT_ROOT)}
 
 
@@ -35,7 +35,7 @@ def main() -> int:
     args = parser.parse_args()
     catalog = load_catalog()
     if args.doctor:
-        server = AGENT_ROOT / "mcp" / "server.py"
+        server = AGENT_ROOT / "mcp" / "server_entry.py"
         print(json.dumps({"ok": server.is_file(), "project_root": str(PROJECT_ROOT), "server": server_command(), "catalog": str(CATALOG_PATH)}, ensure_ascii=False, indent=2))
         return 0 if server.is_file() else 1
     if args.list:
