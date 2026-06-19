@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "server": {
+    "name": "agent-scribe-graphify",
+    "transport": "stdio",
+    "command": "python",
+    "args": [".agent/mcp/server.py"],
+    "working_directory": "project_root"
+  },
+  "hosts": {
+    "codex-cli": {"kind": "cli", "config_scope": "user_or_project", "manual_confirmation_required": true},
+    "claude-code": {"kind": "cli", "config_scope": "user_or_project", "manual_confirmation_required": true},
+    "gemini-cli": {"kind": "cli", "config_scope": "settings_json", "manual_confirmation_required": true},
+    "opencode": {"kind": "cli", "config_scope": "opencode_config", "manual_confirmation_required": true},
+    "cursor": {"kind": "ide", "config_scope": "ide_settings", "manual_confirmation_required": true},
+    "copilot-vscode": {"kind": "ide", "config_scope": "vscode_mcp", "manual_confirmation_required": true},
+    "windsurf": {"kind": "ide", "config_scope": "windsurf_mcp", "manual_confirmation_required": true}
+  },
+  "generic_json_snippet": {
+    "mcpServers": {
+      "agent-scribe-graphify": {
+        "command": "python",
+        "args": [".agent/mcp/server.py"],
+        "transport": "stdio"
+      }
+    }
+  }
+}
