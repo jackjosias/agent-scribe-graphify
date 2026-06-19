@@ -9,6 +9,11 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from .state_paths import prepare_state_dirs, project_root_from
+except Exception:
+    from state_paths import prepare_state_dirs, project_root_from  # type: ignore
+
 NEW_FILE_HASH = "__new_file__"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 MAX_DIFF_BYTES = 2_000_000
@@ -20,16 +25,10 @@ def now_ts() -> int:
     return int(time.time())
 
 def root() -> Path:
-    current = Path.cwd().resolve()
-    for candidate in [current, *current.parents]:
-        if (candidate / ".agent").is_dir():
-            return candidate
-    return current
+    return project_root_from()
 
 def db_path() -> Path:
-    path = root() / ".agent" / "runtime" / "coordination.sqlite"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    return prepare_state_dirs(root())["db"]
 
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(str(db_path()), timeout=30, isolation_level=None)
