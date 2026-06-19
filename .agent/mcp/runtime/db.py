@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sqlite3
+import time
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, Iterator, Optional
+
+
+class CoordinationError(RuntimeError):
+    pass
+
+
+def now_ts() -> int:
+    return int(time.time())
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+
+
+def project_root_from(start: Optional[Path] = None) -> Path:
+    current = (start or Path.cwd()).resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / ".agent").is_dir():
+            return candidate
+    return current
+
+
+def paths(project_root: Optional[Path] = None) -> Dict[str, Path]:
+    root = project_root_from(project_root)
+    agent = root / ".agent"
+    runtime = agent / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    return {
+        "root": root,
+        "agent": agent,
+        "runtime": runtime,
+        "db": runtime / "coordination.sqlite",
+        "events": runtime / "events.log",
+        "scribe_out": agent / "scribe-out",
+        "graphify_out": agent / "graphify-out",
+    }
+
+
+@contextmanager
+def connect(project_root: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
+    p = paths(project_root)
+    con = sqlite3.connect(str(p["db"]), timeout=30, isolation_level=None)
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA synchronous=NORMAL")
+        con.execute("PRAGMA foreign_keys=ON")
+        yield con
+    finally:
+        con.close()
+
+
+def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
+    p = paths(project_root)
+    p["scribe_out"].mkdir(parents=True, exist_ok=True)
+    p["graphify_out"].mkdir(parents=True, exist_ok=True)
+    with connect(project_root) as con:
+        con.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS agents (
+              agent_id TEXT PRIMARY KEY,
+              host_tool TEXT NOT NULL,
+              model_name TEXT,
+              pid INTEGER,
+              started_at INTEGER NOT NULL,
+              last_seen INTEGER NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active'
+            );
+            CREATE TABLE IF NOT EXISTS claims (
+              claim_id TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              resource TEXT NOT NULL,
+              mode TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              base_hash TEXT,
+              created_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL,
+              released_at INTEGER,
+              summary TEXT
+            );
+            CREATE TABLE IF NOT EXISTS patches (
+              patch_id TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              target_file TEXT NOT NULL,
+              base_hash TEXT NOT NULL,
+              diff TEXT NOT NULL,
+              status TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              applied_at INTEGER,
+              rejection_reason TEXT
+            );
+            CREATE TABLE IF NOT EXISTS conflicts (
+              conflict_id TEXT PRIMARY KEY,
+              resource TEXT NOT NULL,
+              first_agent TEXT NOT NULL,
+              second_agent TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              status TEXT NOT NULL DEFAULT 'open'
+            );
+            CREATE TABLE IF NOT EXISTS events (
+              event_id TEXT PRIMARY KEY,
+              ts INTEGER NOT NULL,
+              agent_id TEXT,
+              type TEXT NOT NULL,
+              payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status,last_seen);
+            CREATE INDEX IF NOT EXISTS idx_claims_resource ON claims(resource,status,expires_at);
+            CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+            """
+        )
+    return {"ok": True, "db": str(p["db"]), "root": str(p["root"])}
+
+
+def add_event(con: sqlite3.Connection, event_type: str, payload: Dict[str, Any], agent_id: Optional[str] = None) -> None:
+    con.execute(
+        "INSERT INTO events(event_id,ts,agent_id,type,payload) VALUES(?,?,?,?,?)",
+        (new_id("evt"), now_ts(), agent_id, event_type, json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+    )
+
+
+def expire_stale(con: sqlite3.Connection) -> None:
+    t = now_ts()
+    con.execute("UPDATE agents SET status='stale' WHERE status='active' AND last_seen < ?", (t - 180,))
+    con.execute("UPDATE claims SET status='expired' WHERE status='active' AND expires_at < ?", (t,))
+
+
+def register_agent(host_tool: str, model_name: str = "", agent_id: Optional[str] = None) -> Dict[str, Any]:
+    if not host_tool or not isinstance(host_tool, str):
+        raise CoordinationError("host_tool is required")
+    init_db()
+    aid = agent_id or new_id(host_tool.replace(" ", "-").lower()[:20] or "agent")
+    t = now_ts()
+    with connect() as con:
+        expire_stale(con)
+        con.execute(
+            "INSERT OR REPLACE INTO agents(agent_id,host_tool,model_name,pid,started_at,last_seen,status) VALUES(?,?,?,?,?,?,?)",
+            (aid, host_tool, model_name, os.getpid(), t, t, "active"),
+        )
+        add_event(con, "agent.register", {"host_tool": host_tool, "model_name": model_name}, aid)
+    return {"agent_id": aid, "status": "active", "host_tool": host_tool, "model_name": model_name}
+
+
+def heartbeat(agent_id: str) -> Dict[str, Any]:
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    with connect() as con:
+        expire_stale(con)
+        cur = con.execute("UPDATE agents SET last_seen=?, status='active' WHERE agent_id=?", (now_ts(), agent_id))
+        if cur.rowcount == 0:
+            raise CoordinationError(f"unknown agent_id: {agent_id}")
+        add_event(con, "agent.heartbeat", {}, agent_id)
+    return {"agent_id": agent_id, "status": "active"}
+
+
+def session_status() -> Dict[str, Any]:
+    init_db()
+    with connect() as con:
+        expire_stale(con)
+        agents = [dict(r) for r in con.execute("SELECT * FROM agents ORDER BY last_seen DESC")]
+        claims = [dict(r) for r in con.execute("SELECT * FROM claims WHERE status='active' ORDER BY created_at DESC")]
+        conflicts = [dict(r) for r in con.execute("SELECT * FROM conflicts WHERE status='open' ORDER BY created_at DESC")]
+    return {"active_agents": sum(1 for a in agents if a["status"] == "active"), "agents": agents, "active_claims": claims, "open_conflicts": conflicts}
+
+
+def normalize_resource(resource: str) -> str:
+    if not resource or not isinstance(resource, str):
+        raise CoordinationError("resource is required")
+    value = resource.strip().replace("\\", "/")
+    if not value or value.startswith("/") or ".." in Path(value).parts:
+        raise CoordinationError("resource must be a safe project-relative path or semantic name")
+    return value
+
+
+def file_hash(resource: str) -> Optional[str]:
+    p = project_root_from() / resource
+    if not p.is_file():
+        return None
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_seconds: int = 1800) -> Dict[str, Any]:
+    res = normalize_resource(resource)
+    if mode not in {"read", "write", "exclusive", "patch_queue"}:
+        raise CoordinationError("mode must be read/write/exclusive/patch_queue")
+    if ttl_seconds < 60 or ttl_seconds > 86400:
+        raise CoordinationError("ttl_seconds must be between 60 and 86400")
+    init_db()
+    t = now_ts()
+    with connect() as con:
+        expire_stale(con)
+        agent = con.execute("SELECT agent_id FROM agents WHERE agent_id=? AND status='active'", (agent_id,)).fetchone()
+        if not agent:
+            raise CoordinationError("agent must be registered and active before claiming")
+        existing = [dict(r) for r in con.execute("SELECT * FROM claims WHERE resource=? AND status='active'", (res,))]
+        blocking = [c for c in existing if c["agent_id"] != agent_id and (mode != "read" or c["mode"] != "read")]
+        if blocking:
+            conflict_id = new_id("conflict")
+            con.execute(
+                "INSERT INTO conflicts(conflict_id,resource,first_agent,second_agent,reason,created_at,status) VALUES(?,?,?,?,?,?,?)",
+                (conflict_id, res, blocking[0]["agent_id"], agent_id, "active claim conflict", t, "open"),
+            )
+            add_event(con, "claim.refused", {"resource": res, "blocking": blocking, "conflict_id": conflict_id}, agent_id)
+            return {"verdict": "CLAIM_REFUSED_CONFLICT", "resource": res, "blocking_claims": blocking, "conflict_id": conflict_id, "required_mode": "patch_queue"}
+        claim_id = new_id("claim")
+        con.execute(
+            "INSERT INTO claims(claim_id,agent_id,resource,mode,status,base_hash,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+            (claim_id, agent_id, res, mode, "active", file_hash(res), t, t + ttl_seconds),
+        )
+        add_event(con, "claim.granted", {"claim_id": claim_id, "resource": res, "mode": mode}, agent_id)
+    return {"verdict": "CLAIM_GRANTED", "claim_id": claim_id, "resource": res, "mode": mode, "base_hash": file_hash(res)}
+
+
+def release_claim(agent_id: str, claim_id: str, summary: str = "") -> Dict[str, Any]:
+    if not agent_id or not claim_id:
+        raise CoordinationError("agent_id and claim_id are required")
+    with connect() as con:
+        cur = con.execute("UPDATE claims SET status='released', released_at=?, summary=? WHERE claim_id=? AND agent_id=? AND status='active'", (now_ts(), summary, claim_id, agent_id))
+        if cur.rowcount == 0:
+            raise CoordinationError("active claim not found for this agent")
+        add_event(con, "claim.released", {"claim_id": claim_id, "summary": summary}, agent_id)
+    return {"verdict": "CLAIM_RELEASED", "claim_id": claim_id}
+
+
+def before_edit(agent_id: str, resource: str) -> Dict[str, Any]:
+    res = normalize_resource(resource)
+    init_db()
+    with connect() as con:
+        expire_stale(con)
+        owned = con.execute("SELECT * FROM claims WHERE agent_id=? AND resource=? AND status='active'", (agent_id, res)).fetchone()
+        active_other = [dict(r) for r in con.execute("SELECT * FROM claims WHERE resource=? AND status='active' AND agent_id<>?", (res, agent_id))]
+        if active_other:
+            add_event(con, "edit.refused", {"resource": res, "reason": "same resource active elsewhere", "others": active_other}, agent_id)
+            return {"verdict": "DIRECT_EDIT_REFUSED", "resource": res, "required_mode": "PATCH_QUEUE_REQUIRED", "blocking_claims": active_other}
+        if not owned:
+            add_event(con, "edit.refused", {"resource": res, "reason": "missing claim"}, agent_id)
+            return {"verdict": "DIRECT_EDIT_REFUSED", "resource": res, "reason": "MISSING_CLAIM", "required_action": "claim_resource"}
+        add_event(con, "edit.allowed", {"resource": res}, agent_id)
+    return {"verdict": "DIRECT_EDIT_ALLOWED", "resource": res, "base_hash": file_hash(res)}
+
+
+def finish_task(agent_id: str, summary: str = "") -> Dict[str, Any]:
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    with connect() as con:
+        expire_stale(con)
+        open_claims = [dict(r) for r in con.execute("SELECT * FROM claims WHERE agent_id=? AND status='active'", (agent_id,))]
+        if open_claims:
+            return {"verdict": "FINISH_REFUSED_OPEN_CLAIMS", "open_claims": open_claims}
+        con.execute("UPDATE agents SET status='finished', last_seen=? WHERE agent_id=?", (now_ts(), agent_id))
+        add_event(con, "task.finished", {"summary": summary}, agent_id)
+    return {"verdict": "TASK_FINISHED_OK", "agent_id": agent_id, "summary": summary}
