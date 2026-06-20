@@ -99,6 +99,30 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "BEFORE_TASK_OK",
+    }, "scribe_query")
+
+    scribe = call_tool("scribe_query", {"query": "modify smoke workflow file", "limit": 5})
+    if scribe.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
+        fail(f"scribe_query failed: {scribe}")
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "request": "modify smoke workflow file",
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "last_verdict": scribe["verdict"],
+    }, "graphify_query")
+
+    graphify = call_tool("graphify_query", {"query": "modify smoke workflow file", "resource": "tmp-smoke-workflow/file.txt"})
+    if graphify.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
+        fail(f"graphify_query failed: {graphify}")
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "request": "modify smoke workflow file",
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "last_verdict": graphify["verdict"],
     }, "claim_resource")
 
     claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600})
@@ -177,7 +201,25 @@ def smoke_nominal_workflow() -> None:
     expect_next_tool({
         "agent_id": agent_id,
         "intent": "finish",
+        "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "CLAIM_RELEASED",
+    }, "scribe_record")
+
+    record = call_tool("scribe_record", {
+        "agent_id": agent_id,
+        "request": "modify smoke workflow file",
+        "summary": "smoke finished",
+        "touched_resources": ["tmp-smoke-workflow/file.txt"],
+        "verdict": "CLAIM_RELEASED",
+        "tags": ["smoke"],
+    })
+    if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+        fail(f"scribe_record failed: {record}")
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "finish",
+        "last_verdict": "SCRIBE_RECORD_WRITTEN",
     }, "finish_task")
 
     finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished"})
@@ -265,7 +307,7 @@ def smoke_tool_listing() -> None:
     proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), text=True, capture_output=True, timeout=30)
     if proc.returncode != 0:
         fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
-    for tool in ("workflow_next", "apply_patch", "delete_resource"):
+    for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "apply_patch", "delete_resource"):
         if tool not in proc.stdout:
             fail(f"missing tool from server_entry --list-tools: {tool}")
 

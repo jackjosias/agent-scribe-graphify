@@ -41,8 +41,44 @@ def main() -> int:
             fail(f"bootstrap failed: {boot}")
         agent_id = boot["agent"]["agent_id"]
 
-        if "delete_resource" not in str(call_tool("workflow_next", {"agent_id": agent_id, "intent": "delete", "resource": "tmp-delete-resource-smoke/delete-me.txt"})):
-            fail("workflow_next did not route delete intent")
+        first = call_tool("workflow_next", {
+            "agent_id": agent_id,
+            "request": "delete smoke workflow file",
+            "intent": "delete",
+            "resource": "tmp-delete-resource-smoke/delete-me.txt",
+        })
+        if (first.get("must_call") or {}).get("tool") != "before_task":
+            fail(f"workflow_next should require before_task first: {first}")
+        before = call_tool("before_task", {"agent_id": agent_id, "request": "delete smoke workflow file"})
+        second = call_tool("workflow_next", {
+            "agent_id": agent_id,
+            "request": "delete smoke workflow file",
+            "intent": "delete",
+            "resource": "tmp-delete-resource-smoke/delete-me.txt",
+            "last_verdict": before["verdict"],
+        })
+        if (second.get("must_call") or {}).get("tool") != "scribe_query":
+            fail(f"workflow_next should require scribe_query before delete claim: {second}")
+        scribe = call_tool("scribe_query", {"query": "delete smoke workflow file", "limit": 5})
+        third = call_tool("workflow_next", {
+            "agent_id": agent_id,
+            "request": "delete smoke workflow file",
+            "intent": "delete",
+            "resource": "tmp-delete-resource-smoke/delete-me.txt",
+            "last_verdict": scribe["verdict"],
+        })
+        if (third.get("must_call") or {}).get("tool") != "graphify_query":
+            fail(f"workflow_next should require graphify_query before delete claim: {third}")
+        graphify = call_tool("graphify_query", {"query": "delete smoke workflow file", "resource": "tmp-delete-resource-smoke/delete-me.txt"})
+        fourth = call_tool("workflow_next", {
+            "agent_id": agent_id,
+            "request": "delete smoke workflow file",
+            "intent": "delete",
+            "resource": "tmp-delete-resource-smoke/delete-me.txt",
+            "last_verdict": graphify["verdict"],
+        })
+        if (fourth.get("must_call") or {}).get("tool") != "claim_resource":
+            fail(f"workflow_next should route delete to claim after context: {fourth}")
 
         claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "mode": "patch_queue", "ttl_seconds": 600})
         if claim.get("verdict") != "CLAIM_GRANTED":
@@ -62,6 +98,12 @@ def main() -> int:
             fail(f"confirmed deletion failed: {deleted}")
 
         call_tool("release_claim", {"agent_id": agent_id, "claim_id": claim["claim_id"], "summary": "delete smoke cleanup"})
+        next_record = call_tool("workflow_next", {"agent_id": agent_id, "intent": "finish", "resource": "tmp-delete-resource-smoke/delete-me.txt", "last_verdict": "CLAIM_RELEASED"})
+        if (next_record.get("must_call") or {}).get("tool") != "scribe_record":
+            fail(f"workflow_next should require scribe_record before finish after delete: {next_record}")
+        record = call_tool("scribe_record", {"agent_id": agent_id, "request": "delete smoke workflow file", "summary": "delete resource smoke ok", "touched_resources": ["tmp-delete-resource-smoke/delete-me.txt"], "verdict": "CLAIM_RELEASED", "tags": ["smoke", "delete"]})
+        if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+            fail(f"scribe_record failed after delete: {record}")
         finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok"})
         if finished.get("verdict") != "TASK_FINISHED_OK":
             fail(f"finish failed: {finished}")

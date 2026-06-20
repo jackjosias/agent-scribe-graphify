@@ -2,13 +2,13 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/branch-v2-blue" alt="Branch v2">
-  <img src="https://img.shields.io/badge/MCP-v0.2.4-purple" alt="MCP v0.2.4">
+  <img src="https://img.shields.io/badge/MCP-v0.2.5-purple" alt="MCP v0.2.4">
   <img src="https://img.shields.io/badge/status-smoke%20tested-brightgreen" alt="Smoke tested">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/write--gate-apply__patch-success" alt="MCP write gate">
 </p>
 
-> **Branche V2 — socle MCP local portable avec workflow mécanique `workflow_next`, write gate `apply_patch` et delete gate `delete_resource`.**
+> **Branche V2 — socle MCP local portable avec workflow mécanique `workflow_next`, write gate `apply_patch` et delete gate `delete_resource`, proactive context gates and `scribe_record`.**
 
 ---
 
@@ -137,6 +137,10 @@ workflow_next
 → workflow_next
 → before_task
 → workflow_next
+→ scribe_query
+→ workflow_next
+→ graphify_query si code/architecture
+→ workflow_next
 → claim_resource
 → workflow_next
 → file_hash
@@ -147,6 +151,8 @@ workflow_next
 → workflow_next
 → release_claim
 → workflow_next
+→ scribe_record
+→ workflow_next
 → finish_task
 ```
 
@@ -156,21 +162,31 @@ workflow_next
 
 Les écritures directes du host sont refusées par `before_edit`.
 
-Le chemin accepté par `.agent` V2.4 est :
+Le chemin accepté par `.agent` V2.5 est :
 
 ```text
-workflow_next → file_hash → propose_patch → apply_patch
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → propose_patch → apply_patch
 ```
 
 Limite honnête : une sandbox OS reste nécessaire pour empêcher physiquement un processus externe qui possède déjà les droits d'écriture du système. Le write gate rend le protocole `.agent` MCP-only, mais ne remplace pas une isolation au niveau OS.
 
 ## 🧨 Delete gate
 
-Les suppressions directes du host sont interdites. Le chemin accepté par `.agent` V2.4 est :
+Les suppressions directes du host sont interdites. Le chemin accepté par `.agent` V2.5 est :
 
 ```text
-workflow_next → claim_resource → file_hash → delete_resource → release_claim → finish_task
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
 ```
+
+## 🧠 Context gates et gravure mémoire
+
+Depuis V2.5, `workflow_next` impose aussi le contexte avant action :
+
+```text
+before_task → scribe_query → graphify_query si code/architecture → action
+```
+
+Après une écriture, suppression, correction, refactor, test ou décision importante, `workflow_next` impose `scribe_record` avant `finish_task`. `scribe_record` écrit uniquement sous `.agent/state/scribe-out/records/`.
 
 `delete_resource` exige une confirmation exacte fournie par l'utilisateur :
 

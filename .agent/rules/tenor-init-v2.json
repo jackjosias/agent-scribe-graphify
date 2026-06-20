@@ -29,7 +29,10 @@
   "required_tools": [
     "workflow_next",
     "apply_patch",
-    "delete_resource"
+    "delete_resource",
+    "scribe_query",
+    "graphify_query",
+    "scribe_record"
   ],
   "report_fields": [
     "MCP disponible",
@@ -52,10 +55,54 @@
     "Prochaine action"
   ],
   "loops": {
-    "generic_task": ["workflow_next", "execute_must_call", "workflow_next_with_last_verdict", "repeat_until_done"],
-    "read_or_research": ["workflow_next", "before_task", "scribe_query_if_needed", "graphify_query_if_needed", "read_files", "synthesize", "finish_task"],
-    "write": ["workflow_next", "claim_resource", "file_hash", "propose_patch", "workflow_next", "apply_patch", "workflow_next", "release_claim", "workflow_next", "finish_task"],
-    "delete": ["workflow_next", "claim_resource", "file_hash", "ask_user_exact_confirmation", "delete_resource", "workflow_next", "release_claim", "workflow_next", "finish_task"]
+    "generic_task": [
+      "workflow_next",
+      "execute_must_call",
+      "workflow_next_with_last_verdict",
+      "repeat_until_done"
+    ],
+    "read_or_research": [
+      "workflow_next",
+      "before_task",
+      "scribe_query",
+      "graphify_query_when_code_or_architecture",
+      "host_synthesis",
+      "scribe_record_when_decision_or_summary_is_valuable",
+      "finish_task"
+    ],
+    "write": [
+      "workflow_next",
+      "before_task",
+      "scribe_query",
+      "graphify_query_when_code_or_architecture",
+      "claim_resource",
+      "file_hash",
+      "propose_patch",
+      "workflow_next",
+      "apply_patch",
+      "workflow_next",
+      "release_claim",
+      "workflow_next",
+      "scribe_record",
+      "workflow_next",
+      "finish_task"
+    ],
+    "delete": [
+      "workflow_next",
+      "before_task",
+      "scribe_query",
+      "graphify_query_when_code_or_architecture",
+      "claim_resource",
+      "file_hash",
+      "ask_user_exact_confirmation",
+      "delete_resource",
+      "workflow_next",
+      "release_claim",
+      "workflow_next",
+      "scribe_record",
+      "workflow_next",
+      "finish_task"
+    ]
   },
   "delete_confirmation_template": "DELETE {project_relative_resource}",
   "multi_agent_rules": [

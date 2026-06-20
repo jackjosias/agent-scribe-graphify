@@ -38,6 +38,20 @@ Tu n'as pas le droit de simuler MCP.
 Tu n'as pas le droit d'inventer un `agent_id`.
 Tu n'as pas le droit d'inventer un résultat de tool.
 
+## Boucle contexte obligatoire
+
+`workflow_next` peut imposer `scribe_query` après `before_task`. Le host doit exécuter ce tool sans l'ignorer.
+
+`workflow_next` peut ensuite imposer `graphify_query` pour les tâches liées au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production. Le host doit exécuter ce tool avant claim, hash, patch ou suppression.
+
+Chemin contexte minimal :
+
+```text
+before_task → scribe_query → graphify_query si code/architecture → action
+```
+
+Le host ne décide pas seul quand SCRIBE ou Graphify sont utiles : il suit `workflow_next`.
+
 ## Write gate obligatoire
 
 Tu n'as pas le droit d'utiliser un outil host d'écriture directe pour modifier les fichiers du projet.
@@ -126,6 +140,18 @@ workflow_next
 ## Si workflow_next demande une entrée manquante
 
 Si `workflow_next` retourne `INPUT_REQUIRED`, demande l'information à l'utilisateur ou lis les fichiers nécessaires. Ne devine pas.
+
+## Gravure mémoire obligatoire
+
+Si `workflow_next` demande `scribe_record`, le host doit l'appeler avant `finish_task`.
+
+Le host ne doit pas écrire directement dans `.agent/state/scribe-out/`. La seule écriture mémoire acceptée côté MCP est :
+
+```text
+scribe_record
+```
+
+`scribe_record` écrit une note structurée dans `.agent/state/scribe-out/records/`.
 
 ## Fin de tâche
 

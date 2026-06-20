@@ -20,7 +20,7 @@ file_hash → propose_patch → apply_patch
 Les suppressions acceptées passent par le **delete gate MCP** :
 
 ```text
-workflow_next → claim_resource → file_hash → delete_resource → release_claim → finish_task
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
 ```
 
 `delete_resource` exige une permission utilisateur explicite avec la phrase exacte :
@@ -138,6 +138,26 @@ Réponse attendue :
 
 Après avoir exécuté `must_call`, le LLM doit rappeler `workflow_next` avec `agent_id`, `intent`, `resource` et `last_verdict`.
 
+## Boucle contexte obligatoire
+
+Avant toute lecture ou écriture significative, `workflow_next` impose le contexte :
+
+```text
+before_task → scribe_query → graphify_query si code/architecture → action
+```
+
+`scribe_query` est obligatoire pour toute vraie demande utilisateur. `graphify_query` est obligatoire dès que la tâche touche au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production.
+
+## Gravure mémoire
+
+`scribe_record` écrit une note structurée de fin de tâche ou de décision dans :
+
+```text
+.agent/state/scribe-out/records/
+```
+
+Le host ne doit pas écrire directement dans `.agent/state/scribe-out/`. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant `finish_task`.
+
 ## Workflow mécanique attendu
 
 ```text
@@ -145,6 +165,10 @@ workflow_next
 → bootstrap
 → workflow_next
 → before_task
+→ workflow_next
+→ scribe_query
+→ workflow_next
+→ graphify_query
 → workflow_next
 → claim_resource
 → workflow_next
@@ -155,6 +179,8 @@ workflow_next
 → apply_patch
 → workflow_next
 → release_claim
+→ workflow_next
+→ scribe_record
 → workflow_next
 → finish_task
 ```
@@ -169,6 +195,10 @@ workflow_next
 → workflow_next
 → before_task
 → workflow_next
+→ scribe_query
+→ workflow_next
+→ graphify_query
+→ workflow_next
 → claim_resource
 → workflow_next
 → file_hash
@@ -177,6 +207,8 @@ workflow_next
 → delete_resource
 → workflow_next
 → release_claim
+→ workflow_next
+→ scribe_record
 → workflow_next
 → finish_task
 ```
@@ -237,13 +269,13 @@ python3 .agent/mcp/server_entry.py --call workflow_next --args '{"request":"modi
 Mais dans le protocole `.agent` V2.4, une modification acceptable doit passer par :
 
 ```text
-workflow_next → file_hash → propose_patch → apply_patch
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → propose_patch → apply_patch
 ```
 
 Et une suppression acceptable doit passer par :
 
 ```text
-workflow_next → claim_resource → file_hash → delete_resource → release_claim → finish_task
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
 ```
 
 ## Règle finale
