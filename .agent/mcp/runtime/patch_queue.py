@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import time
@@ -19,17 +20,22 @@ HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 MAX_DIFF_BYTES = 2_000_000
 WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:/")
 
+
 class PatchQueueError(RuntimeError):
     pass
+
 
 def now_ts() -> int:
     return int(time.time())
 
+
 def root() -> Path:
     return project_root_from()
 
+
 def db_path() -> Path:
     return prepare_state_dirs(root())["db"]
+
 
 def connect() -> sqlite3.Connection:
     con = sqlite3.connect(str(db_path()), timeout=30, isolation_level=None)
@@ -38,6 +44,7 @@ def connect() -> sqlite3.Connection:
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=30000")
     return con
+
 
 def ensure_schema() -> None:
     with connect() as con:
@@ -83,6 +90,7 @@ def ensure_schema() -> None:
             """
         )
 
+
 def safe_resource(resource: str) -> str:
     if not isinstance(resource, str) or not resource.strip():
         raise PatchQueueError("resource is required")
@@ -98,6 +106,7 @@ def safe_resource(resource: str) -> str:
     if any(part in {"", ".."} for part in path.parts):
         raise PatchQueueError("resource must be normalized and project-relative")
     return value
+
 
 def resolve_project_path(path: Path) -> Path:
     project_root = root().resolve()
@@ -144,6 +153,7 @@ def file_hash(resource: str) -> dict[str, Any]:
             h.update(chunk)
     return {"resource": res, "exists": True, "hash": h.hexdigest(), "size_bytes": safe_path.stat().st_size}
 
+
 def parse_ranges(diff_text: str) -> list[dict[str, int]]:
     ranges: list[dict[str, int]] = []
     for line in diff_text.splitlines():
@@ -160,12 +170,14 @@ def parse_ranges(diff_text: str) -> list[dict[str, int]]:
         raise PatchQueueError("diff must contain at least one unified hunk")
     return ranges
 
+
 def overlaps(left: list[dict[str, int]], right: list[dict[str, int]]) -> bool:
     for a in left:
         for b in right:
             if max(a["old_start"], b["old_start"]) <= min(a["old_end"], b["old_end"]):
                 return True
     return False
+
 
 def require_claim(con: sqlite3.Connection, agent_id: str, resource: str) -> None:
     rows = con.execute(
@@ -175,6 +187,7 @@ def require_claim(con: sqlite3.Connection, agent_id: str, resource: str) -> None
     modes = {row["mode"] for row in rows}
     if not modes.intersection({"write", "exclusive", "patch_queue"}):
         raise PatchQueueError("write/exclusive/patch_queue claim required before proposing a patch")
+
 
 def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_schema()
@@ -209,6 +222,129 @@ def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, me
             con.execute("ROLLBACK")
             raise
     return {"ok": status == "proposed", "status": "PATCH_PROPOSED" if status == "proposed" else "PATCH_CONFLICT", "patch_id": patch_id, "target_path": resource, "base_hash": base_hash, "changed_ranges": ranges, "overlapping_patches": overlapping}
+
+
+def _without_eol(line: str) -> str:
+    return line[:-2] if line.endswith("\r\n") else line[:-1] if line.endswith("\n") else line
+
+
+def _hunk_target_index(old_start: int, old_count: int) -> int:
+    if old_start == 0:
+        return 0
+    if old_count == 0:
+        return old_start
+    return old_start - 1
+
+
+def apply_unified_diff(original_text: str, diff_text: str) -> str:
+    original = original_text.splitlines(keepends=True)
+    diff = diff_text.splitlines(keepends=True)
+    output: list[str] = []
+    original_index = 0
+    diff_index = 0
+    saw_hunk = False
+
+    while diff_index < len(diff):
+        line = diff[diff_index]
+        if not line.startswith("@@ "):
+            if line.startswith(("--- ", "+++ ", "diff ", "index ")) or not line.strip():
+                diff_index += 1
+                continue
+            raise PatchQueueError("invalid unified diff line outside hunk")
+
+        match = HUNK_RE.match(line.rstrip("\r\n"))
+        if not match:
+            raise PatchQueueError("invalid unified diff hunk header")
+        saw_hunk = True
+        old_start = int(match.group(1))
+        old_count = int(match.group(2) or "1")
+        hunk_index = _hunk_target_index(old_start, old_count)
+        if hunk_index < original_index or hunk_index > len(original):
+            raise PatchQueueError("diff hunk position does not match current file")
+        output.extend(original[original_index:hunk_index])
+        original_index = hunk_index
+        diff_index += 1
+
+        while diff_index < len(diff) and not diff[diff_index].startswith("@@ "):
+            entry = diff[diff_index]
+            if entry.startswith("\\ No newline at end of file"):
+                diff_index += 1
+                continue
+            if not entry:
+                raise PatchQueueError("invalid empty diff entry")
+            marker = entry[0]
+            payload = entry[1:]
+            if marker == " ":
+                if original_index >= len(original) or _without_eol(original[original_index]) != _without_eol(payload):
+                    raise PatchQueueError("diff context does not match current file")
+                output.append(original[original_index])
+                original_index += 1
+            elif marker == "-":
+                if original_index >= len(original) or _without_eol(original[original_index]) != _without_eol(payload):
+                    raise PatchQueueError("diff removal does not match current file")
+                original_index += 1
+            elif marker == "+":
+                output.append(payload)
+            else:
+                raise PatchQueueError("invalid unified diff hunk body")
+            diff_index += 1
+
+    if not saw_hunk:
+        raise PatchQueueError("diff must contain at least one unified hunk")
+    output.extend(original[original_index:])
+    return "".join(output)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.agent-tmp-{now_ts()}-{os.getpid()}")
+    try:
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def apply_patch(agent_id: str, patch_id: str) -> dict[str, Any]:
+    ensure_schema()
+    if not agent_id or not patch_id:
+        raise PatchQueueError("agent_id and patch_id are required")
+    with connect() as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            row = con.execute("SELECT * FROM patches_v2 WHERE patch_id=?", (patch_id,)).fetchone()
+            if not row:
+                raise PatchQueueError("unknown patch_id")
+            if row["agent_id"] != agent_id:
+                raise PatchQueueError("only patch owner can apply it")
+            if row["status"] != "proposed":
+                raise PatchQueueError("only proposed patches can be applied")
+
+            resource = safe_resource(row["target_path"])
+            require_claim(con, agent_id, resource)
+            current = file_hash(resource)
+            if current["hash"] != row["base_hash"]:
+                raise PatchQueueError("current file hash no longer matches patch base_hash")
+
+            target_path = resolve_project_path(root() / resource)
+            original_text = "" if current["hash"] == NEW_FILE_HASH else target_path.read_text(encoding="utf-8")
+            new_text = apply_unified_diff(original_text, row["diff_text"])
+            _atomic_write_text(target_path, new_text)
+            new_hash = file_hash(resource)["hash"]
+
+            metadata = json.loads(row["metadata_json"] or "{}")
+            metadata.update({"applied_by": "mcp.apply_patch", "applied_at": now_ts(), "applied_hash": new_hash})
+            con.execute(
+                "UPDATE patches_v2 SET status='applied', updated_at=?, reason=?, metadata_json=? WHERE patch_id=?",
+                (now_ts(), "applied via MCP write gate", json.dumps(metadata, ensure_ascii=False, sort_keys=True), patch_id),
+            )
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+    return {"ok": True, "verdict": "PATCH_APPLIED", "patch_id": patch_id, "target_path": resource, "new_hash": new_hash}
+
 
 def list_patches(target: str | None = None, status: str | None = None) -> dict[str, Any]:
     ensure_schema()
