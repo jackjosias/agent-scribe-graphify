@@ -1,0 +1,70 @@
+{
+  "name": "TENOR_INIT_V2",
+  "human_trigger": "[[.agent/skills/init-tenor/SKILL.md]]",
+  "entry_file": ".agent/skills/init-tenor/SKILL.md",
+  "required_mcp": "agent-scribe-graphify",
+  "mcp_entrypoint": ".agent/mcp/server_entry.py",
+  "stop_if_mcp_missing": "STOP: MCP agent-scribe-graphify indisponible. Configure le host MCP vers .agent/mcp/server_entry.py, redemarre le host, puis relance [[.agent/skills/init-tenor/SKILL.md]].",
+  "first_files_to_read": [
+    ".agent/skills/init-tenor/SKILL.md",
+    ".agent/rules/tenor-init-v2.json",
+    ".agent/docs/HOST_PROMPT.md"
+  ],
+  "first_workflow_next": {
+    "request": "TENOR INIT V2 - init session, SCRIBE, Graphify, .scribe, -out, MCP",
+    "intent": "read",
+    "resource": ".agent/skills/init-tenor/SKILL.md"
+  },
+  "tenor_init_commands": {
+    "cli": ".agent/workflow/scribe/scribe tenor-init --type cli",
+    "extension": ".agent/workflow/scribe/scribe tenor-init --type extension"
+  },
+  "required_surfaces": [
+    ".scribe",
+    ".agent/state/scribe-out/",
+    ".agent/state/graphify-out/",
+    ".agent/rules/scribe.md",
+    ".graphifyignore"
+  ],
+  "required_tools": [
+    "workflow_next",
+    "apply_patch",
+    "delete_resource"
+  ],
+  "report_fields": [
+    "MCP disponible",
+    "Tools visibles",
+    "Agent ID MCP",
+    "TENOR status",
+    "Agent session",
+    "Whoami proof",
+    "Workflow ack",
+    ".scribe present",
+    "scribe-out present",
+    "Derniere entree SCRIBE",
+    "Resume SCRIBE",
+    "graphify-out present",
+    "Resume Graphify",
+    "Agents actifs",
+    "Claims actifs",
+    "Patches pending",
+    "Mode estime",
+    "Prochaine action"
+  ],
+  "loops": {
+    "generic_task": ["workflow_next", "execute_must_call", "workflow_next_with_last_verdict", "repeat_until_done"],
+    "read_or_research": ["workflow_next", "before_task", "scribe_query_if_needed", "graphify_query_if_needed", "read_files", "synthesize", "finish_task"],
+    "write": ["workflow_next", "claim_resource", "file_hash", "propose_patch", "workflow_next", "apply_patch", "workflow_next", "release_claim", "workflow_next", "finish_task"],
+    "delete": ["workflow_next", "claim_resource", "file_hash", "ask_user_exact_confirmation", "delete_resource", "workflow_next", "release_claim", "workflow_next", "finish_task"]
+  },
+  "delete_confirmation_template": "DELETE {project_relative_resource}",
+  "multi_agent_rules": [
+    "each agent runs its own init",
+    "each agent uses its own agent_id",
+    "reads are free",
+    "writes require claim",
+    "same file requires claim or patch queue",
+    "do not force conflicts",
+    "do not finish with active claims or pending patches"
+  ]
+}
