@@ -86,18 +86,50 @@ def safe_resource(resource: str) -> str:
         raise PatchQueueError("resource must be normalized and project-relative")
     return value
 
+def resolve_project_path(path: Path) -> Path:
+    project_root = root().resolve()
+
+    if path.exists() or path.is_symlink():
+        try:
+            resolved = path.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise PatchQueueError("resource symlink cannot be resolved") from exc
+        try:
+            resolved.relative_to(project_root)
+        except ValueError as exc:
+            raise PatchQueueError("resource symlink escapes project root") from exc
+        return resolved
+
+    parent = path.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+
+    try:
+        resolved_parent = parent.resolve(strict=True)
+        resolved_parent.relative_to(project_root)
+    except ValueError as exc:
+        raise PatchQueueError("resource parent escapes project root") from exc
+    except FileNotFoundError as exc:
+        raise PatchQueueError("resource parent cannot be resolved") from exc
+
+    return path
+
+
 def file_hash(resource: str) -> dict[str, Any]:
     res = safe_resource(resource)
     path = root() / res
+    safe_path = resolve_project_path(path)
+
     if not path.exists():
         return {"resource": res, "exists": False, "hash": NEW_FILE_HASH, "size_bytes": 0}
-    if not path.is_file():
+    if not safe_path.is_file():
         raise PatchQueueError("resource is not a file")
+
     h = hashlib.sha256()
-    with path.open("rb") as handle:
+    with safe_path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             h.update(chunk)
-    return {"resource": res, "exists": True, "hash": h.hexdigest(), "size_bytes": path.stat().st_size}
+    return {"resource": res, "exists": True, "hash": h.hexdigest(), "size_bytes": safe_path.stat().st_size}
 
 def parse_ranges(diff_text: str) -> list[dict[str, int]]:
     ranges: list[dict[str, int]] = []

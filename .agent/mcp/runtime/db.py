@@ -177,12 +177,46 @@ def normalize_resource(resource: str) -> str:
     return value
 
 
+def resolve_project_path(path: Path) -> Path:
+    project_root = project_root_from().resolve()
+
+    if path.exists() or path.is_symlink():
+        try:
+            resolved = path.resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise CoordinationError("resource symlink cannot be resolved") from exc
+        try:
+            resolved.relative_to(project_root)
+        except ValueError as exc:
+            raise CoordinationError("resource symlink escapes project root") from exc
+        return resolved
+
+    parent = path.parent
+    while not parent.exists() and parent != parent.parent:
+        parent = parent.parent
+
+    try:
+        resolved_parent = parent.resolve(strict=True)
+        resolved_parent.relative_to(project_root)
+    except ValueError as exc:
+        raise CoordinationError("resource parent escapes project root") from exc
+    except FileNotFoundError as exc:
+        raise CoordinationError("resource parent cannot be resolved") from exc
+
+    return path
+
+
 def file_hash(resource: str) -> Optional[str]:
     p = project_root_from() / resource
-    if not p.is_file():
+    safe_path = resolve_project_path(p)
+
+    if not p.exists():
         return None
+    if not safe_path.is_file():
+        return None
+
     h = hashlib.sha256()
-    with p.open("rb") as f:
+    with safe_path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
