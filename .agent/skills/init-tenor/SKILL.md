@@ -6,6 +6,47 @@ description: >
   Un LLM qui ne prouve pas sa lecture est interdit d'agir sur le code.
 ---
 
+## 🔴 TENOR INIT V2 — RACCOURCI UNIQUE
+
+Si l'utilisateur écrit seulement :
+
+```text
+[[.agent/skills/init-tenor/SKILL.md]]
+```
+
+cela équivaut à :
+
+```text
+TENOR INIT V2
+```
+
+Après avoir lu ce fichier depuis la ligne 1, l'agent doit immédiatement lire et appliquer le protocole machine :
+
+```text
+.agent/rules/tenor-init-v2.json
+```
+
+Ce protocole définit :
+
+* le MCP obligatoire `agent-scribe-graphify`
+* le bootstrap via `workflow_next`
+* l'initialisation `.agent/workflow/scribe/scribe tenor-init --type cli`
+* la vérification `.scribe`
+* la vérification `.agent/state/scribe-out/`
+* la vérification `.agent/state/graphify-out/`
+* les tools obligatoires `workflow_next`, `apply_patch`, `delete_resource`
+* la boucle de lecture/recherche SCRIBE/Graphify
+* la boucle d'écriture via `apply_patch`
+* la boucle de suppression via `delete_resource`
+* les règles multi-agent avec `claim_resource`
+
+L'utilisateur ne doit pas recopier un long prompt. Cette ligne suffit :
+
+```text
+[[.agent/skills/init-tenor/SKILL.md]]
+```
+
+
 # 🔴 TU LIS CE FICHIER. C'EST LA PREMIÈRE CHOSE QUE TU FAIS.
 
 Tu viens de recevoir `TENOR INIT` ou un signal d'initialisation.
