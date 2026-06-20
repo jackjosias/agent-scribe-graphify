@@ -17,7 +17,6 @@ if str(MCP_DIR) not in sys.path:
 try:
     from runtime.db import (
         CoordinationError,
-        before_edit as db_before_edit,
         claim_resource as db_claim_resource,
         finish_task as db_finish_task,
         heartbeat as db_heartbeat,
@@ -31,7 +30,6 @@ try:
 except Exception:
     from .runtime.db import (  # type: ignore
         CoordinationError,
-        before_edit as db_before_edit,
         claim_resource as db_claim_resource,
         finish_task as db_finish_task,
         heartbeat as db_heartbeat,
@@ -44,7 +42,7 @@ except Exception:
     from .runtime import patch_queue  # type: ignore
 
 SERVER_NAME = "agent-scribe-graphify"
-SERVER_VERSION = "0.2.2"
+SERVER_VERSION = "0.2.3"
 ROOT = PROJECT_ROOT.resolve()
 AGENT_DIR = ROOT / ".agent"
 WRITE_MODES = {"write", "exclusive", "patch_queue"}
@@ -131,6 +129,7 @@ def before_task(request: str, agent_id: str = "") -> Dict[str, Any]:
         "request": request,
         "policy": policy,
         "mechanical_rule": "After this tool, call workflow_next again. Do not guess the next step.",
+        "write_gate": "All accepted writes must go through propose_patch then apply_patch.",
         "agent_id": agent_id,
     })
 
@@ -194,7 +193,8 @@ def _next_payload(
         "invariants": [
             "Do not invent MCP results.",
             "Do not edit without a compatible claim.",
-            "Do not finish with pending proposed/conflict patches.",
+            "All accepted writes must pass through MCP apply_patch unless a future sandbox layer explicitly says otherwise.",
+            "Do not finish with pending proposed/conflict patches or active claims.",
             "Call workflow_next again after executing must_call.",
         ],
     })
@@ -214,7 +214,7 @@ def workflow_next(
     model_name: str = "",
 ) -> Dict[str, Any]:
     normalized_intent = (intent or "").strip().lower()
-    normalized_mode = mode if mode in WRITE_MODES else "patch_queue"
+    normalized_mode = "patch_queue" if mode in WRITE_MODES else "patch_queue"
     last = (last_verdict or "").strip()
 
     if not AGENT_DIR.is_dir():
@@ -226,7 +226,7 @@ def workflow_next(
             tool="bootstrap",
             args={"host_tool": host_tool or "unknown", "model_name": model_name or "", "run_legacy_bootstrap": False},
             reason="No active registered agent_id is available. Bootstrap is mandatory before any task action.",
-            forbidden=["claim_resource", "before_edit", "propose_patch", "finish_task"],
+            forbidden=["claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
         )
 
     finish_intent = normalized_intent in FINISH_INTENTS
@@ -238,9 +238,30 @@ def workflow_next(
             state="PATCH_PENDING",
             tool="list_patches",
             args={"target": resource or "", "status": "proposed"},
-            reason="This agent still owns proposed/conflict patches. finish_task is forbidden until each patch is confirmed or rejected.",
+            reason="This agent still owns proposed/conflict patches. finish_task is forbidden until each patch is applied or rejected.",
             forbidden=["finish_task", "direct_file_edit"],
-            context={"pending_patches": pending, "acceptable_resolution_tools": ["confirm_patch_applied", "reject_patch"]},
+            context={"pending_patches": pending, "acceptable_resolution_tools": ["apply_patch", "reject_patch"]},
+        )
+
+    if pending and not finish_intent:
+        proposed = [patch for patch in pending if patch.get("status") == "proposed"]
+        if proposed:
+            selected = proposed[0]
+            return _next_payload(
+                state="PATCH_READY_TO_APPLY",
+                tool="apply_patch",
+                args={"agent_id": agent_id, "patch_id": selected["patch_id"]},
+                reason="A proposed patch exists. The next accepted write must be performed by MCP apply_patch, not by a host direct file edit.",
+                forbidden=["direct_file_edit", "finish_task", "confirm_patch_applied"],
+                context={"patch": selected},
+            )
+        return _next_payload(
+            state="PATCH_CONFLICT_REQUIRES_REVIEW",
+            tool="list_patches",
+            args={"target": resource or "", "status": "conflict"},
+            reason="A conflict patch exists. It must be reviewed and rejected or resolved before more writes.",
+            forbidden=["direct_file_edit", "finish_task", "apply_patch"],
+            context={"pending_patches": pending},
         )
 
     if finish_intent:
@@ -252,7 +273,7 @@ def workflow_next(
                 tool="release_claim",
                 args={"agent_id": agent_id, "claim_id": selected["claim_id"], "summary": "release before finish"},
                 reason="Active claims must be released before finish_task.",
-                forbidden=["finish_task"],
+                forbidden=["finish_task", "direct_file_edit"],
                 context={"active_claims": claims["owned"]},
             )
         return _next_payload(
@@ -263,13 +284,13 @@ def workflow_next(
             forbidden=["direct_file_edit"],
         )
 
-    if request and last not in {"BEFORE_TASK_OK", "SCRIBE_QUERY_DONE", "GRAPHIFY_QUERY_DONE", "CLAIM_GRANTED", "FILE_HASH", "PATCH_PROPOSED", "PATCH_CONFLICT"}:
+    if request and last not in {"BEFORE_TASK_OK", "SCRIBE_QUERY_DONE", "GRAPHIFY_QUERY_DONE", "CLAIM_GRANTED", "FILE_HASH", "PATCH_PROPOSED", "PATCH_CONFLICT", "PATCH_APPLIED"}:
         return _next_payload(
             state="TASK_NOT_ACKED",
             tool="before_task",
             args={"request": request, "agent_id": agent_id},
             reason="The task must be acknowledged mechanically before write planning.",
-            forbidden=["claim_resource", "before_edit", "propose_patch", "finish_task"],
+            forbidden=["claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
         )
 
     if write_intent:
@@ -279,7 +300,7 @@ def workflow_next(
                 "state": "RESOURCE_REQUIRED",
                 "reason": "A write/patch/edit intent requires an explicit project-relative resource.",
                 "required_inputs": ["resource"],
-                "forbidden": ["claim_resource", "before_edit", "propose_patch", "finish_task"],
+                "forbidden": ["claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
             })
         safe = patch_queue.safe_resource(resource)
         claims = _active_claims_for(agent_id, safe)
@@ -289,38 +310,28 @@ def workflow_next(
                 state="CLAIM_REQUIRED",
                 tool="claim_resource",
                 args={"agent_id": agent_id, "resource": safe, "mode": normalized_mode, "ttl_seconds": 600},
-                reason="A compatible claim is mandatory before any write, edit, or patch proposal.",
-                forbidden=["before_edit", "propose_patch", "direct_file_edit", "finish_task"],
+                reason="A compatible claim is mandatory before any write. workflow_next always routes writes through patch_queue/apply_patch.",
+                forbidden=["before_edit", "propose_patch", "apply_patch", "direct_file_edit", "finish_task"],
                 context={"foreign_claims": claims["foreign"]},
             )
 
         selected_claim = owned_write[0]
-        if selected_claim.get("mode") == "patch_queue":
-            if not base_hash:
-                return _next_payload(
-                    state="BASE_HASH_REQUIRED",
-                    tool="file_hash",
-                    args={"resource": safe},
-                    reason="Patch queue requires a fresh base_hash from file_hash before propose_patch.",
-                    forbidden=["propose_patch", "direct_file_edit", "finish_task"],
-                    context={"claim": selected_claim},
-                )
+        if not base_hash:
             return _next_payload(
-                state="READY_TO_PROPOSE_PATCH",
-                tool="propose_patch",
-                args={"agent_id": agent_id, "target": safe, "base_hash": base_hash},
-                reason="Patch queue claim and base_hash are present. The next MCP action is propose_patch with a real unified diff_text.",
-                forbidden=["direct_file_edit", "finish_task"],
-                missing_inputs=["diff_text"],
+                state="BASE_HASH_REQUIRED",
+                tool="file_hash",
+                args={"resource": safe},
+                reason="MCP write gate requires a fresh base_hash from file_hash before propose_patch.",
+                forbidden=["propose_patch", "apply_patch", "direct_file_edit", "finish_task"],
                 context={"claim": selected_claim},
             )
-
         return _next_payload(
-            state="DIRECT_EDIT_CHECK_REQUIRED",
-            tool="before_edit",
-            args={"agent_id": agent_id, "resource": safe},
-            reason="A write/exclusive claim exists, but direct editing still requires before_edit immediately before the edit.",
-            forbidden=["direct_file_edit_without_before_edit", "finish_task"],
+            state="READY_TO_PROPOSE_PATCH",
+            tool="propose_patch",
+            args={"agent_id": agent_id, "target": safe, "base_hash": base_hash},
+            reason="Claim and base_hash are present. The next action is propose_patch with a real unified diff_text; actual writing must then happen through apply_patch.",
+            forbidden=["direct_file_edit", "before_edit", "finish_task"],
+            missing_inputs=["diff_text"],
             context={"claim": selected_claim},
         )
 
@@ -355,7 +366,8 @@ def graphify_query(query: str = "", resource: str = "") -> Dict[str, Any]:
 
 
 def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_seconds: int = 1800) -> Dict[str, Any]:
-    return ok(db_claim_resource(agent_id=agent_id, resource=resource, mode=mode, ttl_seconds=ttl_seconds))
+    requested_mode = "patch_queue" if mode in WRITE_MODES else mode
+    return ok(db_claim_resource(agent_id=agent_id, resource=resource, mode=requested_mode, ttl_seconds=ttl_seconds))
 
 
 def release_claim(agent_id: str, claim_id: str, summary: str = "") -> Dict[str, Any]:
@@ -365,17 +377,13 @@ def release_claim(agent_id: str, claim_id: str, summary: str = "") -> Dict[str, 
 def before_edit(agent_id: str, resource: str) -> Dict[str, Any]:
     safe = patch_queue.safe_resource(resource)
     current = patch_queue.file_hash(safe)
-    with patch_queue.connect() as con:
-        rows = [dict(row) for row in con.execute("SELECT * FROM claims WHERE resource=? AND status='active'", (safe,)).fetchall()]
-    owned = [row for row in rows if row.get("agent_id") == agent_id]
-    foreign = [row for row in rows if row.get("agent_id") != agent_id]
-    if any(row.get("mode") == "patch_queue" for row in owned):
-        return ok({"verdict": "DIRECT_EDIT_REFUSED", "policy": "PATCH_QUEUE_REQUIRED", "reason": "agent owns patch_queue claim", "owned_claims": owned, **current})
-    if any(row.get("mode") in WRITE_MODES for row in foreign):
-        return ok({"verdict": "DIRECT_EDIT_REFUSED", "policy": "PATCH_QUEUE_REQUIRED", "reason": "foreign write/patch claim active", "foreign_claims": foreign, **current})
-    if not any(row.get("mode") in {"write", "exclusive"} for row in owned):
-        return ok({"verdict": "DIRECT_EDIT_REFUSED_MISSING_CLAIM", "policy": "CLAIM_REQUIRED", "active_claims": rows, **current})
-    return ok({"verdict": "DIRECT_EDIT_ALLOWED", "claims": owned, "legacy_check": db_before_edit(agent_id=agent_id, resource=safe), **current})
+    return ok({
+        "verdict": "DIRECT_EDIT_REFUSED_MCP_WRITE_GATE",
+        "policy": "MCP_APPLY_PATCH_REQUIRED",
+        "reason": "Direct host file edits are not accepted in V2.3. Use workflow_next → file_hash → propose_patch → apply_patch.",
+        "agent_id": agent_id,
+        **current,
+    })
 
 
 def finish_task(agent_id: str, summary: str = "") -> Dict[str, Any]:
@@ -392,6 +400,10 @@ def file_hash(resource: str) -> Dict[str, Any]:
 
 def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str) -> Dict[str, Any]:
     return ok(patch_queue.propose_patch(agent_id=agent_id, target=target, base_hash=base_hash, diff_text=diff_text))
+
+
+def apply_patch(agent_id: str, patch_id: str) -> Dict[str, Any]:
+    return ok(patch_queue.apply_patch(agent_id=agent_id, patch_id=patch_id))
 
 
 def list_patches(target: str = "", status: str = "") -> Dict[str, Any]:
@@ -456,6 +468,7 @@ TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "finish_task": finish_task,
     "file_hash": file_hash,
     "propose_patch": propose_patch,
+    "apply_patch": apply_patch,
     "list_patches": list_patches,
     "confirm_patch_applied": confirm_patch_applied,
     "reject_patch": reject_patch,
@@ -491,6 +504,7 @@ def tool_schema(name: str) -> Dict[str, Any]:
         "finish_task": {"agent_id": "string", "summary": "string"},
         "file_hash": {"resource": "string"},
         "propose_patch": {"agent_id": "string", "target": "string", "base_hash": "string", "diff_text": "string"},
+        "apply_patch": {"agent_id": "string", "patch_id": "string"},
         "list_patches": {"target": "string", "status": "string"},
         "confirm_patch_applied": {"agent_id": "string", "patch_id": "string", "new_hash": "string"},
         "reject_patch": {"agent_id": "string", "patch_id": "string", "reason": "string"},
