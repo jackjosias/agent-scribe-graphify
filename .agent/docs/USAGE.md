@@ -11,13 +11,25 @@ Il exécute le must_call retourné.
 Il rappelle workflow_next après chaque étape.
 ```
 
-Depuis la version MCP `0.2.3`, les écritures acceptées passent par le **write gate MCP** :
+Depuis la version MCP `0.2.4`, les écritures acceptées passent par le **write gate MCP** :
 
 ```text
 file_hash → propose_patch → apply_patch
 ```
 
-`before_edit` refuse les écritures directes du host. Cela ne remplace pas une sandbox OS, mais cela empêche un agent de finir proprement dans le protocole `.agent` en contournant le chemin MCP.
+Les suppressions acceptées passent par le **delete gate MCP** :
+
+```text
+workflow_next → claim_resource → file_hash → delete_resource → release_claim → finish_task
+```
+
+`delete_resource` exige une permission utilisateur explicite avec la phrase exacte :
+
+```text
+DELETE chemin/relatif/du/fichier
+```
+
+`before_edit` refuse les écritures directes du host. Cela ne remplace pas une sandbox OS, mais cela empêche un agent de finir proprement dans le protocole `.agent` en contournant le chemin MCP. L'isolation OS reste optionnelle : le MCP normal fonctionne sans sandbox.
 
 ## Validation locale
 
@@ -44,6 +56,7 @@ Ce smoke-test valide :
 - file_hash
 - propose_patch
 - apply_patch écrit réellement le fichier via MCP
+- delete_resource visible dans server_entry
 - finish_task refusé si patch pending
 - release_claim
 - finish_task OK
@@ -148,6 +161,32 @@ workflow_next
 
 Le LLM ne doit pas inventer ou sauter une étape.
 
+## Workflow suppression attendu
+
+```text
+workflow_next
+→ bootstrap
+→ workflow_next
+→ before_task
+→ workflow_next
+→ claim_resource
+→ workflow_next
+→ file_hash
+→ workflow_next
+→ demander permission utilisateur exacte
+→ delete_resource
+→ workflow_next
+→ release_claim
+→ workflow_next
+→ finish_task
+```
+
+La confirmation transmise à `delete_resource` doit correspondre exactement à :
+
+```text
+DELETE chemin/relatif/du/fichier
+```
+
 ## Règles de sécurité appliquées côté MCP
 
 Ressources refusées :
@@ -165,6 +204,7 @@ Règles d'écriture :
 - lecture libre
 - écriture = claim obligatoire
 - écriture acceptée = apply_patch obligatoire
+- suppression = claim + base_hash + confirmation exacte obligatoires
 - patch = base_hash obligatoire
 - finish_task interdit avec patch pending/conflict
 - before_edit refuse les écritures directes du host
@@ -194,10 +234,16 @@ python3 .agent/mcp/server_entry.py --call workflow_next --args '{"request":"modi
 
 `.agent` ne peut pas retirer au système d'exploitation les droits d'écriture déjà donnés à un processus externe du même utilisateur. Pour une prévention physique totale, il faudra une sandbox OS, un utilisateur séparé, un conteneur ou un wrapper qui ne donne pas d'outil d'écriture direct au host.
 
-Mais dans le protocole `.agent` V2.3, une modification acceptable doit passer par :
+Mais dans le protocole `.agent` V2.4, une modification acceptable doit passer par :
 
 ```text
 workflow_next → file_hash → propose_patch → apply_patch
+```
+
+Et une suppression acceptable doit passer par :
+
+```text
+workflow_next → claim_resource → file_hash → delete_resource → release_claim → finish_task
 ```
 
 ## Règle finale

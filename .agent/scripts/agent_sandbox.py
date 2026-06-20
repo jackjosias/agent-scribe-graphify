@@ -129,11 +129,11 @@ def run(cmd: list[str], keep_net: bool, print_config: bool) -> int:
     if not cmd and not print_config:
         die("missing command. Use -- COMMAND or --print-mcp-config")
     sock = (RUNTIME / "mcp-daemon.sock").resolve()
+    if print_config:
+        print(dumps(mcp_config(sock)))
+        return 0
     proc = start_daemon(sock)
     try:
-        if print_config:
-            print(dumps(mcp_config(sock)))
-            return 0
         env = os.environ.copy()
         env["AGENT_MCP_SOCKET"] = str(sock)
         env["AGENT_SANDBOX"] = "readonly-project"

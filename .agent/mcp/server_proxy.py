@@ -21,6 +21,22 @@ def socket_path() -> Path:
     return Path(os.environ.get("AGENT_MCP_SOCKET", str(DEFAULT_SOCKET))).resolve()
 
 
+def connect_unix_socket(conn: socket.socket, sock: Path) -> None:
+    try:
+        conn.connect(str(sock))
+        return
+    except OSError as exc:
+        if "AF_UNIX path too long" not in str(exc):
+            raise
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(sock.parent)
+        conn.connect(sock.name)
+    finally:
+        os.chdir(cwd)
+
+
 def rpc(req: dict[str, Any]) -> dict[str, Any]:
     sock = socket_path()
     if not sock.exists():
@@ -36,7 +52,7 @@ def rpc(req: dict[str, Any]) -> dict[str, Any]:
             },
         }
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
-        conn.connect(str(sock))
+        connect_unix_socket(conn, sock)
         reader = conn.makefile("r", encoding="utf-8", newline="\n")
         writer = conn.makefile("w", encoding="utf-8", newline="\n")
         writer.write(json.dumps(req, ensure_ascii=False) + "\n")

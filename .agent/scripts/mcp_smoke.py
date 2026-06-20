@@ -261,6 +261,15 @@ def smoke_portable_copy() -> None:
                 fail(f"legacy directory recreated in portable copy: {legacy}")
 
 
+def smoke_tool_listing() -> None:
+    proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), text=True, capture_output=True, timeout=30)
+    if proc.returncode != 0:
+        fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
+    for tool in ("workflow_next", "apply_patch", "delete_resource"):
+        if tool not in proc.stdout:
+            fail(f"missing tool from server_entry --list-tools: {tool}")
+
+
 def main() -> int:
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
@@ -268,6 +277,7 @@ def main() -> int:
     smoke_bad_paths()
     smoke_unregistered_patch()
     smoke_portable_copy()
+    smoke_tool_listing()
     print("MCP_SMOKE_ALL_OK")
     return 0
 

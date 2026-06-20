@@ -20,13 +20,13 @@ python3 .agent/scripts/isolation_setup.py --install
 
 ## Linux
 
-Backend recommandé : bubblewrap.
+Backend recommandé : bubblewrap. Le launcher strict Linux actuel (`agent_sandbox.py`) utilise bubblewrap.
 
 Debian/Ubuntu : installer le paquet `bubblewrap` avec le gestionnaire de paquets.
 
 Avantages : rapide, léger, local.
 
-Inconvénients : dépend de la configuration des namespaces du système.
+Inconvénients : dépend de la configuration des namespaces du système et du paquet `bubblewrap`.
 
 ## macOS
 
@@ -36,7 +36,7 @@ Pour une isolation plus forte, préférer un runtime conteneur/VM comme Colima +
 
 Avantages : isolation robuste via VM/conteneurs.
 
-Inconvénients : plus lourd et intégration MCP proxy à adapter.
+Inconvénients : plus lourd et intégration MCP proxy à adapter. Il n'existe pas encore de launcher macOS strict équivalent au wrapper Linux.
 
 ## Windows
 
@@ -46,7 +46,7 @@ Pour une isolation plus forte, utiliser Windows Sandbox avec un fichier `.wsb` e
 
 Avantages : environnement Windows jetable.
 
-Inconvénients : demande une édition Windows compatible, la virtualisation et parfois un redémarrage.
+Inconvénients : demande une édition Windows compatible, la virtualisation et parfois un redémarrage. Il n'existe pas encore de launcher Windows strict équivalent au wrapper Linux.
 
 ## Suppression contrôlée
 
@@ -57,3 +57,9 @@ workflow_next → claim_resource → file_hash → delete_resource → release_c
 ```
 
 `delete_resource` refuse d'agir sans phrase de confirmation exacte fournie par l'utilisateur.
+
+Phrase exacte attendue :
+
+```text
+DELETE chemin/relatif/du/fichier
+```

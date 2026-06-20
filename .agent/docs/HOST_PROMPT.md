@@ -52,9 +52,33 @@ workflow_next
 → apply_patch
 ```
 
-`apply_patch` est le seul chemin d'écriture accepté par `.agent` V2.3.
+`apply_patch` est le seul chemin d'écriture accepté par `.agent` V2.4.
 
 Si tu as un outil direct du type edit/write/save file, considère-le comme interdit sauf instruction humaine explicite de bypass hors protocole.
+
+## Delete gate obligatoire
+
+Tu n'as pas le droit de supprimer un fichier avec un outil host direct.
+
+Toute suppression acceptable doit passer par MCP :
+
+```text
+workflow_next
+→ claim_resource
+→ file_hash
+→ demander permission utilisateur explicite
+→ delete_resource
+→ release_claim
+→ finish_task
+```
+
+Avant d'appeler `delete_resource`, demande la permission utilisateur et exige la phrase exacte :
+
+```text
+DELETE chemin/relatif/du/fichier
+```
+
+Sans cette phrase exacte, n'appelle pas `delete_resource`.
 
 ## Premier appel recommandé
 
@@ -89,7 +113,9 @@ workflow_next
 
 ```text
 - ne modifie aucun fichier avec un outil host direct
+- ne supprime aucun fichier avec un outil host direct
 - ne modifie aucun fichier sans claim_resource
+- ne supprime aucun fichier sans claim_resource, file_hash et permission utilisateur exacte
 - ne propose aucun patch sans file_hash/base_hash
 - n'applique aucun changement sans apply_patch MCP
 - ne termine jamais avec patch pending/conflict

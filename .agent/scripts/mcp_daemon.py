@@ -15,7 +15,7 @@ MCP_DIR = ROOT / ".agent" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-import server  # type: ignore  # noqa: E402
+import server_ext as server  # type: ignore  # noqa: E402
 
 
 def dumps(data: Any) -> str:
@@ -49,6 +49,22 @@ def write_env_file(path: Path, socket_path: Path) -> None:
     path.write_text(f"AGENT_MCP_SOCKET={socket_path}\n", encoding="utf-8")
 
 
+def bind_unix_socket(listener: socket.socket, socket_path: Path) -> None:
+    try:
+        listener.bind(str(socket_path))
+        return
+    except OSError as exc:
+        if "AF_UNIX path too long" not in str(exc):
+            raise
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(socket_path.parent)
+        listener.bind(socket_path.name)
+    finally:
+        os.chdir(cwd)
+
+
 def serve(socket_path: Path, env_file: Path | None = None) -> int:
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     if socket_path.exists():
@@ -65,7 +81,7 @@ def serve(socket_path: Path, env_file: Path | None = None) -> int:
             pass
 
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(str(socket_path))
+    bind_unix_socket(listener, socket_path)
     os.chmod(socket_path, 0o600)
     listener.listen(64)
     listener.settimeout(0.5)

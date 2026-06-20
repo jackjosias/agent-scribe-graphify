@@ -21,9 +21,9 @@ server_proxy.py
   ↓ socket local
 mcp_daemon.py hors sandbox
   ↓
-server.py / apply_patch
+server_ext.py / apply_patch / delete_resource
   ↓
-écriture contrôlée
+écriture ou suppression contrôlée
 ```
 
 ## Fichiers ajoutés
@@ -36,13 +36,15 @@ server.py / apply_patch
 
 ## Dépendance stricte
 
-Le mode strict demande Linux + bubblewrap :
+Le mode strict Linux demande bubblewrap :
 
 ```bash
 sudo apt install bubblewrap
 ```
 
-Sans bubblewrap, le launcher refuse de prétendre fournir une isolation stricte.
+Sans bubblewrap, le launcher refuse de prétendre fournir une isolation Linux stricte.
+
+macOS et Windows ont actuellement un plan d'installation et une stratégie dans `OS_ISOLATION.md`, mais pas encore un launcher strict aussi complet que le wrapper Linux bubblewrap.
 
 ## Générer la config MCP proxy
 
@@ -79,6 +81,19 @@ Dans un terminal, générer la config ou lancer via le launcher. Le host doit vo
 ```text
 workflow_next
 apply_patch
+delete_resource
+```
+
+Smoke complet du chemin proxy/daemon :
+
+```bash
+python3 .agent/scripts/sandbox_smoke.py
+```
+
+Résultat attendu :
+
+```text
+SANDBOX_SMOKE_OK
 ```
 
 ## Limite honnête
