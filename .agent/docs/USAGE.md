@@ -65,6 +65,22 @@ Ce smoke-test valide :
 - copie portable de .agent
 ```
 
+## Audit enforcement V2.7
+
+Audit non bloquant des gates MCP et des bypass réels :
+
+```bash
+python3 .agent/scripts/enforcement_redteam_smoke.py
+```
+
+Audit strict du lien contexte :
+
+```bash
+python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
+```
+
+Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED` sans échouer si le bypass contexte est ouvert. `--strict-context` devient bloquant si `context_bypass=OPEN`.
+
 ## Copier .agent dans un nouveau projet
 
 ```bash

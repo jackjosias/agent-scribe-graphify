@@ -18,6 +18,7 @@ Validation locale :
 
 ```bash
 python3 .agent/scripts/mcp_smoke.py
+python3 .agent/scripts/enforcement_redteam_smoke.py
 python3 .agent/scripts/sandbox_smoke.py
 ```
 
@@ -26,6 +27,15 @@ Résultat attendu :
 ```text
 MCP_SMOKE_ALL_OK
 ```
+
+Audit enforcement V2.7 :
+
+```bash
+python3 .agent/scripts/enforcement_redteam_smoke.py
+python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
+```
+
+Le mode normal est un audit non bloquant. `--strict-context` échoue si le bypass contexte est encore ouvert.
 
 Le smoke-test couvre maintenant le workflow mécanique complet, y compris :
 
