@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/branch-v2-blue" alt="Branch v2">
-  <img src="https://img.shields.io/badge/MCP-v0.2.8-purple" alt="MCP v0.2.8">
+  <img src="https://img.shields.io/badge/MCP-v0.2.8.1-purple" alt="MCP v0.2.8.1">
   <img src="https://img.shields.io/badge/status-smoke%20tested-brightgreen" alt="Smoke tested">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/write--gate-apply__patch-success" alt="MCP write gate">
@@ -28,14 +28,14 @@ Résultat attendu :
 MCP_SMOKE_ALL_OK
 ```
 
-Audit enforcement V2.8 :
+Audit enforcement V2.8.1 :
 
 ```bash
 python3 .agent/scripts/enforcement_redteam_smoke.py
 python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
 ```
 
-Le mode normal est un audit non bloquant. Depuis V2.8, `--strict-context` doit passer avec `context_bypass=CLOSED`. Le filesystem direct reste dépendant du host ou de la sandbox OS.
+Le mode normal est un audit non bloquant. Depuis V2.8, `--strict-context` doit passer avec `context_bypass=CLOSED`. Depuis V2.8.1, les writes/deletes refusent les contextes wildcard : un task token mutateur doit être scopé à une resource précise. Le filesystem direct reste dépendant du host ou de la sandbox OS.
 
 Le smoke-test couvre maintenant le workflow mécanique complet, y compris :
 
@@ -172,20 +172,20 @@ workflow_next
 
 Les écritures directes du host sont refusées par `before_edit`.
 
-Le chemin accepté par `.agent` V2.8 est :
+Le chemin accepté par `.agent` V2.8.1 est :
 
 ```text
-workflow_next → before_task → task_id/context_token → scribe_query → graphify_query si requis → claim_resource → file_hash → propose_patch → apply_patch
+workflow_next → before_task(resource précis, intent mutateur) → task_id/context_token → scribe_query → graphify_query si requis → claim_resource → file_hash → propose_patch → apply_patch
 ```
 
 Limite honnête : une sandbox OS reste nécessaire pour empêcher physiquement un processus externe qui possède déjà les droits d'écriture du système. Le write gate rend le protocole `.agent` MCP-only, mais ne remplace pas une isolation au niveau OS.
 
 ## 🧨 Delete gate
 
-Les suppressions directes du host sont interdites. Le chemin accepté par `.agent` V2.8 est :
+Les suppressions directes du host sont interdites. Le chemin accepté par `.agent` V2.8.1 est :
 
 ```text
-workflow_next → before_task → task_id/context_token → scribe_query → graphify_query si requis → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
+workflow_next → before_task(resource précis, intent mutateur) → task_id/context_token → scribe_query → graphify_query si requis → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
 ```
 
 ## 🧠 Context gates et gravure mémoire

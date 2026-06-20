@@ -79,7 +79,7 @@ Audit strict du lien contexte :
 python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
 ```
 
-Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED`. Depuis V2.8, le résultat attendu est `context_bypass=CLOSED` et `--strict-context` doit passer. `DIRECT_FS_WRITE_OUTSIDE_SANDBOX_OPEN` peut rester présent : c'est une limite host/OS, pas une limite MCP-context.
+Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED`. Depuis V2.8, le résultat attendu est `context_bypass=CLOSED` et `--strict-context` doit passer. Depuis V2.8.1, ce smoke vérifie aussi que les contextes wildcard, les mismatches de resource et les intents non mutateurs sont refusés pour les patches/deletes. `DIRECT_FS_WRITE_OUTSIDE_SANDBOX_OPEN` peut rester présent : c'est une limite host/OS, pas une limite MCP-context.
 
 ## Copier .agent dans un nouveau projet
 
@@ -201,7 +201,7 @@ workflow_next
 → finish_task
 ```
 
-Le LLM ne doit pas inventer ou sauter une étape. `propose_patch` et `delete_resource` refusent maintenant les appels sans contexte prêt.
+Le LLM ne doit pas inventer ou sauter une étape. `propose_patch` et `delete_resource` refusent maintenant les appels sans contexte prêt, sans resource de contexte précise, avec resource différente, ou avec intent non mutateur.
 
 ## Workflow suppression attendu
 

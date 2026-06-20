@@ -171,12 +171,28 @@ def require_context_ready(
     context_token: str,
     resource: str = "",
     require_graphify: bool | None = None,
+    strict_resource: bool = False,
+    allowed_intents: set[str] | None = None,
 ) -> dict[str, Any]:
     data = _load_ready(agent_id, task_id, context_token)
     safe_resource = _safe_resource(resource)
     context_resource = data.get("resource") or ""
+    if strict_resource:
+        if not safe_resource:
+            raise TaskContextError("TASK_CONTEXT_RESOURCE_REQUIRED: action resource is required")
+        if not context_resource:
+            raise TaskContextError("TASK_CONTEXT_RESOURCE_REQUIRED: task context resource is required")
+        if context_resource != safe_resource:
+            raise TaskContextError("TASK_CONTEXT_RESOURCE_MISMATCH: resource does not match task context")
     if context_resource and safe_resource and context_resource != safe_resource:
         raise TaskContextError("TASK_CONTEXT_RESOURCE_MISMATCH: resource does not match task context")
+    if allowed_intents is not None:
+        context_intent = str(data.get("intent") or "").strip().lower()
+        normalized_intents = {intent.strip().lower() for intent in allowed_intents}
+        if not context_intent:
+            raise TaskContextError("TASK_CONTEXT_INTENT_REQUIRED: task context intent is required")
+        if context_intent not in normalized_intents:
+            raise TaskContextError("TASK_CONTEXT_INTENT_NOT_ALLOWED: task context intent is not allowed for this action")
     if not data.get("before_done"):
         raise TaskContextError("TASK_CONTEXT_NOT_READY: before_task is not done")
     if not data.get("scribe_done"):

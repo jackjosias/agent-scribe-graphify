@@ -121,8 +121,13 @@ def write_target(name: str, text: str = "redteam-original\n") -> str:
     return rel(target)
 
 
-def start_context(agent_id: str, target: str, request: str = "redteam write") -> dict[str, str]:
-    before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": "write", "resource": target})
+def start_context(
+    agent_id: str,
+    target: str,
+    request: str = "redteam write",
+    intent: str = "write",
+) -> dict[str, str]:
+    before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": target})
     if before.get("verdict") != "BEFORE_TASK_OK":
         fail(f"before_task failed: {before}")
     return {"task_id": before["task_id"], "context_token": before["context_token"]}
@@ -269,6 +274,65 @@ def test_delete_with_pending_patch() -> None:
         fail("delete_resource removed file with pending proposed/conflict patch")
 
 
+def test_reject_empty_resource_context_for_write() -> None:
+    clean_runtime()
+    clean_redteam()
+    target = write_target("empty-resource-write.txt")
+    agent = bootstrap("redteam-empty-resource-write")
+    ctx = start_context(agent, "", "redteam empty resource write", intent="write")
+    mark_scribe(agent, ctx, "redteam empty resource write")
+    mark_graphify(agent, "", ctx, "redteam empty resource write")
+    claim(agent, target)
+    result = propose(agent, target, file_hash(target), ctx)
+    assert_refused(result, "TASK_CONTEXT_RESOURCE_REQUIRED", "propose_patch with empty context resource")
+
+
+def test_reject_empty_resource_context_for_delete() -> None:
+    clean_runtime()
+    clean_redteam()
+    target = write_target("empty-resource-delete.txt")
+    agent = bootstrap("redteam-empty-resource-delete")
+    ctx = start_context(agent, "", "redteam empty resource delete", intent="delete")
+    mark_scribe(agent, ctx, "redteam empty resource delete")
+    mark_graphify(agent, "", ctx, "redteam empty resource delete")
+    claim(agent, target)
+    result = call_tool("delete_resource", {
+        "agent_id": agent,
+        "resource": target,
+        "base_hash": file_hash(target),
+        "confirm_phrase": f"DELETE {target}",
+        "reason": "redteam empty resource delete",
+        **ctx,
+    })
+    assert_refused(result, "TASK_CONTEXT_RESOURCE_REQUIRED", "delete_resource with empty context resource")
+    if not (ROOT / target).exists():
+        fail("delete_resource removed file with empty context resource")
+
+
+def test_reject_resource_mismatch_context_for_write() -> None:
+    clean_runtime()
+    clean_redteam()
+    file_a = write_target("resource-mismatch-a.txt")
+    file_b = write_target("resource-mismatch-b.txt")
+    agent = bootstrap("redteam-resource-mismatch")
+    ctx = ready_context(agent, file_a, "redteam resource mismatch")
+    claim(agent, file_b)
+    result = propose(agent, file_b, file_hash(file_b), ctx)
+    assert_refused(result, "TASK_CONTEXT_RESOURCE_MISMATCH", "propose_patch with mismatched context resource")
+
+
+def test_reject_non_write_intent_for_patch() -> None:
+    clean_runtime()
+    clean_redteam()
+    target = write_target("non-write-intent.txt")
+    agent = bootstrap("redteam-non-write-intent")
+    ctx = start_context(agent, target, "redteam non write intent", intent="read")
+    mark_scribe(agent, ctx, "redteam non write intent")
+    claim(agent, target)
+    result = propose(agent, target, file_hash(target), ctx)
+    assert_refused(result, "TASK_CONTEXT_INTENT_NOT_ALLOWED", "propose_patch with non-write intent")
+
+
 def test_context_bypass() -> str:
     clean_runtime()
     clean_redteam()
@@ -322,6 +386,10 @@ def main() -> int:
         test_apply_without_claim()
         test_delete_confirmation_required()
         test_delete_with_pending_patch()
+        test_reject_empty_resource_context_for_write()
+        test_reject_empty_resource_context_for_delete()
+        test_reject_resource_mismatch_context_for_write()
+        test_reject_non_write_intent_for_patch()
         context_bypass = test_context_bypass()
         direct_fs = test_direct_fs_write()
         print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs}")

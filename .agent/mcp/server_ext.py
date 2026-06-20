@@ -27,6 +27,7 @@ _WRITE_DONE_VERDICTS = {"PATCH_APPLIED", "PATCH_APPLIED_CONFIRMED", "RESOURCE_DE
 _RECORD_REQUIRED_VERDICTS = {*_WRITE_DONE_VERDICTS, "CLAIM_RELEASED"}
 _RECORD_DONE_VERDICTS = {"SCRIBE_RECORD_WRITTEN"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
+_MUTATING_CONTEXT_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove"}
 _GRAPHIFY_KEYWORDS = {"api", "architecture", "backend", "base de données", "bug", "code", "database", "db", "frontend", "migration", "module", "production", "refactor", "sécurité", "security", "test"}
 _DEBUG_KEYWORDS = {"bug", "debug", "erreur", "error", "fail", "failure", "fix", "regression", "refactor", "test"}
 
@@ -140,9 +141,23 @@ def _context_error(exc: task_context.TaskContextError) -> server.ToolError:
     return server.ToolError(str(exc))
 
 
-def _require_context_ready(agent_id: str, task_id: str, context_token: str, resource: str) -> Dict[str, Any]:
+def _require_context_ready(
+    agent_id: str,
+    task_id: str,
+    context_token: str,
+    resource: str,
+    strict_resource: bool = False,
+    allowed_intents: set[str] | None = None,
+) -> Dict[str, Any]:
     try:
-        return task_context.require_context_ready(agent_id, task_id, context_token, resource=resource)
+        return task_context.require_context_ready(
+            agent_id,
+            task_id,
+            context_token,
+            resource=resource,
+            strict_resource=strict_resource,
+            allowed_intents=allowed_intents,
+        )
     except task_context.TaskContextError as exc:
         raise _context_error(exc) from exc
 
@@ -174,7 +189,14 @@ def graphify_query(query: str = "", resource: str = "", agent_id: str = "", task
 
 
 def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, task_id: str = "", context_token: str = "") -> Dict[str, Any]:
-    _require_context_ready(agent_id, task_id, context_token, target)
+    _require_context_ready(
+        agent_id,
+        task_id,
+        context_token,
+        target,
+        strict_resource=True,
+        allowed_intents=_MUTATING_CONTEXT_INTENTS,
+    )
     return server.ok(patch_queue.propose_patch(agent_id=agent_id, target=target, base_hash=base_hash, diff_text=diff_text))
 
 
@@ -187,7 +209,14 @@ def delete_resource(
     task_id: str = "",
     context_token: str = "",
 ) -> Dict[str, Any]:
-    _require_context_ready(agent_id, task_id, context_token, resource)
+    _require_context_ready(
+        agent_id,
+        task_id,
+        context_token,
+        resource,
+        strict_resource=True,
+        allowed_intents=_MUTATING_CONTEXT_INTENTS,
+    )
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
