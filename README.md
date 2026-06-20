@@ -2,22 +2,19 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/branch-v2-blue" alt="Branch v2">
-  <img src="https://img.shields.io/badge/MCP-v0.2.2-purple" alt="MCP v0.2.2">
+  <img src="https://img.shields.io/badge/MCP-v0.2.3-purple" alt="MCP v0.2.3">
   <img src="https://img.shields.io/badge/status-smoke%20tested-brightgreen" alt="Smoke tested">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/runtime-SQLite%20WAL-success" alt="SQLite WAL">
-  <img src="https://img.shields.io/badge/workflow-mechanical-success" alt="Mechanical workflow">
+  <img src="https://img.shields.io/badge/write--gate-apply__patch-success" alt="MCP write gate">
 </p>
 
-> **Branche V2 — socle MCP local portable avec workflow mécanique `workflow_next`.**
->
-> Cette branche documente la version `v2`, centrée sur le serveur MCP local, la coordination SQLite, la patch queue, la portabilité réelle du dossier `.agent/` et la réduction de confiance envers les longues instructions textuelles données au LLM.
+> **Branche V2 — socle MCP local portable avec workflow mécanique `workflow_next` et write gate `apply_patch`.**
 
 ---
 
 ## ✅ Statut V2
 
-La V2 est validée localement par le smoke-test intégré :
+Validation locale :
 
 ```bash
 python3 .agent/scripts/mcp_smoke.py
@@ -29,27 +26,21 @@ Résultat attendu :
 MCP_SMOKE_ALL_OK
 ```
 
-Ce test couvre :
+Le smoke-test couvre maintenant le workflow mécanique complet, y compris :
 
 ```text
-✅ bootstrap MCP réel
-✅ JSON-RPC stdio
-✅ workflow_next mécanique
-✅ before_task
-✅ claim_resource
-✅ file_hash
-✅ propose_patch
-✅ list_patches
-✅ finish_task refusé si patch pending
-✅ reject_patch
-✅ release_claim
-✅ finish_task OK
-✅ chemins dangereux refusés
-✅ symlink escape refusé
-✅ symlink interne accepté
-✅ propose_patch sans claim refusé
-✅ copie portable de .agent dans un projet temporaire avec espaces
-✅ runtime isolé dans .agent/state/runtime
+bootstrap
+workflow_next
+before_task
+claim_resource
+before_edit refusé pour écriture directe
+file_hash
+propose_patch
+apply_patch
+release_claim
+finish_task
+portabilité .agent
+sécurité chemins et symlinks
 ```
 
 ---
@@ -60,11 +51,9 @@ Ce test couvre :
 .agent/       = contrôle aérien local multi-agent
 MCP           = canal mécanique commun
 workflow_next = chef d'orchestre obligatoire
-SCRIBE        = mémoire longue durée
-Graphify      = carte structurelle
+apply_patch   = write gate MCP obligatoire
 SQLite WAL    = coordination courte durée
 Patch queue   = sécurité multi-agent sur mêmes fichiers
-TENOR INIT    = porte d'entrée obligatoire
 ```
 
 Règle centrale :
@@ -74,6 +63,7 @@ Le LLM hôte ne décide pas seul la prochaine étape.
 Il appelle workflow_next.
 Il exécute must_call.
 Il rappelle workflow_next.
+Toute écriture acceptée passe par apply_patch.
 ```
 
 ---
@@ -93,11 +83,8 @@ Il rappelle workflow_next.
 │       ├── db.py
 │       ├── patch_queue.py
 │       └── state_paths.py
-├── rules/
 ├── scripts/
 │   └── mcp_smoke.py
-├── skills/
-├── workflow/
 └── state/
     ├── runtime/
     ├── scribe-out/
@@ -129,34 +116,7 @@ python3 .agent/scripts/mcp_smoke.py
 python3 .agent/mcp/server_entry.py
 ```
 
-`server_entry.py` recalcule le project root depuis l'emplacement réel de `.agent/`. Il rend la copie portable fiable même si le host MCP lance le serveur depuis un autre dossier courant.
-
----
-
-## 🧭 Tool parent obligatoire
-
-Le tool central est :
-
-```text
-workflow_next
-```
-
-Exemple :
-
-```bash
-python3 .agent/mcp/server_entry.py --call workflow_next --args '{"request":"modifier README.md","intent":"write","resource":"README.md","host_tool":"manual","model_name":"test"}'
-```
-
-La réponse contient :
-
-```text
-must_call.tool
-must_call.args
-forbidden
-reason
-```
-
-Le LLM hôte doit exécuter uniquement l'étape retournée, puis rappeler `workflow_next`.
+`server_entry.py` recalcule le project root depuis l'emplacement réel de `.agent/`.
 
 ---
 
@@ -174,8 +134,7 @@ workflow_next
 → workflow_next
 → propose_patch
 → workflow_next
-→ list_patches si patch pending
-→ reject_patch ou confirm_patch_applied
+→ apply_patch
 → workflow_next
 → release_claim
 → workflow_next
@@ -184,18 +143,17 @@ workflow_next
 
 ---
 
-## 🛡️ Sécurité
+## 🛡️ Write gate
 
-La V2 refuse les ressources qui sortent du projet : traversal, chemins absolus système, chemins absolus Windows/UNC et symlinks qui pointent hors projet.
+Les écritures directes du host sont refusées par `before_edit`.
 
-Règles d'écriture :
+Le chemin accepté par `.agent` V2.3 est :
 
 ```text
-✅ écriture = claim obligatoire
-✅ patch = base_hash obligatoire
-✅ finish_task interdit avec patch pending/conflict
-✅ direct edit interdit sous claim patch_queue
+workflow_next → file_hash → propose_patch → apply_patch
 ```
+
+Limite honnête : une sandbox OS reste nécessaire pour empêcher physiquement un processus externe qui possède déjà les droits d'écriture du système. Le write gate rend le protocole `.agent` MCP-only, mais ne remplace pas une isolation au niveau OS.
 
 ---
 
@@ -222,7 +180,7 @@ python3 .agent/scripts/mcp_smoke.py
 
 ```text
 main = README historique / bundle initial
-v2   = socle MCP portable + workflow_next mécanique + smoke-test complet
+v2   = socle MCP portable + workflow_next + apply_patch write gate
 ```
 
 ---
@@ -232,6 +190,7 @@ v2   = socle MCP portable + workflow_next mécanique + smoke-test complet
 ```text
 V2 feature-complete pour le socle MCP local portable.
 Workflow parent workflow_next implémenté.
+Write gate apply_patch implémenté.
 Validée par smoke-test local complet.
 Prête pour tests avec hosts réels.
 ```
