@@ -9,12 +9,16 @@ import time
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import delete_ops, patch_queue  # type: ignore
+from runtime import delete_ops, patch_queue, task_context  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 
-server.SERVER_VERSION = "0.2.6"
+server.SERVER_VERSION = "0.2.8"
 _BASE_WORKFLOW_NEXT = server.workflow_next
 _BASE_TOOL_SCHEMA = server.tool_schema
+_BASE_BEFORE_TASK = server.before_task
+_BASE_SCRIBE_QUERY = server.scribe_query
+_BASE_GRAPHIFY_QUERY = server.graphify_query
+_BASE_FINISH_TASK = server.finish_task
 _DELETE_INTENTS = {"delete", "remove"}
 _SCRIBE_VERDICTS = {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}
 _GRAPHIFY_VERDICTS = {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}
@@ -64,7 +68,42 @@ def _targeted_graphify_query(request: str, intent: str, resource: str) -> str:
     return f"impact dependencies blast radius for {target}"
 
 
-def _context_gate(agent_id: str, request: str, intent: str, resource: str, last_verdict: str) -> Dict[str, Any] | None:
+def _missing_context_payload() -> Dict[str, Any]:
+    return server.ok({
+        "verdict": "INPUT_REQUIRED",
+        "state": "TASK_CONTEXT_REQUIRED",
+        "reason": "task_id and context_token returned by before_task are required for this workflow step.",
+        "required_inputs": ["task_id", "context_token"],
+        "missing_inputs": ["task_id", "context_token"],
+        "forbidden": ["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+    })
+
+
+def before_task(request: str, agent_id: str = "", intent: str = "", resource: str = "") -> Dict[str, Any]:
+    result = _BASE_BEFORE_TASK(request=request, agent_id=agent_id)
+    payload = json.loads(result["content"][0]["text"])
+    if payload.get("verdict") != "BEFORE_TASK_OK":
+        return result
+    context = task_context.create_task_context(
+        agent_id=agent_id,
+        request=request,
+        intent=intent or "",
+        resource=resource or "",
+        requires_graphify=_requires_graphify(request, intent, resource),
+    )
+    payload.update(context)
+    return server.ok(payload)
+
+
+def _context_gate(
+    agent_id: str,
+    request: str,
+    intent: str,
+    resource: str,
+    last_verdict: str,
+    task_id: str,
+    context_token: str,
+) -> Dict[str, Any] | None:
     last = _last(last_verdict)
     if not request:
         return None
@@ -72,15 +111,17 @@ def _context_gate(agent_id: str, request: str, intent: str, resource: str, last_
         return server._next_payload(
             state="TASK_NOT_ACKED",
             tool="before_task",
-            args={"request": request, "agent_id": agent_id},
+            args={"request": request, "agent_id": agent_id, "intent": intent or "", "resource": resource or ""},
             reason="The task must be acknowledged before SCRIBE, Graphify, claims, hashes, patches, deletion or finish.",
             forbidden=["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
         )
+    if not task_id or not context_token:
+        return _missing_context_payload()
     if last == "BEFORE_TASK_OK":
         return server._next_payload(
             state="SCRIBE_CONTEXT_REQUIRED",
             tool="scribe_query",
-            args={"query": _targeted_scribe_query(request, intent, resource), "limit": 5},
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": _targeted_scribe_query(request, intent, resource), "limit": 5},
             reason="Targeted SCRIBE RAG query is required, not full memory read.",
             forbidden=["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
         )
@@ -88,15 +129,79 @@ def _context_gate(agent_id: str, request: str, intent: str, resource: str, last_
         return server._next_payload(
             state="GRAPHIFY_CONTEXT_REQUIRED",
             tool="graphify_query",
-            args={"query": _targeted_graphify_query(request, intent, resource), "resource": resource or ""},
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": _targeted_graphify_query(request, intent, resource), "resource": resource or ""},
             reason="Targeted Graphify impact query is required.",
             forbidden=["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
         )
     return None
 
 
-def delete_resource(agent_id: str, resource: str, base_hash: str, confirm_phrase: str = "", reason: str = "") -> Dict[str, Any]:
+def _context_error(exc: task_context.TaskContextError) -> server.ToolError:
+    return server.ToolError(str(exc))
+
+
+def _require_context_ready(agent_id: str, task_id: str, context_token: str, resource: str) -> Dict[str, Any]:
+    try:
+        return task_context.require_context_ready(agent_id, task_id, context_token, resource=resource)
+    except task_context.TaskContextError as exc:
+        raise _context_error(exc) from exc
+
+
+def scribe_query(query: str, limit: int = 5, agent_id: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+    result = _BASE_SCRIBE_QUERY(query=query, limit=limit)
+    if agent_id or task_id or context_token:
+        try:
+            task_context.mark_scribe_done(agent_id, task_id, context_token)
+        except task_context.TaskContextError as exc:
+            raise _context_error(exc) from exc
+        payload = json.loads(result["content"][0]["text"])
+        payload["task_context"] = {"task_id": task_id, "scribe_done": True}
+        return server.ok(payload)
+    return result
+
+
+def graphify_query(query: str = "", resource: str = "", agent_id: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+    result = _BASE_GRAPHIFY_QUERY(query=query, resource=resource)
+    if agent_id or task_id or context_token:
+        try:
+            task_context.mark_graphify_done(agent_id, task_id, context_token)
+        except task_context.TaskContextError as exc:
+            raise _context_error(exc) from exc
+        payload = json.loads(result["content"][0]["text"])
+        payload["task_context"] = {"task_id": task_id, "graphify_done": True}
+        return server.ok(payload)
+    return result
+
+
+def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+    _require_context_ready(agent_id, task_id, context_token, target)
+    return server.ok(patch_queue.propose_patch(agent_id=agent_id, target=target, base_hash=base_hash, diff_text=diff_text))
+
+
+def delete_resource(
+    agent_id: str,
+    resource: str,
+    base_hash: str,
+    confirm_phrase: str = "",
+    reason: str = "",
+    task_id: str = "",
+    context_token: str = "",
+) -> Dict[str, Any]:
+    _require_context_ready(agent_id, task_id, context_token, resource)
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
+
+
+def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+    result = _BASE_FINISH_TASK(agent_id=agent_id, summary=summary)
+    if task_id or context_token:
+        payload = json.loads(result["content"][0]["text"])
+        if payload.get("verdict") == "TASK_FINISHED_OK":
+            try:
+                payload["task_context"] = task_context.finish_task_context(agent_id, task_id, context_token)
+            except task_context.TaskContextError as exc:
+                raise _context_error(exc) from exc
+            return server.ok(payload)
+    return result
 
 
 def scribe_record(
@@ -176,6 +281,8 @@ def workflow_next(
     last_verdict: str = "",
     host_tool: str = "unknown",
     model_name: str = "",
+    task_id: str = "",
+    context_token: str = "",
 ) -> Dict[str, Any]:
     normalized = (intent or "").strip().lower()
     last = _last(last_verdict)
@@ -221,7 +328,7 @@ def workflow_next(
                 forbidden=["finish_task", "direct_file_edit"],
             )
 
-    gate = _context_gate(agent_id=agent_id, request=request, intent=intent, resource=resource, last_verdict=last_verdict)
+    gate = _context_gate(agent_id, request, intent, resource, last_verdict, task_id, context_token)
     if gate is not None:
         return gate
 
@@ -231,7 +338,7 @@ def workflow_next(
             delegated_last = "GRAPHIFY_QUERY_DONE"
         elif last == "SCRIBE_UNAVAILABLE" and not _requires_graphify(request, intent, resource):
             delegated_last = "SCRIBE_QUERY_DONE"
-        return _BASE_WORKFLOW_NEXT(
+        result = _BASE_WORKFLOW_NEXT(
             agent_id=agent_id,
             request=request,
             intent=intent,
@@ -244,15 +351,11 @@ def workflow_next(
             host_tool=host_tool,
             model_name=model_name,
         )
-
-    if not agent_id or agent_id not in server._active_agent_ids():
-        return server._next_payload(
-            state="NO_ACTIVE_AGENT",
-            tool="bootstrap",
-            args={"host_tool": host_tool or "unknown", "model_name": model_name or "", "run_legacy_bootstrap": False},
-            reason="No active registered agent_id is available. Bootstrap is mandatory before deletion planning.",
-            forbidden=["claim_resource", "delete_resource", "finish_task", "direct_file_edit"],
-        )
+        payload = json.loads(result["content"][0]["text"])
+        if (payload.get("must_call") or {}).get("tool") == "propose_patch":
+            payload["must_call"]["args"].update({"task_id": task_id, "context_token": context_token})
+            return server.ok(payload)
+        return result
 
     if not resource:
         return server.ok({
@@ -290,7 +393,7 @@ def workflow_next(
     return server._next_payload(
         state="DELETE_PERMISSION_REQUIRED",
         tool="delete_resource",
-        args={"agent_id": agent_id, "resource": safe, "base_hash": base_hash},
+        args={"agent_id": agent_id, "resource": safe, "base_hash": base_hash, "task_id": task_id, "context_token": context_token},
         reason=f"Ask the user for explicit permission before deletion. Required confirmation phrase: {confirmation}",
         forbidden=["direct_file_edit", "finish_task"],
         missing_inputs=["confirm_phrase", "reason"],
@@ -298,7 +401,26 @@ def workflow_next(
     )
 
 
+def _schema_props(base: Dict[str, Any], extra: Dict[str, str]) -> Dict[str, Any]:
+    schema = json.loads(json.dumps(base))
+    props = schema.setdefault("properties", {})
+    for name, kind in extra.items():
+        props[name] = {"type": kind}
+    schema["additionalProperties"] = False
+    return schema
+
+
 def tool_schema(name: str) -> Dict[str, Any]:
+    if name == "before_task":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"intent": "string", "resource": "string"})
+    if name == "workflow_next":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+    if name in {"scribe_query", "graphify_query"}:
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"agent_id": "string", "task_id": "string", "context_token": "string"})
+    if name == "propose_patch":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+    if name == "finish_task":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
     if name == "scribe_record":
         return {
             "type": "object",
@@ -331,6 +453,8 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "base_hash": {"type": "string"},
                 "confirm_phrase": {"type": "string"},
                 "reason": {"type": "string"},
+                "task_id": {"type": "string"},
+                "context_token": {"type": "string"},
             },
             "additionalProperties": False,
         }
@@ -338,11 +462,21 @@ def tool_schema(name: str) -> Dict[str, Any]:
 
 
 server.workflow_next = workflow_next
+server.before_task = before_task
+server.scribe_query = scribe_query
+server.graphify_query = graphify_query
+server.propose_patch = propose_patch
 server.delete_resource = delete_resource
+server.finish_task = finish_task
 server.scribe_record = scribe_record
 server.tool_schema = tool_schema
 server.TOOLS["workflow_next"] = workflow_next
+server.TOOLS["before_task"] = before_task
+server.TOOLS["scribe_query"] = scribe_query
+server.TOOLS["graphify_query"] = graphify_query
+server.TOOLS["propose_patch"] = propose_patch
 server.TOOLS["delete_resource"] = delete_resource
+server.TOOLS["finish_task"] = finish_task
 server.TOOLS["scribe_record"] = scribe_record
 
 handle = server.handle

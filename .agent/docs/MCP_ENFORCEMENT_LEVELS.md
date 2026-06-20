@@ -8,15 +8,19 @@ Le prompt demande au modèle de suivre le workflow. C'est utile pour l'intention
 
 `workflow_next` est un routeur mécanique MCP. Il ordonne `before_task`, `scribe_query`, `graphify_query`, puis les étapes de claim, hash, patch, delete, record et finish.
 
-Ce niveau guide le host qui respecte le protocole, mais ne prouve pas à lui seul que les tools bas niveau ont reçu un contexte.
+Depuis V2.8, `workflow_next` transporte aussi `task_id/context_token` après `before_task` pour que les étapes de contexte puissent être liées aux writes MCP.
 
-## Level 3 — MCP write/delete gates
+## Level 3 — MCP context/write/delete gates
 
-`apply_patch` et `delete_resource` sont des gates MCP réels.
+V2.8 ferme le bypass MCP-context avec `task_id/context_token` stocké dans `coordination.sqlite`.
+
+`before_task` crée un contexte de tâche scopé à `agent_id`, `request`, `intent` et `resource`, avec TTL. `scribe_query` et `graphify_query` marquent ce contexte comme prêt. Le token brut n'est jamais stocké, seul son hash l'est.
+
+`propose_patch` et `delete_resource` exigent maintenant un contexte prêt avant d'appeler les gates bas niveau.
 
 `apply_patch` impose patch propriétaire, status `proposed`, claim actif, `base_hash` et hash courant compatible.
 
-`delete_resource` impose confirmation exacte, `base_hash`, claim actif, fichier régulier, et absence de patch `proposed` ou `conflict` en attente.
+`delete_resource` conserve ses protections existantes : confirmation exacte, `base_hash`, claim actif, fichier régulier, et absence de patch `proposed` ou `conflict` en attente.
 
 ## Level 4 — Host sans shell/edit direct
 
@@ -26,10 +30,8 @@ Le host ne fournit pas de shell direct ni d'outil d'édition direct, ou les dés
 
 Une sandbox OS, un proxy filesystem ou un daemon de contrôle empêche physiquement les écritures hors MCP. C'est le niveau requis pour bloquer un processus local qui possède autrement les droits filesystem.
 
-## Limites V2.7
+## Limites restantes
 
-Le contexte `before_task/scribe_query/graphify_query` n'est pas encore cryptographiquement lié au patch tant qu'il n'y a pas de task token.
+V2.8 ferme le bypass MCP-context : `bootstrap -> claim_resource -> file_hash -> propose_patch -> apply_patch` sans contexte ne peut plus proposer de patch.
 
-Sans sandbox ou désactivation shell/edit, un host peut contourner MCP par filesystem direct.
-
-Cette V2.7 audite les niveaux d'enforcement existants. Elle ne crée pas encore `task_id/context_token` et ne ferme pas le bypass contexte.
+Sans sandbox ou désactivation shell/edit, un host peut encore contourner MCP par filesystem direct. Ce point reste un sujet host/OS, pas un sujet `task_id/context_token`.

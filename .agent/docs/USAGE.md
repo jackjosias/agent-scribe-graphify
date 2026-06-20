@@ -11,10 +11,10 @@ Il exécute le must_call retourné.
 Il rappelle workflow_next après chaque étape.
 ```
 
-Depuis la version MCP `0.2.4`, les écritures acceptées passent par le **write gate MCP** :
+Depuis la version MCP `0.2.8`, les écritures acceptées passent par le **context gate MCP** puis le **write gate MCP** :
 
 ```text
-file_hash → propose_patch → apply_patch
+before_task → scribe_query → graphify_query si requis → task_id/context_token → file_hash → propose_patch → apply_patch
 ```
 
 Les suppressions acceptées passent par le **delete gate MCP** :
@@ -65,7 +65,7 @@ Ce smoke-test valide :
 - copie portable de .agent
 ```
 
-## Audit enforcement V2.7
+## Audit enforcement V2.8
 
 Audit non bloquant des gates MCP et des bypass réels :
 
@@ -79,7 +79,7 @@ Audit strict du lien contexte :
 python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
 ```
 
-Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED` sans échouer si le bypass contexte est ouvert. `--strict-context` devient bloquant si `context_bypass=OPEN`.
+Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED`. Depuis V2.8, le résultat attendu est `context_bypass=CLOSED` et `--strict-context` doit passer. `DIRECT_FS_WRITE_OUTSIDE_SANDBOX_OPEN` peut rester présent : c'est une limite host/OS, pas une limite MCP-context.
 
 ## Copier .agent dans un nouveau projet
 
@@ -156,10 +156,10 @@ Après avoir exécuté `must_call`, le LLM doit rappeler `workflow_next` avec `a
 
 ## Boucle contexte obligatoire
 
-Avant toute lecture ou écriture significative, `workflow_next` impose le contexte :
+Avant toute écriture ou suppression MCP, `workflow_next` impose le contexte et transporte un token :
 
 ```text
-before_task → targeted_scribe_query → targeted_graphify_query si code/architecture → action
+before_task → task_id/context_token → targeted_scribe_query → targeted_graphify_query si requis → action
 ```
 
 `scribe_query` est une requête RAG ciblée et minimale. SCRIBE n'est jamais lu entièrement par défaut. `graphify_query` est une requête ciblée structure/impact/blast-radius dès que la tâche touche au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production.
@@ -201,7 +201,7 @@ workflow_next
 → finish_task
 ```
 
-Le LLM ne doit pas inventer ou sauter une étape.
+Le LLM ne doit pas inventer ou sauter une étape. `propose_patch` et `delete_resource` refusent maintenant les appels sans contexte prêt.
 
 ## Workflow suppression attendu
 

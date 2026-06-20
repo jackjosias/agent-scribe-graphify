@@ -61,6 +61,24 @@ def expect_next_tool(args: dict[str, Any], expected_tool: str) -> dict[str, Any]
     return result
 
 
+def task_context_args(before: dict[str, Any]) -> dict[str, str]:
+    return {"task_id": before["task_id"], "context_token": before["context_token"]}
+
+
+def establish_context(agent_id: str, request: str, intent: str, resource: str) -> dict[str, str]:
+    before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": resource})
+    if before.get("verdict") != "BEFORE_TASK_OK":
+        fail(f"before_task failed: {before}")
+    ctx = task_context_args(before)
+    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": request, "limit": 5})
+    if scribe.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
+        fail(f"scribe_query failed: {scribe}")
+    graphify = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": request, "resource": resource})
+    if graphify.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
+        fail(f"graphify_query failed: {graphify}")
+    return ctx
+
+
 def smoke_nominal_workflow() -> None:
     clean_runtime()
     work = ROOT / "tmp-smoke-workflow"
@@ -89,9 +107,10 @@ def smoke_nominal_workflow() -> None:
         "resource": "tmp-smoke-workflow/file.txt",
     }, "before_task")
 
-    before = call_tool("before_task", {"agent_id": agent_id, "request": "modify smoke workflow file"})
+    before = call_tool("before_task", {"agent_id": agent_id, "request": "modify smoke workflow file", "intent": "write", "resource": "tmp-smoke-workflow/file.txt"})
     if before.get("verdict") != "BEFORE_TASK_OK":
         fail(f"before_task failed: {before}")
+    ctx = task_context_args(before)
 
     expect_next_tool({
         "agent_id": agent_id,
@@ -99,9 +118,10 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "BEFORE_TASK_OK",
+        **ctx,
     }, "scribe_query")
 
-    scribe = call_tool("scribe_query", {"query": "modify smoke workflow file", "limit": 5})
+    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": "modify smoke workflow file", "limit": 5})
     if scribe.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
         fail(f"scribe_query failed: {scribe}")
 
@@ -111,9 +131,10 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": scribe["verdict"],
+        **ctx,
     }, "graphify_query")
 
-    graphify = call_tool("graphify_query", {"query": "modify smoke workflow file", "resource": "tmp-smoke-workflow/file.txt"})
+    graphify = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": "modify smoke workflow file", "resource": "tmp-smoke-workflow/file.txt"})
     if graphify.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
         fail(f"graphify_query failed: {graphify}")
 
@@ -123,6 +144,7 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": graphify["verdict"],
+        **ctx,
     }, "claim_resource")
 
     claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600})
@@ -139,6 +161,7 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "CLAIM_GRANTED",
+        **ctx,
     }, "file_hash")
 
     file_hash = call_tool("file_hash", {"resource": "tmp-smoke-workflow/file.txt"})
@@ -151,6 +174,7 @@ def smoke_nominal_workflow() -> None:
         "resource": "tmp-smoke-workflow/file.txt",
         "base_hash": file_hash["hash"],
         "last_verdict": "FILE_HASH",
+        **ctx,
     }, "propose_patch")
     if "diff_text" not in next_patch.get("missing_inputs", []):
         fail(f"workflow_next should require diff_text before propose_patch: {next_patch}")
@@ -160,6 +184,7 @@ def smoke_nominal_workflow() -> None:
         "target": "tmp-smoke-workflow/file.txt",
         "base_hash": file_hash["hash"],
         "diff_text": "@@ -1,1 +1,1 @@\n-line1\n+line2\n",
+        **ctx,
     })
     if patch.get("status") != "PATCH_PROPOSED":
         fail(f"patch failed: {patch}")
@@ -170,6 +195,7 @@ def smoke_nominal_workflow() -> None:
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "PATCH_PROPOSED",
+        **ctx,
     }, "apply_patch")
     if "direct_file_edit" not in next_apply.get("forbidden", []):
         fail(f"workflow_next must forbid direct writes before apply_patch: {next_apply}")
@@ -222,7 +248,7 @@ def smoke_nominal_workflow() -> None:
         "last_verdict": "SCRIBE_RECORD_WRITTEN",
     }, "finish_task")
 
-    finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished"})
+    finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx})
     if finished.get("verdict") != "TASK_FINISHED_OK":
         fail(f"finish failed: {finished}")
 
@@ -251,11 +277,16 @@ def smoke_bad_paths() -> None:
             fail(f"internal symlink should be accepted: {inside}")
 
         (work / "outside-dir").symlink_to(tempfile.gettempdir(), target_is_directory=True)
+        boot = call_tool("bootstrap", {"host_tool": "bad-path-smoke", "model_name": "test", "run_legacy_bootstrap": False})
+        agent_id = boot["agent"]["agent_id"]
+        target = "tmp-smoke-symlink/outside-dir/new-file.txt"
+        ctx = establish_context(agent_id, "bad path smoke", "write", target)
         expect_error("propose_patch", {
-            "agent_id": "bad-agent",
-            "target": "tmp-smoke-symlink/outside-dir/new-file.txt",
+            "agent_id": agent_id,
+            "target": target,
             "base_hash": "__new_file__",
             "diff_text": "@@ -0,0 +1 @@\n+bad\n",
+            **ctx,
         }, "parent escapes project root")
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -267,12 +298,16 @@ def smoke_unregistered_patch() -> None:
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     (work / "file.txt").write_text("line1\n", encoding="utf-8")
+    boot = call_tool("bootstrap", {"host_tool": "auth-smoke", "model_name": "test", "run_legacy_bootstrap": False})
+    agent_id = boot["agent"]["agent_id"]
+    ctx = establish_context(agent_id, "auth smoke", "write", "tmp-smoke-auth/file.txt")
     file_hash = call_tool("file_hash", {"resource": "tmp-smoke-auth/file.txt"})
     expect_error("propose_patch", {
-        "agent_id": "unregistered-agent",
+        "agent_id": agent_id,
         "target": "tmp-smoke-auth/file.txt",
         "base_hash": file_hash["hash"],
         "diff_text": "@@ -1,1 +1,1 @@\n-line1\n+line2\n",
+        **ctx,
     }, "claim required")
     shutil.rmtree(work, ignore_errors=True)
     clean_runtime()

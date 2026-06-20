@@ -29,6 +29,10 @@ def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     return outer
 
 
+def task_context_args(before: dict[str, Any]) -> dict[str, str]:
+    return {"task_id": before["task_id"], "context_token": before["context_token"]}
+
+
 def main() -> int:
     work = ROOT / "tmp-delete-resource-smoke"
     shutil.rmtree(work, ignore_errors=True)
@@ -49,33 +53,37 @@ def main() -> int:
         })
         if (first.get("must_call") or {}).get("tool") != "before_task":
             fail(f"workflow_next should require before_task first: {first}")
-        before = call_tool("before_task", {"agent_id": agent_id, "request": "delete smoke workflow file"})
+        before = call_tool("before_task", {"agent_id": agent_id, "request": "delete smoke workflow file", "intent": "delete", "resource": "tmp-delete-resource-smoke/delete-me.txt"})
+        ctx = task_context_args(before)
         second = call_tool("workflow_next", {
             "agent_id": agent_id,
             "request": "delete smoke workflow file",
             "intent": "delete",
             "resource": "tmp-delete-resource-smoke/delete-me.txt",
             "last_verdict": before["verdict"],
+            **ctx,
         })
         if (second.get("must_call") or {}).get("tool") != "scribe_query":
             fail(f"workflow_next should require scribe_query before delete claim: {second}")
-        scribe = call_tool("scribe_query", {"query": "delete smoke workflow file", "limit": 5})
+        scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": "delete smoke workflow file", "limit": 5})
         third = call_tool("workflow_next", {
             "agent_id": agent_id,
             "request": "delete smoke workflow file",
             "intent": "delete",
             "resource": "tmp-delete-resource-smoke/delete-me.txt",
             "last_verdict": scribe["verdict"],
+            **ctx,
         })
         if (third.get("must_call") or {}).get("tool") != "graphify_query":
             fail(f"workflow_next should require graphify_query before delete claim: {third}")
-        graphify = call_tool("graphify_query", {"query": "delete smoke workflow file", "resource": "tmp-delete-resource-smoke/delete-me.txt"})
+        graphify = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": "delete smoke workflow file", "resource": "tmp-delete-resource-smoke/delete-me.txt"})
         fourth = call_tool("workflow_next", {
             "agent_id": agent_id,
             "request": "delete smoke workflow file",
             "intent": "delete",
             "resource": "tmp-delete-resource-smoke/delete-me.txt",
             "last_verdict": graphify["verdict"],
+            **ctx,
         })
         if (fourth.get("must_call") or {}).get("tool") != "claim_resource":
             fail(f"workflow_next should route delete to claim after context: {fourth}")
@@ -88,12 +96,12 @@ def main() -> int:
         if h.get("verdict") != "FILE_HASH" or not h.get("exists"):
             fail(f"hash failed: {h}")
 
-        refused = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"]})
+        refused = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], **ctx})
         if refused.get("verdict") != "DELETE_CONFIRMATION_REQUIRED" or not target.exists():
             fail(f"delete without permission should be refused: {refused}")
 
         confirm = refused["required_confirmation"]
-        deleted = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], "confirm_phrase": confirm, "reason": "smoke confirmed deletion"})
+        deleted = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], "confirm_phrase": confirm, "reason": "smoke confirmed deletion", **ctx})
         if deleted.get("verdict") != "RESOURCE_DELETED" or target.exists():
             fail(f"confirmed deletion failed: {deleted}")
 
@@ -104,7 +112,7 @@ def main() -> int:
         record = call_tool("scribe_record", {"agent_id": agent_id, "request": "delete smoke workflow file", "summary": "delete resource smoke ok", "touched_resources": ["tmp-delete-resource-smoke/delete-me.txt"], "verdict": "CLAIM_RELEASED", "tags": ["smoke", "delete"]})
         if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
             fail(f"scribe_record failed after delete: {record}")
-        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok"})
+        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok", **ctx})
         if finished.get("verdict") != "TASK_FINISHED_OK":
             fail(f"finish failed: {finished}")
         print("DELETE_RESOURCE_SMOKE_OK")
