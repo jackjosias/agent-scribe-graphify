@@ -11,6 +11,14 @@ Il exécute le must_call retourné.
 Il rappelle workflow_next après chaque étape.
 ```
 
+Depuis la version MCP `0.2.3`, les écritures acceptées passent par le **write gate MCP** :
+
+```text
+file_hash → propose_patch → apply_patch
+```
+
+`before_edit` refuse les écritures directes du host. Cela ne remplace pas une sandbox OS, mais cela empêche un agent de finir proprement dans le protocole `.agent` en contournant le chemin MCP.
+
 ## Validation locale
 
 Depuis la racine du projet :
@@ -31,11 +39,12 @@ Ce smoke-test valide :
 - bootstrap MCP
 - workflow_next mécanique
 - before_task
-- claim_resource
+- claim_resource forcé en patch_queue pour écriture
+- before_edit refuse direct host edit
 - file_hash
 - propose_patch
+- apply_patch écrit réellement le fichier via MCP
 - finish_task refusé si patch pending
-- reject_patch
 - release_claim
 - finish_task OK
 - chemins dangereux refusés
@@ -109,12 +118,7 @@ Réponse attendue :
 {
   "verdict": "NEXT_ACTION_REQUIRED",
   "must_call": {
-    "tool": "bootstrap",
-    "args": {
-      "host_tool": "claude-code",
-      "model_name": "model-name",
-      "run_legacy_bootstrap": false
-    }
+    "tool": "bootstrap"
   }
 }
 ```
@@ -135,8 +139,7 @@ workflow_next
 → workflow_next
 → propose_patch
 → workflow_next
-→ list_patches si patch pending
-→ reject_patch ou confirm_patch_applied
+→ apply_patch
 → workflow_next
 → release_claim
 → workflow_next
@@ -150,13 +153,10 @@ Le LLM ne doit pas inventer ou sauter une étape.
 Ressources refusées :
 
 ```text
-../outside.txt
-/etc/passwd
-C:\Windows\win.ini
-C:/Windows/win.ini
-\\server\share\secret.txt
-symlink -> /etc/passwd
-symlink directory -> /tmp
+- traversal hors projet
+- chemins absolus système
+- chemins absolus Windows/UNC
+- symlinks qui sortent du projet
 ```
 
 Règles d'écriture :
@@ -164,9 +164,10 @@ Règles d'écriture :
 ```text
 - lecture libre
 - écriture = claim obligatoire
+- écriture acceptée = apply_patch obligatoire
 - patch = base_hash obligatoire
 - finish_task interdit avec patch pending/conflict
-- direct edit interdit sous claim patch_queue
+- before_edit refuse les écritures directes du host
 ```
 
 ## Debug manuel
@@ -187,6 +188,16 @@ Demander la prochaine étape :
 
 ```bash
 python3 .agent/mcp/server_entry.py --call workflow_next --args '{"request":"modifier README.md","intent":"write","resource":"README.md","host_tool":"manual","model_name":"test"}'
+```
+
+## Limite honnête
+
+`.agent` ne peut pas retirer au système d'exploitation les droits d'écriture déjà donnés à un processus externe du même utilisateur. Pour une prévention physique totale, il faudra une sandbox OS, un utilisateur séparé, un conteneur ou un wrapper qui ne donne pas d'outil d'écriture direct au host.
+
+Mais dans le protocole `.agent` V2.3, une modification acceptable doit passer par :
+
+```text
+workflow_next → file_hash → propose_patch → apply_patch
 ```
 
 ## Règle finale
