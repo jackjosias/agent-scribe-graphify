@@ -12,7 +12,7 @@ import server  # type: ignore
 from runtime import delete_ops, patch_queue  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 
-server.SERVER_VERSION = "0.2.5"
+server.SERVER_VERSION = "0.2.6"
 _BASE_WORKFLOW_NEXT = server.workflow_next
 _BASE_TOOL_SCHEMA = server.tool_schema
 _DELETE_INTENTS = {"delete", "remove"}
@@ -24,6 +24,7 @@ _RECORD_REQUIRED_VERDICTS = {*_WRITE_DONE_VERDICTS, "CLAIM_RELEASED"}
 _RECORD_DONE_VERDICTS = {"SCRIBE_RECORD_WRITTEN"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
 _GRAPHIFY_KEYWORDS = {"api", "architecture", "backend", "base de données", "bug", "code", "database", "db", "frontend", "migration", "module", "production", "refactor", "sécurité", "security", "test"}
+_DEBUG_KEYWORDS = {"bug", "debug", "erreur", "error", "fail", "failure", "fix", "regression", "refactor", "test"}
 
 
 def _last(last_verdict: str) -> str:
@@ -46,6 +47,23 @@ def _requires_scribe_record(intent: str, last_verdict: str) -> bool:
     return _last(last_verdict) in _RECORD_REQUIRED_VERDICTS or normalized in _WRITE_OR_DECISION_INTENTS
 
 
+def _targeted_scribe_query(request: str, intent: str, resource: str) -> str:
+    parts = [request.strip()]
+    if resource:
+        parts.append(f"resource:{resource}")
+    if intent:
+        parts.append(f"intent:{intent}")
+    text = _request_text(request, intent, resource)
+    if any(keyword in text for keyword in _DEBUG_KEYWORDS):
+        parts.append("scar regression decision ne_pas_reproposer root_cause")
+    return " ".join(part for part in parts if part).strip()
+
+
+def _targeted_graphify_query(request: str, intent: str, resource: str) -> str:
+    target = resource or request or intent or "current task"
+    return f"impact dependencies blast radius for {target}"
+
+
 def _context_gate(agent_id: str, request: str, intent: str, resource: str, last_verdict: str) -> Dict[str, Any] | None:
     last = _last(last_verdict)
     if not request:
@@ -62,16 +80,16 @@ def _context_gate(agent_id: str, request: str, intent: str, resource: str, last_
         return server._next_payload(
             state="SCRIBE_CONTEXT_REQUIRED",
             tool="scribe_query",
-            args={"query": request, "limit": 5},
-            reason="SCRIBE context is mandatory for every real user task before any action.",
+            args={"query": _targeted_scribe_query(request, intent, resource), "limit": 5},
+            reason="Targeted SCRIBE RAG query is required, not full memory read.",
             forbidden=["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
         )
     if last in _SCRIBE_VERDICTS and _requires_graphify(request, intent, resource):
         return server._next_payload(
             state="GRAPHIFY_CONTEXT_REQUIRED",
             tool="graphify_query",
-            args={"query": request, "resource": resource or ""},
-            reason="Graphify context is mandatory for code, architecture, refactor, bug, API, test, security, database, migration or production tasks.",
+            args={"query": _targeted_graphify_query(request, intent, resource), "resource": resource or ""},
+            reason="Targeted Graphify impact query is required.",
             forbidden=["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
         )
     return None
@@ -81,17 +99,43 @@ def delete_resource(agent_id: str, resource: str, base_hash: str, confirm_phrase
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
-def scribe_record(agent_id: str = "", request: str = "", summary: str = "", touched_resources: List[str] | None = None, verdict: str = "", tags: List[str] | None = None) -> Dict[str, Any]:
+def scribe_record(
+    agent_id: str = "",
+    request: str = "",
+    summary: str = "",
+    touched_resources: List[str] | None = None,
+    verdict: str = "",
+    tags: List[str] | None = None,
+    record_type: str = "task_summary",
+    severity: str = "medium",
+    evidence: str = "",
+    root_cause: str = "",
+    fix: str = "",
+    prevention: str = "",
+    related_errors: List[str] | None = None,
+    related_tests: List[str] | None = None,
+    resources: List[str] | None = None,
+) -> Dict[str, Any]:
     if not agent_id:
         raise server.ToolError("agent_id is required")
     now = int(time.time())
+    merged_resources = resources if resources is not None else touched_resources
     payload = {
         "timestamp": now,
         "agent_id": agent_id,
+        "record_type": record_type or "task_summary",
+        "severity": severity or "medium",
         "request": request or "",
         "summary": summary or "",
         "touched_resources": touched_resources or [],
+        "resources": merged_resources or [],
         "verdict": verdict or "",
+        "evidence": evidence or "",
+        "root_cause": root_cause or "",
+        "fix": fix or "",
+        "prevention": prevention or "",
+        "related_errors": related_errors or [],
+        "related_tests": related_tests or [],
         "tags": tags or [],
     }
     paths = prepare_state_dirs(server.ROOT)
@@ -162,8 +206,18 @@ def workflow_next(
             return server._next_payload(
                 state="SCRIBE_RECORD_REQUIRED",
                 tool="scribe_record",
-                args={"agent_id": agent_id, "request": request or "task completed", "summary": "record task outcome before finish", "touched_resources": [resource] if resource else [], "verdict": last or "READY_TO_FINISH", "tags": ["workflow_next"]},
-                reason="Memory engraving is mandatory before finish_task after writes, deletions, tests, refactors or important decisions.",
+                args={
+                    "agent_id": agent_id,
+                    "request": request or "task completed",
+                    "summary": "record useful task outcome before finish",
+                    "touched_resources": [resource] if resource else [],
+                    "resources": [resource] if resource else [],
+                    "verdict": last or "READY_TO_FINISH",
+                    "record_type": "task_summary",
+                    "severity": "medium",
+                    "tags": ["workflow_next"],
+                },
+                reason="Typed memory recording is required before finish_task when useful: writes, deletions, tests, refactors, decisions, scars, debt or conflicts.",
                 forbidden=["finish_task", "direct_file_edit"],
             )
 
@@ -255,6 +309,15 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "touched_resources": {"type": "array", "items": {"type": "string"}},
                 "verdict": {"type": "string"},
                 "tags": {"type": "array", "items": {"type": "string"}},
+                "record_type": {"type": "string"},
+                "severity": {"type": "string"},
+                "evidence": {"type": "string"},
+                "root_cause": {"type": "string"},
+                "fix": {"type": "string"},
+                "prevention": {"type": "string"},
+                "related_errors": {"type": "array", "items": {"type": "string"}},
+                "related_tests": {"type": "array", "items": {"type": "string"}},
+                "resources": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["agent_id", "request", "summary", "touched_resources", "verdict"],
             "additionalProperties": False,

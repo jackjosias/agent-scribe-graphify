@@ -40,14 +40,14 @@ Tu n'as pas le droit d'inventer un résultat de tool.
 
 ## Boucle contexte obligatoire
 
-`workflow_next` peut imposer `scribe_query` après `before_task`. Le host doit exécuter ce tool sans l'ignorer.
+`workflow_next` peut imposer `scribe_query` après `before_task`. C'est une requête RAG ciblée et minimale, jamais une lecture complète de SCRIBE par défaut. Le host doit exécuter ce tool sans l'ignorer.
 
-`workflow_next` peut ensuite imposer `graphify_query` pour les tâches liées au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production. Le host doit exécuter ce tool avant claim, hash, patch ou suppression.
+`workflow_next` peut ensuite imposer `graphify_query` pour les tâches liées au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production. C'est une requête ciblée structure/impact/blast-radius, pas une lecture brute totale de Graphify.
 
 Chemin contexte minimal :
 
 ```text
-before_task → scribe_query → graphify_query si code/architecture → action
+before_task → targeted_scribe_query → targeted_graphify_query si code/architecture → action
 ```
 
 Le host ne décide pas seul quand SCRIBE ou Graphify sont utiles : il suit `workflow_next`.
@@ -151,7 +151,7 @@ Le host ne doit pas écrire directement dans `.agent/state/scribe-out/`. La seul
 scribe_record
 ```
 
-`scribe_record` écrit une note structurée dans `.agent/state/scribe-out/records/`.
+`scribe_record` écrit une note structurée dans `.agent/state/scribe-out/records/`. Il sert aussi aux cicatrices, patterns, erreurs, décisions, dettes, invariants, conflits et approches interdites, pas seulement aux fins de tâche.
 
 ## Fin de tâche
 

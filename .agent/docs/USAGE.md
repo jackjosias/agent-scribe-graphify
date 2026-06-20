@@ -143,14 +143,14 @@ Après avoir exécuté `must_call`, le LLM doit rappeler `workflow_next` avec `a
 Avant toute lecture ou écriture significative, `workflow_next` impose le contexte :
 
 ```text
-before_task → scribe_query → graphify_query si code/architecture → action
+before_task → targeted_scribe_query → targeted_graphify_query si code/architecture → action
 ```
 
-`scribe_query` est obligatoire pour toute vraie demande utilisateur. `graphify_query` est obligatoire dès que la tâche touche au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production.
+`scribe_query` est une requête RAG ciblée et minimale. SCRIBE n'est jamais lu entièrement par défaut. `graphify_query` est une requête ciblée structure/impact/blast-radius dès que la tâche touche au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production.
 
 ## Gravure mémoire
 
-`scribe_record` écrit une note structurée de fin de tâche ou de décision dans :
+`scribe_record` écrit une note structurée de fin de tâche, cicatrice, pattern, erreur, décision, dette, invariant, conflit ou approche interdite dans :
 
 ```text
 .agent/state/scribe-out/records/

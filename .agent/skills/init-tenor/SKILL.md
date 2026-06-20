@@ -39,7 +39,7 @@ Ce protocole définit :
 * la boucle d'écriture via `apply_patch`
 * la boucle de suppression via `delete_resource`
 * les règles multi-agent avec `claim_resource`
-* le protocole V2 exige que `workflow_next` pilote aussi SCRIBE, Graphify et `scribe_record`; le host ne décide pas seul quand les appeler
+* le protocole V2 exige que `workflow_next` pilote aussi SCRIBE ciblé, Graphify ciblé impact/structure et `scribe_record` typé; le host ne décide pas seul quand les appeler
 
 L'utilisateur ne doit pas recopier un long prompt. Cette ligne suffit :
 

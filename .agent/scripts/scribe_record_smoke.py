@@ -43,8 +43,17 @@ def main() -> int:
         "request": "record smoke request",
         "summary": "record smoke summary",
         "touched_resources": ["README.md"],
+        "resources": ["README.md"],
         "verdict": "SMOKE_VERDICT",
-        "tags": ["smoke", "scribe_record"],
+        "record_type": "scar",
+        "severity": "high",
+        "evidence": "typed smoke evidence",
+        "root_cause": "typed memory fields were not previously covered",
+        "fix": "extend scribe_record payload",
+        "prevention": "keep typed smoke coverage",
+        "related_errors": ["SMOKE_TYPED_RECORD"],
+        "related_tests": [".agent/scripts/scribe_record_smoke.py"],
+        "tags": ["smoke", "scribe_record", "scar"],
     })
     if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
         fail(f"scribe_record did not write: {record}")
@@ -54,6 +63,10 @@ def main() -> int:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("agent_id") != agent_id or payload.get("verdict") != "SMOKE_VERDICT":
         fail(f"record payload invalid: {payload}")
+    if payload.get("record_type") != "scar" or payload.get("severity") != "high":
+        fail(f"typed record fields invalid: {payload}")
+    if payload.get("root_cause") != "typed memory fields were not previously covered" or payload.get("prevention") != "keep typed smoke coverage":
+        fail(f"scar details invalid: {payload}")
     print("SCRIBE_RECORD_SMOKE_OK")
     return 0
 

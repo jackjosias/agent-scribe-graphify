@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/branch-v2-blue" alt="Branch v2">
-  <img src="https://img.shields.io/badge/MCP-v0.2.5-purple" alt="MCP v0.2.4">
+  <img src="https://img.shields.io/badge/MCP-v0.2.6-purple" alt="MCP v0.2.4">
   <img src="https://img.shields.io/badge/status-smoke%20tested-brightgreen" alt="Smoke tested">
   <img src="https://img.shields.io/badge/python-3.10%2B-blue?logo=python" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/write--gate-apply__patch-success" alt="MCP write gate">
@@ -183,10 +183,10 @@ workflow_next → before_task → scribe_query → graphify_query si code → cl
 Depuis V2.5, `workflow_next` impose aussi le contexte avant action :
 
 ```text
-before_task → scribe_query → graphify_query si code/architecture → action
+before_task → targeted_scribe_query → targeted_graphify_query si code/architecture → action
 ```
 
-Après une écriture, suppression, correction, refactor, test ou décision importante, `workflow_next` impose `scribe_record` avant `finish_task`. `scribe_record` écrit uniquement sous `.agent/state/scribe-out/records/`.
+SCRIBE n'est jamais lu entièrement par défaut : `workflow_next` construit une requête RAG ciblée avec demande, intention, ressource et termes de cicatrice quand nécessaire. Graphify est interrogé pour impact/structure/blast-radius, pas en lecture brute totale. Après une écriture, suppression, correction, refactor, test, cicatrice, dette, conflit ou décision importante, `workflow_next` impose `scribe_record` typé avant `finish_task`. `scribe_record` écrit uniquement sous `.agent/state/scribe-out/records/`.
 
 `delete_resource` exige une confirmation exacte fournie par l'utilisateur :
 

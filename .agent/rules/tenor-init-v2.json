@@ -64,8 +64,8 @@
     "read_or_research": [
       "workflow_next",
       "before_task",
-      "scribe_query",
-      "graphify_query_when_code_or_architecture",
+      "targeted_scribe_query",
+      "targeted_graphify_query_when_code_or_architecture",
       "host_synthesis",
       "scribe_record_when_decision_or_summary_is_valuable",
       "finish_task"
@@ -73,8 +73,8 @@
     "write": [
       "workflow_next",
       "before_task",
-      "scribe_query",
-      "graphify_query_when_code_or_architecture",
+      "targeted_scribe_query",
+      "targeted_graphify_query_when_code_or_architecture",
       "claim_resource",
       "file_hash",
       "propose_patch",
@@ -83,15 +83,15 @@
       "workflow_next",
       "release_claim",
       "workflow_next",
-      "scribe_record",
+      "scribe_record_when_useful",
       "workflow_next",
       "finish_task"
     ],
     "delete": [
       "workflow_next",
       "before_task",
-      "scribe_query",
-      "graphify_query_when_code_or_architecture",
+      "targeted_scribe_query",
+      "targeted_graphify_query_when_code_or_architecture",
       "claim_resource",
       "file_hash",
       "ask_user_exact_confirmation",
@@ -99,7 +99,7 @@
       "workflow_next",
       "release_claim",
       "workflow_next",
-      "scribe_record",
+      "scribe_record_when_useful",
       "workflow_next",
       "finish_task"
     ]
@@ -113,5 +113,65 @@
     "same file requires claim or patch queue",
     "do not force conflicts",
     "do not finish with active claims or pending patches"
-  ]
+  ],
+  "memory_policy": {
+    "scribe_query_policy": {
+      "mode": "targeted_rag_only",
+      "never_full_read_by_default": true,
+      "default_limit": 5,
+      "query_must_include": [
+        "user_request",
+        "intent",
+        "resource_if_known"
+      ],
+      "add_error_terms_when_error": true,
+      "add_scar_terms_when_debugging": true
+    },
+    "graphify_query_policy": {
+      "mode": "targeted_structure_or_impact_only",
+      "trigger_when": [
+        "code",
+        "architecture",
+        "bug",
+        "refactor",
+        "test",
+        "api",
+        "database",
+        "migration",
+        "security",
+        "production",
+        "multi_file_change"
+      ],
+      "query_must_include": [
+        "resource_if_known",
+        "impact_or_dependency_question"
+      ]
+    },
+    "scribe_record_policy": {
+      "not_only_after_task": true,
+      "record_when": [
+        "write_applied",
+        "delete_applied",
+        "important_decision",
+        "root_cause_found",
+        "error_pattern_found",
+        "regression_prevented",
+        "test_added_for_bug",
+        "debt_created",
+        "conflict_detected",
+        "forbidden_approach_discovered"
+      ],
+      "record_types": [
+        "task_summary",
+        "scar",
+        "pattern",
+        "decision",
+        "regression",
+        "debt",
+        "invariant",
+        "conflict",
+        "forbidden_approach"
+      ]
+    }
+  }
 }
