@@ -66,7 +66,8 @@ def smoke_nominal_workflow() -> None:
     work = ROOT / "tmp-smoke-workflow"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    (work / "file.txt").write_text("line1\n", encoding="utf-8")
+    target = work / "file.txt"
+    target.write_text("line1\n", encoding="utf-8")
 
     expect_next_tool({
         "request": "modify smoke workflow file",
@@ -100,10 +101,14 @@ def smoke_nominal_workflow() -> None:
         "last_verdict": "BEFORE_TASK_OK",
     }, "claim_resource")
 
-    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "patch_queue", "ttl_seconds": 600})
-    if claim.get("verdict") != "CLAIM_GRANTED":
-        fail(f"claim failed: {claim}")
+    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600})
+    if claim.get("verdict") != "CLAIM_GRANTED" or claim.get("mode") != "patch_queue":
+        fail(f"claim should be granted as patch_queue write-gate: {claim}")
     claim_id = claim["claim_id"]
+
+    direct = call_tool("before_edit", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt"})
+    if direct.get("verdict") != "DIRECT_EDIT_REFUSED_MCP_WRITE_GATE":
+        fail(f"before_edit should refuse direct host writes: {direct}")
 
     expect_next_tool({
         "agent_id": agent_id,
@@ -136,31 +141,33 @@ def smoke_nominal_workflow() -> None:
         fail(f"patch failed: {patch}")
     patch_id = patch["patch_id"]
 
-    listed = call_tool("list_patches", {"target": "tmp-smoke-workflow/file.txt", "status": "proposed"})
-    if listed.get("status") != "PATCHES_LISTED" or listed.get("count") != 1:
-        fail(f"list failed: {listed}")
-
-    next_finish_blocked = expect_next_tool({
+    next_apply = expect_next_tool({
         "agent_id": agent_id,
-        "intent": "finish",
+        "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": "PATCH_PROPOSED",
-    }, "list_patches")
-    if "finish_task" not in next_finish_blocked.get("forbidden", []):
-        fail(f"workflow_next must forbid finish_task while patch pending: {next_finish_blocked}")
+    }, "apply_patch")
+    if "direct_file_edit" not in next_apply.get("forbidden", []):
+        fail(f"workflow_next must forbid direct writes before apply_patch: {next_apply}")
 
     finish_pending = call_tool("finish_task", {"agent_id": agent_id, "summary": "should be refused"})
     if finish_pending.get("verdict") != "FINISH_REFUSED_PENDING_PATCHES":
-        fail(f"finish should be refused: {finish_pending}")
+        fail(f"finish should be refused before apply_patch: {finish_pending}")
 
-    rejected = call_tool("reject_patch", {"agent_id": agent_id, "patch_id": patch_id, "reason": "smoke cleanup"})
-    if rejected.get("verdict") != "PATCH_REJECTED":
-        fail(f"reject failed: {rejected}")
+    applied = call_tool("apply_patch", {"agent_id": agent_id, "patch_id": patch_id})
+    if applied.get("verdict") != "PATCH_APPLIED":
+        fail(f"apply_patch failed: {applied}")
+    if target.read_text(encoding="utf-8") != "line2\n":
+        fail("apply_patch did not modify the target file through MCP")
+
+    applied_list = call_tool("list_patches", {"target": "tmp-smoke-workflow/file.txt", "status": "applied"})
+    if applied_list.get("status") != "PATCHES_LISTED" or applied_list.get("count") != 1:
+        fail(f"applied patch should be listed: {applied_list}")
 
     expect_next_tool({
         "agent_id": agent_id,
         "intent": "finish",
-        "last_verdict": "PATCH_REJECTED",
+        "last_verdict": "PATCH_APPLIED",
     }, "release_claim")
 
     released = call_tool("release_claim", {"agent_id": agent_id, "claim_id": claim_id, "summary": "smoke cleanup"})
