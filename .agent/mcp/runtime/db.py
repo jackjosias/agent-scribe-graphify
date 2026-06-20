@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -14,6 +15,9 @@ try:
     from .state_paths import prepare_state_dirs, project_root_from
 except Exception:
     from state_paths import prepare_state_dirs, project_root_from  # type: ignore
+
+
+WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:/")
 
 
 class CoordinationError(RuntimeError):
@@ -162,7 +166,13 @@ def normalize_resource(resource: str) -> str:
     if not resource or not isinstance(resource, str):
         raise CoordinationError("resource is required")
     value = resource.strip().replace("\\", "/")
-    if not value or value.startswith("/") or ".." in Path(value).parts:
+    if (
+        not value
+        or value.startswith("/")
+        or value.startswith("//")
+        or WINDOWS_ABS_RE.match(value)
+        or ".." in Path(value).parts
+    ):
         raise CoordinationError("resource must be a safe project-relative path or semantic name")
     return value
 

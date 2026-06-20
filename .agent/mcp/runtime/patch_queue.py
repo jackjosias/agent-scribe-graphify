@@ -17,6 +17,7 @@ except Exception:
 NEW_FILE_HASH = "__new_file__"
 HUNK_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 MAX_DIFF_BYTES = 2_000_000
+WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:/")
 
 class PatchQueueError(RuntimeError):
     pass
@@ -73,6 +74,8 @@ def safe_resource(resource: str) -> str:
     if not isinstance(resource, str) or not resource.strip():
         raise PatchQueueError("resource is required")
     value = resource.strip().replace("\\", "/")
+    if value.startswith("//") or WINDOWS_ABS_RE.match(value):
+        raise PatchQueueError("absolute resource escapes project root")
     path = Path(value)
     if path.is_absolute():
         try:
