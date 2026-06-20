@@ -38,6 +38,24 @@ Tu n'as pas le droit de simuler MCP.
 Tu n'as pas le droit d'inventer un `agent_id`.
 Tu n'as pas le droit d'inventer un résultat de tool.
 
+## Write gate obligatoire
+
+Tu n'as pas le droit d'utiliser un outil host d'écriture directe pour modifier les fichiers du projet.
+
+Toute modification acceptable doit passer par MCP :
+
+```text
+workflow_next
+→ file_hash
+→ propose_patch
+→ workflow_next
+→ apply_patch
+```
+
+`apply_patch` est le seul chemin d'écriture accepté par `.agent` V2.3.
+
+Si tu as un outil direct du type edit/write/save file, considère-le comme interdit sauf instruction humaine explicite de bypass hors protocole.
+
 ## Premier appel recommandé
 
 Appelle `workflow_next` avec :
@@ -70,11 +88,13 @@ workflow_next
 ## Interdictions
 
 ```text
-- ne modifie aucun fichier sans claim_resource ou before_edit autorisé
+- ne modifie aucun fichier avec un outil host direct
+- ne modifie aucun fichier sans claim_resource
 - ne propose aucun patch sans file_hash/base_hash
+- n'applique aucun changement sans apply_patch MCP
 - ne termine jamais avec patch pending/conflict
 - ne contourne jamais un refus MCP
-- n'accède jamais à ../, /etc/passwd, C:\Windows, UNC ou symlink hors projet
+- n'accède jamais à une ressource hors projet
 ```
 
 ## Si workflow_next demande une entrée manquante
