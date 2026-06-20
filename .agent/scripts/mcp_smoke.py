@@ -53,6 +53,14 @@ def expect_error(name: str, args: dict[str, Any], expected: str) -> None:
         fail(f"{name} expected error containing {expected!r}, got {result}")
 
 
+def expect_next_tool(args: dict[str, Any], expected_tool: str) -> dict[str, Any]:
+    result = call_tool("workflow_next", args)
+    actual = (result.get("must_call") or {}).get("tool")
+    if result.get("verdict") != "NEXT_ACTION_REQUIRED" or actual != expected_tool:
+        fail(f"workflow_next expected {expected_tool!r}, got {result}")
+    return result
+
+
 def smoke_nominal_workflow() -> None:
     clean_runtime()
     work = ROOT / "tmp-smoke-workflow"
@@ -60,19 +68,63 @@ def smoke_nominal_workflow() -> None:
     work.mkdir(parents=True)
     (work / "file.txt").write_text("line1\n", encoding="utf-8")
 
+    expect_next_tool({
+        "request": "modify smoke workflow file",
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "host_tool": "mcp-smoke",
+        "model_name": "test",
+    }, "bootstrap")
+
     boot = call_tool("bootstrap", {"host_tool": "mcp-smoke", "model_name": "test", "run_legacy_bootstrap": False})
     if boot.get("verdict") != "BOOT_OK_MCP":
         fail(f"bootstrap failed: {boot}")
     agent_id = boot["agent"]["agent_id"]
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "request": "modify smoke workflow file",
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+    }, "before_task")
+
+    before = call_tool("before_task", {"agent_id": agent_id, "request": "modify smoke workflow file"})
+    if before.get("verdict") != "BEFORE_TASK_OK":
+        fail(f"before_task failed: {before}")
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "request": "modify smoke workflow file",
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "last_verdict": "BEFORE_TASK_OK",
+    }, "claim_resource")
 
     claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "patch_queue", "ttl_seconds": 600})
     if claim.get("verdict") != "CLAIM_GRANTED":
         fail(f"claim failed: {claim}")
     claim_id = claim["claim_id"]
 
+    expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "last_verdict": "CLAIM_GRANTED",
+    }, "file_hash")
+
     file_hash = call_tool("file_hash", {"resource": "tmp-smoke-workflow/file.txt"})
     if file_hash.get("verdict") != "FILE_HASH" or not file_hash.get("exists"):
         fail(f"file_hash failed: {file_hash}")
+
+    next_patch = expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "write",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "base_hash": file_hash["hash"],
+        "last_verdict": "FILE_HASH",
+    }, "propose_patch")
+    if "diff_text" not in next_patch.get("missing_inputs", []):
+        fail(f"workflow_next should require diff_text before propose_patch: {next_patch}")
 
     patch = call_tool("propose_patch", {
         "agent_id": agent_id,
@@ -88,6 +140,15 @@ def smoke_nominal_workflow() -> None:
     if listed.get("status") != "PATCHES_LISTED" or listed.get("count") != 1:
         fail(f"list failed: {listed}")
 
+    next_finish_blocked = expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "finish",
+        "resource": "tmp-smoke-workflow/file.txt",
+        "last_verdict": "PATCH_PROPOSED",
+    }, "list_patches")
+    if "finish_task" not in next_finish_blocked.get("forbidden", []):
+        fail(f"workflow_next must forbid finish_task while patch pending: {next_finish_blocked}")
+
     finish_pending = call_tool("finish_task", {"agent_id": agent_id, "summary": "should be refused"})
     if finish_pending.get("verdict") != "FINISH_REFUSED_PENDING_PATCHES":
         fail(f"finish should be refused: {finish_pending}")
@@ -96,9 +157,21 @@ def smoke_nominal_workflow() -> None:
     if rejected.get("verdict") != "PATCH_REJECTED":
         fail(f"reject failed: {rejected}")
 
+    expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "finish",
+        "last_verdict": "PATCH_REJECTED",
+    }, "release_claim")
+
     released = call_tool("release_claim", {"agent_id": agent_id, "claim_id": claim_id, "summary": "smoke cleanup"})
     if released.get("verdict") != "CLAIM_RELEASED":
         fail(f"release failed: {released}")
+
+    expect_next_tool({
+        "agent_id": agent_id,
+        "intent": "finish",
+        "last_verdict": "CLAIM_RELEASED",
+    }, "finish_task")
 
     finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished"})
     if finished.get("verdict") != "TASK_FINISHED_OK":
