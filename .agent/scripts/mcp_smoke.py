@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -12,7 +11,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
-STATE_RUNTIME = ROOT / ".agent" / "state" / "runtime"
 
 
 def fail(message: str) -> None:
@@ -42,7 +40,7 @@ def call_tool(name: str, args: dict[str, Any], entry: Path = ENTRY, cwd: Path | 
             fail(f"{name} exited {proc.returncode}\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
     try:
         outer = json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
+    except json.JSONDecodeError:
         fail(f"{name} returned non-json stdout: {proc.stdout!r}")
     if "content" in outer:
         return json.loads(outer["content"][0]["text"])
@@ -60,8 +58,7 @@ def smoke_nominal_workflow() -> None:
     work = ROOT / "tmp-smoke-workflow"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
-    target = work / "file.txt"
-    target.write_text("line1\n", encoding="utf-8")
+    (work / "file.txt").write_text("line1\n", encoding="utf-8")
 
     boot = call_tool("bootstrap", {"host_tool": "mcp-smoke", "model_name": "test", "run_legacy_bootstrap": False})
     if boot.get("verdict") != "BOOT_OK_MCP":
@@ -163,7 +160,14 @@ def smoke_portable_copy() -> None:
     with tempfile.TemporaryDirectory(prefix="Agent Portable Project With Spaces ") as tmp:
         new_root = Path(tmp)
         new_agent = new_root / ".agent"
-        shutil.copytree(ROOT / ".agent", new_agent, ignore=shutil.ignore_patterns("state", "runtime", "scribe-out", "graphify-out", "__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / ".agent", new_agent, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+        for generated in ("state", "runtime", "scribe-out", "graphify-out"):
+            shutil.rmtree(new_agent / generated, ignore_errors=True)
+
+        if not (new_agent / "mcp" / "runtime" / "db.py").is_file():
+            fail("portable copy lost source module .agent/mcp/runtime/db.py")
+
         entry = new_agent / "mcp" / "server_entry.py"
         boot = call_tool("bootstrap", {"host_tool": "portable-copy-smoke", "model_name": "test", "run_legacy_bootstrap": False}, entry=entry, cwd=tempfile.gettempdir())
         if boot.get("verdict") != "BOOT_OK_MCP":
