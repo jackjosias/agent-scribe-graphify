@@ -43,6 +43,19 @@ def ensure_schema() -> None:
     with connect() as con:
         con.executescript(
             """
+            CREATE TABLE IF NOT EXISTS claims(
+              claim_id TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              resource TEXT NOT NULL,
+              mode TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              base_hash TEXT,
+              created_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL,
+              released_at INTEGER,
+              summary TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_claims_resource ON claims(resource,status,expires_at);
             CREATE TABLE IF NOT EXISTS patches_v2(
               patch_id TEXT PRIMARY KEY,
               agent_id TEXT NOT NULL,
@@ -155,7 +168,10 @@ def overlaps(left: list[dict[str, int]], right: list[dict[str, int]]) -> bool:
     return False
 
 def require_claim(con: sqlite3.Connection, agent_id: str, resource: str) -> None:
-    rows = con.execute("SELECT mode FROM claims WHERE agent_id=? AND resource=? AND status='active'", (agent_id, resource)).fetchall()
+    rows = con.execute(
+        "SELECT mode FROM claims WHERE agent_id=? AND resource=? AND status='active' AND expires_at>=?",
+        (agent_id, resource, now_ts()),
+    ).fetchall()
     modes = {row["mode"] for row in rows}
     if not modes.intersection({"write", "exclusive", "patch_queue"}):
         raise PatchQueueError("write/exclusive/patch_queue claim required before proposing a patch")
