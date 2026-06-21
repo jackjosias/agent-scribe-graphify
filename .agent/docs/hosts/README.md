@@ -10,6 +10,8 @@ Commande MCP `.agent` standard pour les hosts STDIO:
 python3 .agent/mcp/server_entry.py
 ```
 
+Note critique: un serveur MCP local listable avec `python3 .agent/mcp/server_entry.py --list-tools` ne signifie pas que les tools MCP sont visibles au LLM host. Il faut verifier separement que le host expose directement `workflow_next`, `before_task`, `scribe_query`, `graphify_query`, `propose_patch`, `apply_patch`, `delete_resource` et `finish_task` au modele.
+
 Tools MCP critiques a valider dans chaque host:
 
 - `workflow_next`

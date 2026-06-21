@@ -32,9 +32,19 @@
     "delete_resource",
     "scribe_query",
     "graphify_query",
-    "scribe_record"
+    "scribe_record",
+    "before_task",
+    "propose_patch",
+    "finish_task"
   ],
   "report_fields": [
+    "Init status",
+    "Verdict host",
+    "Direct shell/write/edit",
+    "Host guide lu",
+    "MCP tools visibles au LLM",
+    "MCP local server",
+    "Host détecté",
     "MCP disponible",
     "Tools visibles",
     "Agent ID MCP",
@@ -173,5 +183,87 @@
         "forbidden_approach"
       ]
     }
+  },
+  "host_mcp_preflight": {
+    "must_run_before_tenor_init": true,
+    "host_detection_values": [
+      "Codex CLI",
+      "OpenCode",
+      "Claude Code",
+      "VS Code / Copilot",
+      "Cursor",
+      "Cline",
+      "Kilo Code",
+      "Roo Code",
+      "Windsurf",
+      "autre / unknown"
+    ],
+    "local_server_check": {
+      "command": "python3 .agent/mcp/server_entry.py --list-tools",
+      "meaning": "proves only that the local MCP server exists and can list its tools",
+      "does_not_prove": "tools are visible to the LLM host interface"
+    },
+    "llm_visible_required_tools": [
+      "workflow_next",
+      "before_task",
+      "scribe_query",
+      "graphify_query",
+      "propose_patch",
+      "apply_patch",
+      "delete_resource",
+      "finish_task"
+    ],
+    "do_not_confuse_states": [
+      "server_entry.py --list-tools OK means MCP local server OK only",
+      "MCP tools visibles au LLM host must be verified in the host tool interface separately"
+    ],
+    "when_tools_not_visible": {
+      "status": "HOST_MCP_UNBOUND",
+      "verdict_host": "UNSAFE",
+      "must_read": [
+        ".agent/docs/hosts/AGENT_MCP_INSTALL_MATRIX.md",
+        ".agent/docs/hosts/<HOST>_MCP.md"
+      ],
+      "must_ask_user_permission_to_configure_mcp": true,
+      "must_warn_restart_required": true,
+      "forbidden_claims": [
+        "TENOR INIT terminé",
+        "INIT_CONFORME"
+      ],
+      "project_writes_allowed": "only with explicit user order"
+    },
+    "filesystem_bootstrap_despite_unsafe_host": {
+      "allowed_only_if_user_explicitly_requests": true,
+      "final_status": "FILESYSTEM_INIT_OK_MCP_UNBOUND",
+      "forbidden_claims": [
+        "TENOR INIT terminé",
+        "INIT_CONFORME"
+      ]
+    },
+    "when_tools_visible": {
+      "continue_normal_init": true,
+      "run_command": ".agent/workflow/scribe/scribe tenor-init --type cli",
+      "copy_raw_output": true,
+      "required_output_fields": [
+        "Agent session",
+        "Whoami proof",
+        "Workflow ack",
+        "Status init"
+      ]
+    },
+    "final_report_fields": [
+      "Host détecté",
+      "MCP local server",
+      "MCP tools visibles au LLM",
+      "Host guide lu",
+      "Direct shell/write/edit",
+      "Verdict host",
+      "Init status"
+    ],
+    "init_status_values": [
+      "INIT_CONFORME",
+      "FILESYSTEM_INIT_OK_MCP_UNBOUND",
+      "INIT_BLOCKED_HOST_MCP_UNBOUND"
+    ]
   }
 }

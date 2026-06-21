@@ -64,6 +64,112 @@ réparation portable. Elle initialise ou vérifie le SCRIBE projet, `.agent/stat
 `.agent/rules/scribe.md`, le bloc `AGENTS.md`, `.graphifyignore` et les
 surfaces portables attendues.
 
+## 🔴 HOST MCP PREFLIGHT — AVANT TENOR-INIT
+
+Avant de lancer `tenor-init`, l'agent doit vérifier le host courant. Une init
+filesystem par shell direct n'est pas une init MCP conforme. Le serveur local
+peut exister sans que ses tools soient visibles dans l'interface LLM du host.
+
+### 1. Identifier le host
+
+Classer l'environnement courant dans une seule catégorie :
+
+* Codex CLI
+* OpenCode
+* Claude Code
+* VS Code / Copilot
+* Cursor
+* Cline
+* Kilo Code
+* Roo Code
+* Windsurf
+* autre / unknown
+
+### 2. Vérifier deux états séparés
+
+**MCP local server** : vérifier que le serveur local existe avec :
+
+```bash
+python3 .agent/mcp/server_entry.py --list-tools
+```
+
+Cette commande prouve seulement que `.agent/mcp/server_entry.py` fonctionne.
+Elle ne prouve PAS que les tools MCP `.agent` sont exposés au LLM host.
+
+**MCP tools visibles au LLM host** : vérifier dans l'interface réelle du host
+que ces tools sont directement appelables par le modèle :
+
+```text
+workflow_next
+before_task
+scribe_query
+graphify_query
+propose_patch
+apply_patch
+delete_resource
+finish_task
+```
+
+Ne jamais confondre ces deux états. `server_entry.py --list-tools` OK signifie
+`MCP local server: OK`, pas `MCP tools visibles au LLM: YES`.
+
+### 3. Si les tools MCP `.agent` ne sont pas visibles au LLM host
+
+STOP avant de déclarer l'init conforme. L'agent doit :
+
+1. Lire `.agent/docs/hosts/AGENT_MCP_INSTALL_MATRIX.md`.
+2. Lire la fiche host correspondante dans `.agent/docs/hosts/`.
+3. Afficher `HOST_MCP_UNBOUND`.
+4. Afficher `Verdict host: UNSAFE`.
+5. Demander permission à l'utilisateur pour configurer le MCP dans le host.
+6. Dire explicitement qu'un redémarrage du host peut être nécessaire.
+7. Ne pas déclarer `TENOR INIT terminé`.
+8. Ne pas autoriser les écritures projet sauf ordre explicite.
+
+Si l'utilisateur demande explicitement un bootstrap filesystem malgré host UNSAFE,
+l'agent peut lancer `tenor-init`, mais le statut final doit être :
+
+```text
+FILESYSTEM_INIT_OK_MCP_UNBOUND
+```
+
+Il est interdit d'afficher `INIT CONFORME` ou `TENOR INIT terminé` sans préciser
+que le MCP `.agent` n'est pas lié au host.
+
+### 4. Si les tools MCP `.agent` sont visibles au LLM host
+
+Continuer l'init normale :
+
+```bash
+.agent/workflow/scribe/scribe tenor-init --type cli
+```
+
+Copier la sortie brute complète et vérifier les 4 champs :
+
+```text
+Agent session
+Whoami proof
+Workflow ack
+Status init
+```
+
+### 5. Bloc final obligatoire
+
+Toute réponse d'init doit inclure ces champs avec des valeurs réelles :
+
+```text
+Host détecté: Codex CLI / OpenCode / Claude Code / VS Code / Cursor / Cline / Kilo Code / Roo Code / Windsurf / autre / unknown
+MCP local server: OK / FAIL
+MCP tools visibles au LLM: YES / NO
+Host guide lu: .agent/docs/hosts/<FICHE>.md / N/A
+Direct shell/write/edit: YES / NO / UNKNOWN
+Verdict host: SAFE / ACCEPTABLE / UNSAFE / UNKNOWN
+Init status: INIT_CONFORME / FILESYSTEM_INIT_OK_MCP_UNBOUND / INIT_BLOCKED_HOST_MCP_UNBOUND
+```
+
+`INIT_CONFORME` est autorisé uniquement si les tools MCP `.agent` sont visibles
+au LLM host et si `tenor-init` valide les champs machine requis.
+
 ## 🔴 CHEMIN OBLIGATOIRE POUR PETITS MODÈLES
 
 Si tu es un petit modèle, un modèle rapide, un agent avec contexte limité, ou
