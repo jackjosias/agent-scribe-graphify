@@ -6,7 +6,7 @@ import json
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as pool_wait
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
@@ -512,6 +512,9 @@ def installation_required(host_tool: str = "unknown") -> Dict[str, Any]:
     })
 
 
+PER_FILE_TIMEOUT = 15
+
+
 def batch_file_hash(resources: List[str] | None = None, max_workers: int = 4) -> Dict[str, Any]:
     if not resources:
         return ok({"verdict": "BATCH_FILE_HASH", "count": 0, "results": [], "errors": []})
@@ -521,24 +524,40 @@ def batch_file_hash(resources: List[str] | None = None, max_workers: int = 4) ->
     actual_workers = min(max(max_workers, 1), 8, count)
     results: list[Dict[str, Any]] = []
     errors: list[Dict[str, Any]] = []
+    resolved: list[str] = []
+    for res in resources:
+        if not isinstance(res, str) or not res.strip():
+            errors.append({"resource": str(res), "error": "invalid resource path"})
+            continue
+        resolved.append(res.strip())
     with ThreadPoolExecutor(max_workers=actual_workers) as pool:
-        fut_map: dict[Any, str] = {}
-        for res in resources:
-            if not isinstance(res, str) or not res.strip():
-                errors.append({"resource": str(res), "error": "invalid resource path"})
-                continue
-            safe = res.strip()
-            fut = pool.submit(patch_queue.file_hash, safe)
-            fut_map[fut] = safe
-        for fut in as_completed(fut_map, timeout=30):
-            res_name = fut_map[fut]
-            try:
-                data = fut.result(timeout=10)
-                results.append({"resource": res_name, "verdict": "FILE_HASH", "exists": data.get("exists", False), "hash": data.get("hash", ""), "size_bytes": data.get("size_bytes", 0)})
-            except Exception as exc:
-                errors.append({"resource": res_name, "error": str(exc)})
+        fut_map: dict[Any, str] = {pool.submit(patch_queue.file_hash, rn): rn for rn in resolved}
+        timeout_seconds = max(PER_FILE_TIMEOUT, PER_FILE_TIMEOUT * len(resolved))
+        deadline = time.monotonic() + timeout_seconds
+        while fut_map:
+            remaining = max(0.0, deadline - time.monotonic())
+            done, not_done = pool_wait(fut_map.keys(), timeout=min(remaining, PER_FILE_TIMEOUT), return_when=FIRST_COMPLETED)
+            if not done:
+                for fut in not_done:
+                    res_name = fut_map[fut]
+                    fut.cancel()
+                    errors.append({"resource": res_name, "error": "timeout"})
+                fut_map.clear()
+                break
+            for fut in done:
+                res_name = fut_map.pop(fut)
+                try:
+                    exc = fut.exception(timeout=1)
+                    if exc:
+                        errors.append({"resource": res_name, "error": str(exc)})
+                    else:
+                        data = fut.result(timeout=1)
+                        results.append({"resource": res_name, "verdict": "FILE_HASH", "exists": data.get("exists", False), "hash": data.get("hash", ""), "size_bytes": data.get("size_bytes", 0)})
+                except Exception as exc:
+                    errors.append({"resource": res_name, "error": str(exc)})
+    verdict = "BATCH_FILE_HASH" if not errors else "BATCH_FILE_HASH_PARTIAL"
     results.sort(key=lambda r: r.get("resource", ""))
-    return ok({"verdict": "BATCH_FILE_HASH", "count": len(results), "results": results, "errors": errors})
+    return ok({"verdict": verdict, "count": len(results), "results": results, "errors": errors})
 
 
 TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
