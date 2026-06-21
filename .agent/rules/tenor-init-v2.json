@@ -317,6 +317,48 @@
       "must_not_guess_config": true
     }
   },
+  "direct_tool_neutralization": {
+    "applies_to_all_hosts": true,
+    "direct_shell_write_edit_yes_prevents_safe_verdict": true,
+    "status_values": {
+      "UNSAFE": "MCP absent or not visible, wrong root, or direct project writes are free",
+      "ACCEPTABLE": "MCP visible and root bound with MCP workflow used, but direct shell/write/edit paths remain accessible",
+      "SAFE_CANDIDATE": "MCP visible and root bound, native write/edit disabled or permission-gated, shell writes blocked, sandboxed, or permission-gated",
+      "SAFE": "MCP visible and root bound, with no project write path outside MCP or verified sandbox preventing direct writes"
+    },
+    "safe_requires": [
+      "MCP tools visible to LLM host",
+      "MCP root binding proven",
+      "native write/edit/apply_patch disabled or permission-gated",
+      "shell writes disabled, sandboxed, or permission-gated",
+      "dirty-write detector clean"
+    ],
+    "direct_write_vectors": [
+      "shell/bash direct",
+      "native host write/edit",
+      "native apply_patch outside MCP",
+      "shell redirections > and >>",
+      "tee writing project files",
+      "rm mv cp that mutate project files",
+      "sed -i and perl -pi",
+      "Python/Node/Bash scripts writing project files"
+    ],
+    "defense_layers": [
+      "host permissions deny or ask for native dangerous tools",
+      "project-local host config when supported",
+      "OS sandbox with project read-only outside MCP when possible",
+      "MCP workflow gate via propose_patch apply_patch delete_resource",
+      "dirty-write detector comparing git status file hashes and MCP patch logs",
+      "policy stop on bypass and ask user for rollback or explicit approval"
+    ],
+    "bypass_status": "DIRECT_WRITE_BYPASS_DETECTED",
+    "when_bypass_detected": [
+      "stop",
+      "report changed files",
+      "do not continue task",
+      "ask user for rollback or explicit approval"
+    ]
+  },
   "mcp_root_binding_check": {
     "applies_to_all_hosts": true,
     "mcp_visible_is_not_enough": true,

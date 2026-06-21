@@ -265,6 +265,42 @@ Pour corriger la configuration, rester générique : lire la fiche host
 correspondante et appliquer la stratégie de ce host. Ne pas inventer une
 configuration universelle.
 
+### 4B. DIRECT TOOL NEUTRALIZATION — VERS SAFE
+
+Tant que `Direct shell/write/edit: YES` existe sans permission stricte ni
+sandbox, le verdict ne peut pas être `SAFE`. Le meilleur statut autorisé est
+`ACCEPTABLE`, même si le MCP est visible et bound au bon projet.
+
+Statuts de sécurité :
+
+```text
+UNSAFE: MCP absent ou non visible, mauvais root, ou écritures directes libres.
+ACCEPTABLE: MCP visible + root bound + workflow MCP utilisé, mais shell/write/edit directs encore accessibles.
+SAFE_CANDIDATE: MCP visible + root bound, write/edit natifs désactivés ou en permission ask stricte, shell lecture autorisé mais écritures bloquées ou demandent approbation.
+SAFE: MCP visible + root bound, aucun chemin d’écriture projet hors MCP, ou sandbox vérifiée empêchant les écritures directes hors MCP.
+```
+
+Défense en couches :
+
+1. Host permissions: désactiver ou mettre en ask/deny les tools natifs
+   dangereux quand le host le permet.
+2. Project-local host config: chaque projet porte sa config host locale si le
+   host le supporte.
+3. OS sandbox: lancer le host dans un sandbox qui limite les écritures directes
+   quand c’est possible.
+4. MCP workflow gate: toute écriture légitime passe par
+   `propose_patch`, `apply_patch` ou `delete_resource`.
+5. Dirty-write detector: avant et après tâche, comparer `git status`, file
+   hashes et patch logs. Si un fichier change sans trace MCP, déclarer
+   `DIRECT_WRITE_BYPASS_DETECTED`.
+6. Policy: si bypass détecté, STOP, rapporter les fichiers touchés, demander
+   rollback ou validation utilisateur explicite.
+
+Les redirections shell (`>`, `>>`, `tee`), `sed -i`, `perl -pi`, scripts
+Python/Node/Bash qui écrivent, `rm`, `mv`, `cp`, apply_patch natif et
+write/edit natifs du host sont des chemins directs. Ils empêchent `SAFE` sauf
+s’ils sont bloqués, sandboxés, ou soumis à permission stricte vérifiée.
+
 ### 5. Si les tools MCP `.agent` sont visibles ET bound au projet courant
 
 Continuer l'init normale seulement avec le statut :
@@ -299,7 +335,7 @@ MCP tools visibles au LLM: YES / NO
 MCP root binding: MCP_BOUND_TO_CURRENT_PROJECT / MCP_WRONG_ROOT / N/A
 Host guide lu: .agent/docs/hosts/<FICHE>.md / N/A
 Direct shell/write/edit: YES / NO / UNKNOWN
-Verdict host: SAFE / ACCEPTABLE / UNSAFE / UNKNOWN
+Verdict host: SAFE / SAFE_CANDIDATE / ACCEPTABLE / UNSAFE / UNKNOWN
 Init status: INIT_CONFORME / FILESYSTEM_INIT_OK_MCP_UNBOUND / INIT_BLOCKED_HOST_MCP_UNBOUND / INIT_BLOCKED_MCP_WRONG_ROOT
 ```
 

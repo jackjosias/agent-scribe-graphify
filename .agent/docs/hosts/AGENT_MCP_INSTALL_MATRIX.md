@@ -11,19 +11,19 @@ fiche dans `.agent/docs/hosts/`, puis appliquer uniquement cette strategie. Ne
 pas transposer la strategie OpenCode, Cursor, Codex CLI ou Gemini CLI vers un
 autre host.
 
-| Host | Source officielle deja listee | Fichier de config | Fiche host | Statut terrain | Verdict |
-|---|---|---|---|---|---|
-| OpenCode | https://opencode.ai/docs/mcp-servers | `opencode.jsonc` | `OPENCODE_MCP.md` | a retester | UNKNOWN |
-| Codex CLI | https://developers.openai.com/codex/mcp | `.codex/config.toml` | `OPENAI_CODEX_MCP.md` | teste dans le host courant | ACCEPTABLE |
-| Claude Code | https://docs.anthropic.com/en/docs/claude-code/mcp | `.mcp.json` | `CLAUDE_CODE_MCP.md` | a tester | UNKNOWN |
-| VS Code / Copilot MCP | a verifier dans la doc IDE officielle | `.vscode/mcp.json` | `VSCODE_COPILOT_MCP.md` | a tester | UNKNOWN |
-| Cline | https://docs.cline.bot/mcp/mcp-overview | `mcp.json` | `CLINE_MCP.md` | a tester | UNKNOWN |
-| Kilo Code | source officielle non confirmee dans cette passe | `kilo.jsonc` | `KCODE_MCP.md` | a tester | UNKNOWN |
-| Roo Code | https://docs.roocode.com/features/mcp/using-mcp-in-roo | `.roo/mcp.json` | `ROO_CODE_MCP.md` | a tester | UNKNOWN |
-| Cursor | source officielle non confirmee dans cette passe | `.cursor/mcp.json` | `CURSOR_MCP.md` | a verifier | UNKNOWN |
-| Gemini CLI | source officielle non confirmee dans cette passe | a verifier | `GEMINI_CLI_MCP.md` | a verifier | UNKNOWN |
-| Windsurf | source officielle MCP specifique non confirmee pendant cette passe | a verifier | `WINDSURF_MCP.md` | a verifier | UNKNOWN |
-| CommandCode CLI | nom ambigu, source officielle a clarifier | a verifier | `COMMAND_CODE_CLI.md` | a verifier | UNKNOWN |
+| Host | MCP visible possible | Root binding possible | Shell direct désactivable | Write/edit natif désactivable | Permission ask/deny possible | Sandbox possible | Config projet-local possible | Verdict cible possible | Fiche host |
+|---|---|---|---|---|---|---|---|---|---|
+| OpenCode | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | ACCEPTABLE, SAFE_CANDIDATE si permissions/sandbox prouvées | `OPENCODE_MCP.md` |
+| Codex CLI | YES | YES | UNKNOWN | UNKNOWN | YES via approvals partielles | UNKNOWN | UNKNOWN | ACCEPTABLE, SAFE_CANDIDATE si sandbox/deny prouvé | `OPENAI_CODEX_MCP.md` |
+| Claude Code | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CLAUDE_CODE_MCP.md` |
+| Cursor | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CURSOR_MCP.md` |
+| Gemini CLI | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `GEMINI_CLI_MCP.md` |
+| VS Code / Copilot | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `VSCODE_COPILOT_MCP.md` |
+| Cline | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CLINE_MCP.md` |
+| Roo Code | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `ROO_CODE_MCP.md` |
+| Kilo Code | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `KCODE_MCP.md` |
+| Windsurf | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `WINDSURF_MCP.md` |
+| unknown | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `README.md` |
 
 Validation minimale par host:
 
@@ -32,4 +32,5 @@ Validation minimale par host:
 3. Verifier si shell/bash direct est expose.
 4. Verifier si edit/write_file direct est expose.
 5. Verifier si shell/edit peuvent etre desactives ou si `agent_sandbox.py` peut lancer le host avec projet read-only.
-6. Classer le host: SAFE, ACCEPTABLE, UNSAFE ou UNKNOWN.
+6. Classer le host: UNSAFE, ACCEPTABLE, SAFE_CANDIDATE, SAFE ou UNKNOWN.
+7. Si un fichier change sans trace MCP attendue, déclarer `DIRECT_WRITE_BYPASS_DETECTED` et stopper.
