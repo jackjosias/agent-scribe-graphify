@@ -4,6 +4,8 @@ Derniere recherche web: 2026-06-21.
 
 Commande locale commune: `python3 .agent/mcp/server_entry.py`.
 
+Root binding check obligatoire pour tous les hosts: MCP visible ne suffit pas; `MCP_BOUND_TO_CURRENT_PROJECT` doit etre prouve par hash sentinelle cote host et cote MCP.
+
 | Host | Source officielle deja listee | Fichier de config | Statut terrain | Verdict |
 |---|---|---|---|---|
 | OpenCode | https://opencode.ai/docs/mcp-servers | `opencode.jsonc` | a retester | UNKNOWN |

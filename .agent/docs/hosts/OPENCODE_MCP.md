@@ -10,6 +10,10 @@ https://opencode.ai/docs/mcp-servers
 
 `opencode.jsonc`
 
+## Note OpenCode
+
+Pour OpenCode, une configuration projet-locale peut eviter les chemins globaux figes vers un ancien `.agent/mcp/server_entry.py`. Mais ce n'est qu'une strategie propre a OpenCode. La regle universelle reste: le root MCP doit etre prouve par hash sentinel cote host et cote MCP.
+
 ## Commande `.agent`
 
 ```bash

@@ -41,6 +41,7 @@
     "Init status",
     "Verdict host",
     "Direct shell/write/edit",
+    "MCP root binding",
     "Host guide lu",
     "MCP tools visibles au LLM",
     "MCP local server",
@@ -268,6 +269,7 @@
       "Host détecté",
       "MCP local server",
       "MCP tools visibles au LLM",
+      "MCP root binding",
       "Host guide lu",
       "Direct shell/write/edit",
       "Verdict host",
@@ -276,11 +278,51 @@
     "init_status_values": [
       "INIT_CONFORME",
       "FILESYSTEM_INIT_OK_MCP_UNBOUND",
-      "INIT_BLOCKED_HOST_MCP_UNBOUND"
+      "INIT_BLOCKED_HOST_MCP_UNBOUND",
+      "INIT_BLOCKED_MCP_WRONG_ROOT"
     ],
     "tenor_init_is_not_explicit_unsafe_filesystem_bootstrap_permission": true,
     "default_when_unbound": "INIT_BLOCKED_HOST_MCP_UNBOUND",
     "required_question_when_unbound": "Veux-tu que je configure le MCP .agent dans ce host ? Ou veux-tu explicitement un bootstrap filesystem malgré host UNSAFE ?",
     "explicit_unsafe_bootstrap_phrase": "oui, bootstrap filesystem malgré host UNSAFE"
+  },
+  "mcp_root_binding_check": {
+    "applies_to_all_hosts": true,
+    "mcp_visible_is_not_enough": true,
+    "required_status": "MCP_BOUND_TO_CURRENT_PROJECT",
+    "visible_status": "MCP_VISIBLE",
+    "unbound_status": "MCP_UNBOUND",
+    "wrong_root_status": "MCP_WRONG_ROOT",
+    "wrong_root_init_status": "INIT_BLOCKED_MCP_WRONG_ROOT",
+    "must_not_run_tenor_init_when_wrong_root": true,
+    "sentinel_candidates": [
+      "AGENTS.md",
+      ".agent/skills/init-tenor/SKILL.md",
+      ".agent/rules/tenor-init-v2.json"
+    ],
+    "host_side_hash_method": "python hashlib sha256 for cross-platform portability",
+    "host_side_hash_command": "python3 - <<'PY'\nfrom pathlib import Path\nimport hashlib\ncandidates = [\n    Path(\"AGENTS.md\"),\n    Path(\".agent/skills/init-tenor/SKILL.md\"),\n    Path(\".agent/rules/tenor-init-v2.json\"),\n]\nfor p in candidates:\n    if p.exists() and p.is_file():\n        print(str(p))\n        print(hashlib.sha256(p.read_bytes()).hexdigest())\n        break\nelse:\n    print(\"__NO_SENTINEL__\")\nPY",
+    "mcp_side_hash_tool": "file_hash",
+    "mcp_side_hash_args": {
+      "resource": "<sentinel_file>"
+    },
+    "hash_must_match": true,
+    "wrong_root_when": [
+      "host hash and MCP hash mismatch",
+      "MCP file_hash returns __new_file__ for existing host sentinel",
+      "MCP file_hash returns missing file for existing host sentinel",
+      "MCP file_hash returns error for existing host sentinel"
+    ],
+    "when_mismatch": [
+      "stop",
+      "read host guide",
+      "ask permission to fix host MCP binding",
+      "warn restart may be required"
+    ],
+    "forbidden_commands_when_wrong_root": [
+      ".agent/workflow/scribe/scribe bootstrap",
+      ".agent/workflow/scribe/scribe tenor-init --type cli"
+    ],
+    "configuration_policy": "read the corresponding .agent/docs/hosts/ guide and apply that host strategy; do not invent a universal config"
   }
 }

@@ -162,9 +162,84 @@ FILESYSTEM_INIT_OK_MCP_UNBOUND
 Il est interdit d'afficher `INIT CONFORME` ou `TENOR INIT terminé` sans préciser
 que le MCP `.agent` n'est pas lié au host.
 
-### 4. Si les tools MCP `.agent` sont visibles au LLM host
+### 4. HOST MCP ROOT BINDING CHECK — TOUS HOSTS
 
-Continuer l'init normale :
+Aucune configuration host ne doit être considérée valide uniquement parce
+qu'elle expose les tools MCP. La preuve finale est le root binding check.
+
+Statuts universels :
+
+```text
+MCP_VISIBLE
+MCP_UNBOUND
+MCP_WRONG_ROOT
+MCP_BOUND_TO_CURRENT_PROJECT
+```
+
+`MCP_BOUND_TO_CURRENT_PROJECT` signifie : le MCP visible au LLM résout les
+fichiers dans la même racine projet que le workspace courant du host.
+
+Vérifier côté host un fichier sentinelle avec Python, méthode portable
+Linux/macOS/Windows :
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import hashlib
+candidates = [
+    Path("AGENTS.md"),
+    Path(".agent/skills/init-tenor/SKILL.md"),
+    Path(".agent/rules/tenor-init-v2.json"),
+]
+for p in candidates:
+    if p.exists() and p.is_file():
+        print(str(p))
+        print(hashlib.sha256(p.read_bytes()).hexdigest())
+        break
+else:
+    print("__NO_SENTINEL__")
+PY
+```
+
+Comparer ensuite avec le tool MCP visible au LLM host :
+
+```text
+file_hash resource=<sentinel_file>
+```
+
+Si le hash côté host/shell et le hash côté MCP ne correspondent pas, afficher :
+
+```text
+MCP_WRONG_ROOT
+Init status: INIT_BLOCKED_MCP_WRONG_ROOT
+```
+
+Si le tool MCP retourne `__new_file__`, fichier absent, ou une erreur pour un
+fichier sentinelle existant côté host, afficher aussi `MCP_WRONG_ROOT`.
+
+Dans l'état `MCP_WRONG_ROOT`, l'agent doit STOPPER, lire la fiche host
+correspondante dans `.agent/docs/hosts/`, demander permission de corriger le
+binding MCP du host, prévenir qu'un redémarrage peut être nécessaire, et ne
+pas lancer :
+
+```bash
+.agent/workflow/scribe/scribe bootstrap
+.agent/workflow/scribe/scribe tenor-init --type cli
+```
+
+Pour corriger la configuration, rester générique : lire la fiche host
+correspondante et appliquer la stratégie de ce host. Ne pas inventer une
+configuration universelle.
+
+### 5. Si les tools MCP `.agent` sont visibles ET bound au projet courant
+
+Continuer l'init normale seulement avec le statut :
+
+```text
+MCP_BOUND_TO_CURRENT_PROJECT
+```
+
+Puis lancer :
 
 ```bash
 .agent/workflow/scribe/scribe tenor-init --type cli
@@ -179,7 +254,7 @@ Workflow ack
 Status init
 ```
 
-### 5. Bloc final obligatoire
+### 6. Bloc final obligatoire
 
 Toute réponse d'init doit inclure ces champs avec des valeurs réelles :
 
@@ -187,10 +262,11 @@ Toute réponse d'init doit inclure ces champs avec des valeurs réelles :
 Host détecté: Codex CLI / OpenCode / Claude Code / VS Code / Cursor / Cline / Kilo Code / Roo Code / Windsurf / autre / unknown
 MCP local server: OK / FAIL
 MCP tools visibles au LLM: YES / NO
+MCP root binding: MCP_BOUND_TO_CURRENT_PROJECT / MCP_WRONG_ROOT / N/A
 Host guide lu: .agent/docs/hosts/<FICHE>.md / N/A
 Direct shell/write/edit: YES / NO / UNKNOWN
 Verdict host: SAFE / ACCEPTABLE / UNSAFE / UNKNOWN
-Init status: INIT_CONFORME / FILESYSTEM_INIT_OK_MCP_UNBOUND / INIT_BLOCKED_HOST_MCP_UNBOUND
+Init status: INIT_CONFORME / FILESYSTEM_INIT_OK_MCP_UNBOUND / INIT_BLOCKED_HOST_MCP_UNBOUND / INIT_BLOCKED_MCP_WRONG_ROOT
 ```
 
 `INIT_CONFORME` est autorisé uniquement si les tools MCP `.agent` sont visibles

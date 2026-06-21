@@ -12,6 +12,8 @@ python3 .agent/mcp/server_entry.py
 
 Note critique: un serveur MCP local listable avec `python3 .agent/mcp/server_entry.py --list-tools` ne signifie pas que les tools MCP sont visibles au LLM host. Il faut verifier separement que le host expose directement `workflow_next`, `before_task`, `scribe_query`, `graphify_query`, `propose_patch`, `apply_patch`, `delete_resource` et `finish_task` au modele.
 
+Pour tous les hosts: MCP visible ne suffit pas. Le root MCP doit etre prouve identique au root projet courant via un fichier sentinelle hashe cote host et cote MCP. Si les hash divergent, le statut est `MCP_WRONG_ROOT` et l'init doit rester bloquee.
+
 Tools MCP critiques a valider dans chaque host:
 
 - `workflow_next`
