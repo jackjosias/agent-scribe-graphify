@@ -197,7 +197,7 @@ def test_fake_token_refused() -> None:
     ctx["context_token"] = "fake-token"
     claim(agent, target)
     result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_REQUIRED", "propose_patch with fake token")
+    assert_refused(result, "TASK_CONTEXT_TOKEN_MISMATCH", "propose_patch with fake token")
 
 
 def test_propose_without_claim() -> None:
@@ -330,7 +330,7 @@ def test_reject_non_write_intent_for_patch() -> None:
     mark_scribe(agent, ctx, "redteam non write intent")
     claim(agent, target)
     result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_INTENT_NOT_ALLOWED", "propose_patch with non-write intent")
+    assert_refused(result, "READ_INTENT_CANNOT_WRITE", "propose_patch with non-write intent")
 
 
 def test_context_bypass() -> str:

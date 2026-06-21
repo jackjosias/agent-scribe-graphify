@@ -10,10 +10,10 @@ from typing import Any
 
 try:
     from . import patch_queue
-    from .db import connect, init_db
+    from .db import connect, init_db, now_ts as db_now_ts
 except Exception:
     import patch_queue  # type: ignore
-    from db import connect, init_db  # type: ignore
+    from db import connect, init_db, now_ts as db_now_ts  # type: ignore
 
 DEFAULT_TTL_SECONDS = 900
 
@@ -63,6 +63,19 @@ def ensure_schema() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_task_context_v2_agent_status
               ON task_context_v2(agent_id,status,expires_at);
+            CREATE INDEX IF NOT EXISTS idx_task_context_v2_agent_resource
+              ON task_context_v2(agent_id,resource,status,request_hash);
+            CREATE TABLE IF NOT EXISTS workflow_retry_v1(
+              retry_id TEXT PRIMARY KEY,
+              agent_id TEXT NOT NULL,
+              resource TEXT NOT NULL,
+              error_code TEXT NOT NULL,
+              count INTEGER NOT NULL,
+              first_seen INTEGER NOT NULL,
+              last_seen INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_retry_key
+              ON workflow_retry_v1(agent_id,resource,error_code);
             """
         )
 
@@ -100,6 +113,17 @@ def create_task_context(
     ttl = ttl_seconds if ttl_seconds is not None else globals()["ttl_seconds"]()
     expires = created + ttl
     with connect() as con:
+        existing = con.execute(
+            """
+            SELECT task_id,agent_id,request,intent,resource,expires_at
+            FROM task_context_v2
+            WHERE agent_id=? AND request_hash=? AND status='active' AND expires_at>=?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (agent_id, _request_hash(request, intent, safe_resource), created),
+        ).fetchone()
+        if existing:
+            raise TaskContextError("ACTIVE_TASK_EXISTS")
         con.execute(
             """
             INSERT INTO task_context_v2(
@@ -136,16 +160,16 @@ def _load_ready(agent_id: str, task_id: str, context_token: str) -> dict[str, An
     with connect() as con:
         row = con.execute("SELECT * FROM task_context_v2 WHERE task_id=?", (task_id,)).fetchone()
     if not row:
-        raise TaskContextError("TASK_CONTEXT_REQUIRED: unknown task_id")
+        raise TaskContextError("TASK_CONTEXT_UNKNOWN_TASK")
     data = dict(row)
     if data["agent_id"] != agent_id:
-        raise TaskContextError("TASK_CONTEXT_REQUIRED: agent_id mismatch")
+        raise TaskContextError("TASK_CONTEXT_AGENT_MISMATCH")
     if data["status"] != "active":
-        raise TaskContextError("TASK_CONTEXT_EXPIRED: task context is not active")
+        raise TaskContextError("TASK_CONTEXT_EXPIRED_RENEW_REQUIRED")
     if data["expires_at"] < now_ts():
-        raise TaskContextError("TASK_CONTEXT_EXPIRED: task context expired")
+        raise TaskContextError("TASK_CONTEXT_EXPIRED_RENEW_REQUIRED")
     if not hmac.compare_digest(data["token_hash"], _hash(context_token)):
-        raise TaskContextError("TASK_CONTEXT_REQUIRED: invalid context_token")
+        raise TaskContextError("TASK_CONTEXT_TOKEN_MISMATCH")
     return data
 
 
@@ -192,7 +216,7 @@ def require_context_ready(
         if not context_intent:
             raise TaskContextError("TASK_CONTEXT_INTENT_REQUIRED: task context intent is required")
         if context_intent not in normalized_intents:
-            raise TaskContextError("TASK_CONTEXT_INTENT_NOT_ALLOWED: task context intent is not allowed for this action")
+            raise TaskContextError("READ_INTENT_CANNOT_WRITE" if context_intent == "read" else "TASK_CONTEXT_INTENT_MISMATCH")
     if not data.get("before_done"):
         raise TaskContextError("TASK_CONTEXT_NOT_READY: before_task is not done")
     if not data.get("scribe_done"):
@@ -212,3 +236,69 @@ def finish_task_context(agent_id: str, task_id: str, context_token: str) -> dict
             (finished, task_id, agent_id),
         )
     return {"task_id": task_id, "status": "finished", "finished_at": finished}
+
+
+def list_tasks(agent_id: str = "", status: str = "") -> dict[str, Any]:
+    ensure_schema()
+    where = []
+    params: list[Any] = []
+    if agent_id:
+        where.append("agent_id=?")
+        params.append(agent_id)
+    if status:
+        where.append("status=?")
+        params.append(status)
+    query = "SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,status,created_at,expires_at,finished_at FROM task_context_v2"
+    if where:
+        query += " WHERE " + " AND ".join(where)
+    query += " ORDER BY created_at DESC"
+    with connect() as con:
+        rows = [dict(r) for r in con.execute(query, tuple(params)).fetchall()]
+    return {"tasks": rows, "count": len(rows)}
+
+
+def task_status(task_id: str) -> dict[str, Any]:
+    if not task_id:
+        raise TaskContextError("TASK_CONTEXT_REQUIRED: task_id is required")
+    ensure_schema()
+    with connect() as con:
+        row = con.execute("SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,status,created_at,expires_at,finished_at FROM task_context_v2 WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        raise TaskContextError("TASK_CONTEXT_UNKNOWN_TASK")
+    return dict(row)
+
+
+def record_retry(agent_id: str, resource: str, error_code: str, limit: int = 3) -> dict[str, Any]:
+    if not agent_id or not error_code:
+        return {"verdict": "RETRY_NOT_TRACKED", "count": 0}
+    ensure_schema()
+    safe_resource = _safe_resource(resource) if resource else "__none__"
+    now = db_now_ts()
+    retry_id = f"retry-{_hash(agent_id + safe_resource + error_code)[:16]}"
+    with connect() as con:
+        con.execute(
+            """
+            INSERT INTO workflow_retry_v1(retry_id,agent_id,resource,error_code,count,first_seen,last_seen)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(agent_id,resource,error_code) DO UPDATE SET
+              count=workflow_retry_v1.count+1,
+              last_seen=excluded.last_seen
+            """,
+            (retry_id, agent_id, safe_resource, error_code, 1, now, now),
+        )
+        row = con.execute("SELECT * FROM workflow_retry_v1 WHERE retry_id=?", (retry_id,)).fetchone()
+    data = dict(row)
+    verdict = "MAX_WORKFLOW_RETRIES_EXCEEDED" if int(data["count"]) >= limit else "RETRY_RECORDED"
+    if int(data["count"]) >= max(2, limit - 1):
+        verdict = "RETRY_LOOP_DETECTED" if verdict != "MAX_WORKFLOW_RETRIES_EXCEEDED" else verdict
+    data["verdict"] = verdict
+    return data
+
+
+def clear_retry(agent_id: str, resource: str = "") -> None:
+    if not agent_id:
+        return
+    ensure_schema()
+    safe_resource = _safe_resource(resource) if resource else "__none__"
+    with connect() as con:
+        con.execute("DELETE FROM workflow_retry_v1 WHERE agent_id=? AND resource=?", (agent_id, safe_resource))

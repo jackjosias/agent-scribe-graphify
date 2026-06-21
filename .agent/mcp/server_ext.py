@@ -85,13 +85,25 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
     payload = json.loads(result["content"][0]["text"])
     if payload.get("verdict") != "BEFORE_TASK_OK":
         return result
-    context = task_context.create_task_context(
-        agent_id=agent_id,
-        request=request,
-        intent=intent or "",
-        resource=resource or "",
-        requires_graphify=_requires_graphify(request, intent, resource),
-    )
+    try:
+        context = task_context.create_task_context(
+            agent_id=agent_id,
+            request=request,
+            intent=intent or "",
+            resource=resource or "",
+            requires_graphify=_requires_graphify(request, intent, resource),
+        )
+    except task_context.TaskContextError as exc:
+        if str(exc) == "ACTIVE_TASK_EXISTS":
+            return server.ok({
+                "verdict": "ACTIVE_TASK_EXISTS",
+                "state": "ACTIVE_TASK_EXISTS",
+                "reason": "An active task already exists for this agent/request/resource. Use resume_task/task_status or start a new task explicitly; before_task will not rotate context silently.",
+                "agent_id": agent_id,
+                "resource": resource or "",
+                "forbidden": ["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+            })
+        raise _context_error(exc) from exc
     payload.update(context)
     return server.ok(payload)
 
@@ -316,6 +328,17 @@ def workflow_next(
     normalized = (intent or "").strip().lower()
     last = _last(last_verdict)
 
+    if last.startswith("TASK_CONTEXT") or last in {"READ_INTENT_CANNOT_WRITE", "ACTIVE_TASK_EXISTS"}:
+        retry = task_context.record_retry(agent_id, resource, last)
+        if retry.get("verdict") in {"RETRY_LOOP_DETECTED", "MAX_WORKFLOW_RETRIES_EXCEEDED"}:
+            return server.ok({
+                "verdict": retry["verdict"],
+                "state": retry["verdict"],
+                "reason": "The same agent/resource/error repeated. Stop instead of retrying or falling back to direct writes.",
+                "retry": retry,
+                "forbidden": ["bootstrap", "before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+            })
+
     if not agent_id or agent_id not in server._active_agent_ids():
         return _BASE_WORKFLOW_NEXT(
             agent_id=agent_id,
@@ -430,6 +453,43 @@ def workflow_next(
     )
 
 
+
+
+def list_tasks(agent_id: str = "", status: str = "") -> Dict[str, Any]:
+    return server.ok({"verdict": "TASKS_LISTED", **task_context.list_tasks(agent_id=agent_id, status=status)})
+
+
+def task_status(task_id: str) -> Dict[str, Any]:
+    try:
+        return server.ok({"verdict": "TASK_STATUS", "task": task_context.task_status(task_id)})
+    except task_context.TaskContextError as exc:
+        raise _context_error(exc) from exc
+
+
+def wait_for_tasks(
+    task_ids: List[str] | None = None,
+    agent_id: str = "",
+    timeout_seconds: int = 0,
+    poll_interval_seconds: float = 0.5,
+) -> Dict[str, Any]:
+    timeout = max(0, min(int(timeout_seconds or 0), 300))
+    interval = max(0.1, min(float(poll_interval_seconds or 0.5), 5.0))
+    deadline = time.monotonic() + timeout
+    wanted = set(task_ids or [])
+
+    while True:
+        tasks = task_context.list_tasks(agent_id=agent_id).get("tasks", [])
+        if wanted:
+            tasks = [task for task in tasks if task.get("task_id") in wanted]
+        unfinished = [task for task in tasks if task.get("status") not in {"finished", "done", "failed", "cancelled"}]
+        if not unfinished:
+            return server.ok({"verdict": "TASKS_DONE", "tasks": tasks, "unfinished": [], "count": len(tasks), "timeout_seconds": timeout})
+        if timeout == 0:
+            return server.ok({"verdict": "TASKS_WAITING", "tasks": tasks, "unfinished": unfinished, "count": len(tasks), "timeout_seconds": timeout})
+        if time.monotonic() >= deadline:
+            return server.ok({"verdict": "WAIT_TIMEOUT", "tasks": tasks, "unfinished": unfinished, "count": len(tasks), "timeout_seconds": timeout})
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+
 def _schema_props(base: Dict[str, Any], extra: Dict[str, str]) -> Dict[str, Any]:
     schema = json.loads(json.dumps(base))
     props = schema.setdefault("properties", {})
@@ -473,6 +533,21 @@ def tool_schema(name: str) -> Dict[str, Any]:
             "required": ["agent_id", "request", "summary", "touched_resources", "verdict"],
             "additionalProperties": False,
         }
+    if name == "list_tasks":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "status": {"type": "string"}}, "additionalProperties": False}
+    if name == "task_status":
+        return {"type": "object", "properties": {"task_id": {"type": "string"}}, "additionalProperties": False}
+    if name == "wait_for_tasks":
+        return {
+            "type": "object",
+            "properties": {
+                "task_ids": {"type": "array", "items": {"type": "string"}},
+                "agent_id": {"type": "string"},
+                "timeout_seconds": {"type": "integer"},
+                "poll_interval_seconds": {"type": "number"},
+            },
+            "additionalProperties": False,
+        }
     if name == "delete_resource":
         return {
             "type": "object",
@@ -498,6 +573,9 @@ server.propose_patch = propose_patch
 server.delete_resource = delete_resource
 server.finish_task = finish_task
 server.scribe_record = scribe_record
+server.list_tasks = list_tasks
+server.task_status = task_status
+server.wait_for_tasks = wait_for_tasks
 server.tool_schema = tool_schema
 server.TOOLS["workflow_next"] = workflow_next
 server.TOOLS["before_task"] = before_task
@@ -507,6 +585,9 @@ server.TOOLS["propose_patch"] = propose_patch
 server.TOOLS["delete_resource"] = delete_resource
 server.TOOLS["finish_task"] = finish_task
 server.TOOLS["scribe_record"] = scribe_record
+server.TOOLS["list_tasks"] = list_tasks
+server.TOOLS["task_status"] = task_status
+server.TOOLS["wait_for_tasks"] = wait_for_tasks
 
 handle = server.handle
 list_tools = server.list_tools

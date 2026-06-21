@@ -18,11 +18,15 @@ try:
     from runtime.db import (
         CoordinationError,
         claim_resource as db_claim_resource,
+        agent_status as db_agent_status,
         finish_task as db_finish_task,
         heartbeat as db_heartbeat,
         init_db,
+        list_agents as db_list_agents,
         register_agent as db_register_agent,
         release_claim as db_release_claim,
+        resume_agent as db_resume_agent,
+        retire_agent as db_retire_agent,
         session_status as db_session_status,
     )
     from runtime.state_paths import graphify_report_candidates
@@ -31,11 +35,15 @@ except Exception:
     from .runtime.db import (  # type: ignore
         CoordinationError,
         claim_resource as db_claim_resource,
+        agent_status as db_agent_status,
         finish_task as db_finish_task,
         heartbeat as db_heartbeat,
         init_db,
+        list_agents as db_list_agents,
         register_agent as db_register_agent,
         release_claim as db_release_claim,
+        resume_agent as db_resume_agent,
+        retire_agent as db_retire_agent,
         session_status as db_session_status,
     )
     from .runtime.state_paths import graphify_report_candidates  # type: ignore
@@ -101,6 +109,22 @@ def heartbeat(agent_id: str) -> Dict[str, Any]:
     return ok({"verdict": "HEARTBEAT_OK", "heartbeat": db_heartbeat(agent_id)})
 
 
+def list_agents() -> Dict[str, Any]:
+    return ok({"verdict": "AGENTS_LISTED", **db_list_agents()})
+
+
+def agent_status(agent_id: str) -> Dict[str, Any]:
+    return ok({"verdict": "AGENT_STATUS", "agent": db_agent_status(agent_id)})
+
+
+def resume_agent(agent_id: str) -> Dict[str, Any]:
+    return ok({"verdict": "AGENT_RESUMED", "agent": db_resume_agent(agent_id)})
+
+
+def retire_agent(agent_id: str, reason: str = "") -> Dict[str, Any]:
+    return ok({"verdict": "AGENT_RETIRED", "agent": db_retire_agent(agent_id, reason=reason)})
+
+
 def session_status() -> Dict[str, Any]:
     return ok({"verdict": "SESSION_STATUS", "session": db_session_status()})
 
@@ -134,10 +158,14 @@ def before_task(request: str, agent_id: str = "") -> Dict[str, Any]:
     })
 
 
-def _active_agent_ids() -> set[str]:
+def _agent_states() -> Dict[str, str]:
     init_db(ROOT)
     status = db_session_status()
-    return {row.get("agent_id", "") for row in status.get("agents", []) if row.get("status") == "active"}
+    return {row.get("agent_id", ""): row.get("status", "") for row in status.get("agents", [])}
+
+
+def _active_agent_ids() -> set[str]:
+    return {agent_id for agent_id, status in _agent_states().items() if status == "active"}
 
 
 def _safe_now() -> int:
@@ -220,14 +248,33 @@ def workflow_next(
     if not AGENT_DIR.is_dir():
         raise ToolError(".agent directory not found from server entrypoint project root")
 
-    if not agent_id or agent_id not in _active_agent_ids():
-        return _next_payload(
-            state="NO_ACTIVE_AGENT",
-            tool="bootstrap",
-            args={"host_tool": host_tool or "unknown", "model_name": model_name or "", "run_legacy_bootstrap": False},
-            reason="No active registered agent_id is available. Bootstrap is mandatory before any task action.",
-            forbidden=["claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
-        )
+    states = _agent_states()
+    if not agent_id:
+        return ok({
+            "verdict": "INPUT_REQUIRED",
+            "state": "AGENT_ID_REQUIRED",
+            "reason": "A durable agent_id is required. Call register_agent explicitly; workflow_next never bootstraps implicitly.",
+            "required_inputs": ["agent_id"],
+            "forbidden": ["bootstrap", "claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
+        })
+    agent_state = states.get(agent_id)
+    if agent_state is None:
+        return ok({
+            "verdict": "AGENT_UNKNOWN_OR_UNREGISTERED",
+            "state": "AGENT_UNKNOWN_OR_UNREGISTERED",
+            "reason": "Unknown agent identity. Register or resume explicitly; no hidden bootstrap or agent rotation is allowed.",
+            "required_inputs": ["register_agent.agent_id"],
+            "forbidden": ["bootstrap", "claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
+        })
+    if agent_state != "active":
+        return ok({
+            "verdict": "AGENT_IDLE_RESUME_REQUIRED",
+            "state": "AGENT_IDLE_RESUME_REQUIRED",
+            "agent_status": agent_state,
+            "reason": "Agent identity exists but presence is not active. Call resume_agent or heartbeat explicitly; do not create a replacement agent.",
+            "must_call": {"tool": "resume_agent", "args": {"agent_id": agent_id}},
+            "forbidden": ["bootstrap", "claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
+        })
 
     finish_intent = normalized_intent in FINISH_INTENTS
     write_intent = normalized_intent in WRITE_INTENTS or bool(resource)
@@ -283,6 +330,17 @@ def workflow_next(
             reason="No pending patches and no active claims remain for this agent.",
             forbidden=["direct_file_edit"],
         )
+
+    if last.startswith("TASK_CONTEXT") or last in {"READ_INTENT_CANNOT_WRITE", "ACTIVE_TASK_EXISTS"}:
+        retry = __import__("runtime.task_context", fromlist=["record_retry"]).record_retry(agent_id, resource, last)
+        if retry.get("verdict") in {"RETRY_LOOP_DETECTED", "MAX_WORKFLOW_RETRIES_EXCEEDED"}:
+            return ok({
+                "verdict": retry["verdict"],
+                "state": retry["verdict"],
+                "reason": "The same agent/resource/error repeated. Stop instead of retrying or falling back to direct writes.",
+                "retry": retry,
+                "forbidden": ["bootstrap", "before_task", "claim_resource", "before_edit", "propose_patch", "apply_patch", "finish_task", "direct_file_edit"],
+            })
 
     if request and last not in {"BEFORE_TASK_OK", "SCRIBE_QUERY_DONE", "GRAPHIFY_QUERY_DONE", "CLAIM_GRANTED", "FILE_HASH", "PATCH_PROPOSED", "PATCH_CONFLICT", "PATCH_APPLIED"}:
         return _next_payload(
@@ -457,6 +515,10 @@ TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "bootstrap": bootstrap,
     "register_agent": register_agent,
     "heartbeat": heartbeat,
+    "list_agents": list_agents,
+    "agent_status": agent_status,
+    "resume_agent": resume_agent,
+    "retire_agent": retire_agent,
     "session_status": session_status,
     "workflow_next": workflow_next,
     "before_task": before_task,
@@ -481,6 +543,10 @@ def tool_schema(name: str) -> Dict[str, Any]:
         "bootstrap": {"host_tool": "string", "model_name": "string", "run_legacy_bootstrap": "boolean"},
         "register_agent": {"host_tool": "string", "model_name": "string", "agent_id": "string"},
         "heartbeat": {"agent_id": "string"},
+        "list_agents": {},
+        "agent_status": {"agent_id": "string"},
+        "resume_agent": {"agent_id": "string"},
+        "retire_agent": {"agent_id": "string", "reason": "string"},
         "session_status": {},
         "workflow_next": {
             "agent_id": "string",

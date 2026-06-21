@@ -120,7 +120,7 @@ def add_event(con: sqlite3.Connection, event_type: str, payload: Dict[str, Any],
 
 def expire_stale(con: sqlite3.Connection) -> None:
     t = now_ts()
-    con.execute("UPDATE agents SET status='stale' WHERE status='active' AND last_seen < ?", (t - 180,))
+    con.execute("UPDATE agents SET status='idle' WHERE status='active' AND last_seen < ?", (t - 180,))
     con.execute("UPDATE claims SET status='expired' WHERE status='active' AND expires_at < ?", (t,))
 
 
@@ -133,11 +133,22 @@ def register_agent(host_tool: str, model_name: str = "", agent_id: Optional[str]
     with connect() as con:
         expire_stale(con)
         con.execute(
-            "INSERT OR REPLACE INTO agents(agent_id,host_tool,model_name,pid,started_at,last_seen,status) VALUES(?,?,?,?,?,?,?)",
+            """
+            INSERT INTO agents(agent_id,host_tool,model_name,pid,started_at,last_seen,status)
+            VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+              host_tool=excluded.host_tool,
+              model_name=excluded.model_name,
+              pid=excluded.pid,
+              last_seen=excluded.last_seen,
+              status=CASE WHEN agents.status='retired' THEN agents.status ELSE 'active' END
+            """,
             (aid, host_tool, model_name, os.getpid(), t, t, "active"),
         )
-        add_event(con, "agent.register", {"host_tool": host_tool, "model_name": model_name}, aid)
-    return {"agent_id": aid, "status": "active", "host_tool": host_tool, "model_name": model_name}
+        row = con.execute("SELECT * FROM agents WHERE agent_id=?", (aid,)).fetchone()
+        add_event(con, "agent.register", {"host_tool": host_tool, "model_name": model_name, "idempotent": True}, aid)
+    data = dict(row)
+    return {"agent_id": aid, "status": data["status"], "host_tool": host_tool, "model_name": model_name}
 
 
 def heartbeat(agent_id: str) -> Dict[str, Any]:
@@ -151,6 +162,60 @@ def heartbeat(agent_id: str) -> Dict[str, Any]:
         add_event(con, "agent.heartbeat", {}, agent_id)
     return {"agent_id": agent_id, "status": "active"}
 
+
+
+
+def resume_agent(agent_id: str) -> Dict[str, Any]:
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    with connect() as con:
+        expire_stale(con)
+        cur = con.execute(
+            "UPDATE agents SET last_seen=?, status='active' WHERE agent_id=? AND status<>'retired'",
+            (now_ts(), agent_id),
+        )
+        if cur.rowcount == 0:
+            raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+        add_event(con, "agent.resume", {}, agent_id)
+    return {"agent_id": agent_id, "status": "active"}
+
+
+def retire_agent(agent_id: str, reason: str = "") -> Dict[str, Any]:
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    with connect() as con:
+        expire_stale(con)
+        cur = con.execute(
+            "UPDATE agents SET status='retired', last_seen=? WHERE agent_id=?",
+            (now_ts(), agent_id),
+        )
+        if cur.rowcount == 0:
+            raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+        con.execute(
+            "UPDATE claims SET status='released', released_at=?, summary=? WHERE agent_id=? AND status='active'",
+            (now_ts(), reason or "agent retired explicitly", agent_id),
+        )
+        add_event(con, "agent.retire", {"reason": reason}, agent_id)
+    return {"agent_id": agent_id, "status": "retired"}
+
+
+def agent_status(agent_id: str) -> Dict[str, Any]:
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    with connect() as con:
+        expire_stale(con)
+        row = con.execute("SELECT * FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+        if not row:
+            raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+    return dict(row)
+
+
+def list_agents() -> Dict[str, Any]:
+    init_db()
+    with connect() as con:
+        expire_stale(con)
+        rows = [dict(r) for r in con.execute("SELECT * FROM agents ORDER BY last_seen DESC")]
+    return {"agents": rows, "count": len(rows)}
 
 def session_status() -> Dict[str, Any]:
     init_db()
@@ -232,9 +297,11 @@ def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_second
     t = now_ts()
     with connect() as con:
         expire_stale(con)
-        agent = con.execute("SELECT agent_id FROM agents WHERE agent_id=? AND status='active'", (agent_id,)).fetchone()
+        agent = con.execute("SELECT agent_id,status FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
         if not agent:
-            raise CoordinationError("agent must be registered and active before claiming")
+            raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+        if agent["status"] != "active":
+            raise CoordinationError("AGENT_IDLE_RESUME_REQUIRED")
         existing = [dict(r) for r in con.execute("SELECT * FROM claims WHERE resource=? AND status='active'", (res,))]
         blocking = [c for c in existing if c["agent_id"] != agent_id and (mode != "read" or c["mode"] != "read")]
         if blocking:
@@ -290,6 +357,9 @@ def finish_task(agent_id: str, summary: str = "") -> Dict[str, Any]:
         open_claims = [dict(r) for r in con.execute("SELECT * FROM claims WHERE agent_id=? AND status='active'", (agent_id,))]
         if open_claims:
             return {"verdict": "FINISH_REFUSED_OPEN_CLAIMS", "open_claims": open_claims}
-        con.execute("UPDATE agents SET status='finished', last_seen=? WHERE agent_id=?", (now_ts(), agent_id))
+        agent = con.execute("SELECT agent_id FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+        if not agent:
+            raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+        con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (now_ts(), agent_id))
         add_event(con, "task.finished", {"summary": summary}, agent_id)
     return {"verdict": "TASK_FINISHED_OK", "agent_id": agent_id, "summary": summary}

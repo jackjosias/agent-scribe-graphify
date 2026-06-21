@@ -87,13 +87,15 @@ def smoke_nominal_workflow() -> None:
     target = work / "file.txt"
     target.write_text("line1\n", encoding="utf-8")
 
-    expect_next_tool({
+    no_agent = call_tool("workflow_next", {
         "request": "modify smoke workflow file",
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "host_tool": "mcp-smoke",
         "model_name": "test",
-    }, "bootstrap")
+    })
+    if no_agent.get("state") != "AGENT_ID_REQUIRED" or "bootstrap" not in no_agent.get("forbidden", []):
+        fail(f"workflow_next must not bootstrap implicitly without agent_id: {no_agent}")
 
     boot = call_tool("bootstrap", {"host_tool": "mcp-smoke", "model_name": "test", "run_legacy_bootstrap": False})
     if boot.get("verdict") != "BOOT_OK_MCP":
