@@ -45,6 +45,7 @@ def connect(project_root: Optional[Path] = None) -> Iterator[sqlite3.Connection]
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA synchronous=NORMAL")
         con.execute("PRAGMA foreign_keys=ON")
+        con.execute("PRAGMA busy_timeout=5000")
         yield con
     finally:
         con.close()
@@ -104,7 +105,9 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
               payload TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status,last_seen);
+            CREATE INDEX IF NOT EXISTS idx_agents_id_status ON agents(agent_id,status,last_seen);
             CREATE INDEX IF NOT EXISTS idx_claims_resource ON claims(resource,status,expires_at);
+            CREATE INDEX IF NOT EXISTS idx_claims_agent ON claims(agent_id,resource,status,expires_at);
             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
             """
         )

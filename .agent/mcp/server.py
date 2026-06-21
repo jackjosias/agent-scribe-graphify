@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
@@ -511,6 +512,35 @@ def installation_required(host_tool: str = "unknown") -> Dict[str, Any]:
     })
 
 
+def batch_file_hash(resources: List[str] | None = None, max_workers: int = 4) -> Dict[str, Any]:
+    if not resources:
+        return ok({"verdict": "BATCH_FILE_HASH", "count": 0, "results": [], "errors": []})
+    count = len(resources)
+    if count > 100:
+        raise ToolError("batch_file_hash limited to 100 resources per call")
+    actual_workers = min(max(max_workers, 1), 8, count)
+    results: list[Dict[str, Any]] = []
+    errors: list[Dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=actual_workers) as pool:
+        fut_map: dict[Any, str] = {}
+        for res in resources:
+            if not isinstance(res, str) or not res.strip():
+                errors.append({"resource": str(res), "error": "invalid resource path"})
+                continue
+            safe = res.strip()
+            fut = pool.submit(patch_queue.file_hash, safe)
+            fut_map[fut] = safe
+        for fut in as_completed(fut_map, timeout=30):
+            res_name = fut_map[fut]
+            try:
+                data = fut.result(timeout=10)
+                results.append({"resource": res_name, "verdict": "FILE_HASH", "exists": data.get("exists", False), "hash": data.get("hash", ""), "size_bytes": data.get("size_bytes", 0)})
+            except Exception as exc:
+                errors.append({"resource": res_name, "error": str(exc)})
+    results.sort(key=lambda r: r.get("resource", ""))
+    return ok({"verdict": "BATCH_FILE_HASH", "count": len(results), "results": results, "errors": errors})
+
+
 TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "bootstrap": bootstrap,
     "register_agent": register_agent,
@@ -535,6 +565,7 @@ TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "confirm_patch_applied": confirm_patch_applied,
     "reject_patch": reject_patch,
     "installation_required": installation_required,
+    "batch_file_hash": batch_file_hash,
 }
 
 
@@ -575,8 +606,15 @@ def tool_schema(name: str) -> Dict[str, Any]:
         "confirm_patch_applied": {"agent_id": "string", "patch_id": "string", "new_hash": "string"},
         "reject_patch": {"agent_id": "string", "patch_id": "string", "reason": "string"},
         "installation_required": {"host_tool": "string"},
+        "batch_file_hash": {"resources": "array", "max_workers": "integer"},
     }[name]
-    return {"type": "object", "properties": {k: {"type": v} for k, v in schemas.items()}, "additionalProperties": False}
+    props: dict[str, dict[str, Any]] = {}
+    for k, v in schemas.items():
+        if v == "array":
+            props[k] = {"type": "array", "items": {"type": "string"}}
+        else:
+            props[k] = {"type": v}
+    return {"type": "object", "properties": props, "additionalProperties": False}
 
 
 def list_tools() -> List[Dict[str, Any]]:

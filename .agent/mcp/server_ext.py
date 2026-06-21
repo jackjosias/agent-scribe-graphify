@@ -562,10 +562,78 @@ def tool_schema(name: str) -> Dict[str, Any]:
             },
             "additionalProperties": False,
         }
+    if name == "workflow_snapshot":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "task_id": {"type": "string"},
+                "resource": {"type": "string"},
+            },
+            "additionalProperties": False,
+        }
+    if name == "batch_file_hash":
+        return {
+            "type": "object",
+            "properties": {
+                "resources": {"type": "array", "items": {"type": "string"}},
+                "max_workers": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        }
     return _BASE_TOOL_SCHEMA(name)
 
 
+def workflow_snapshot(
+    agent_id: str = "",
+    task_id: str = "",
+    resource: str = "",
+) -> Dict[str, Any]:
+    if not agent_id:
+        return server.ok({
+            "verdict": "INPUT_REQUIRED",
+            "reason": "agent_id is required for workflow_snapshot",
+            "required_inputs": ["agent_id"],
+        })
+    result: Dict[str, Any] = {
+        "verdict": "WORKFLOW_SNAPSHOT",
+        "agent": None,
+        "tasks": [],
+        "task": None,
+        "claims": [],
+        "pending_patches": [],
+        "resource": resource or "",
+    }
+    active_ids = server._active_agent_ids()
+    if agent_id in active_ids:
+        try:
+            result["agent"] = server._agent_states().get(agent_id)
+        except Exception:
+            result["agent"] = None
+    if task_id:
+        try:
+            tdata = task_context.task_status(task_id)
+            result["task"] = tdata
+        except Exception:
+            result["task"] = None
+    try:
+        result["tasks"] = task_context.list_tasks(agent_id=agent_id).get("tasks", [])
+    except Exception:
+        result["tasks"] = []
+    try:
+        claims = server._active_claims_for(agent_id, resource)
+        result["claims"] = claims.get("owned", []) + claims.get("foreign", [])
+    except Exception:
+        result["claims"] = []
+    try:
+        result["pending_patches"] = server._agent_pending_patches(agent_id, resource)
+    except Exception:
+        result["pending_patches"] = []
+    return server.ok(result)
+
+
 server.workflow_next = workflow_next
+server.workflow_snapshot = workflow_snapshot
 server.before_task = before_task
 server.scribe_query = scribe_query
 server.graphify_query = graphify_query
@@ -588,6 +656,7 @@ server.TOOLS["scribe_record"] = scribe_record
 server.TOOLS["list_tasks"] = list_tasks
 server.TOOLS["task_status"] = task_status
 server.TOOLS["wait_for_tasks"] = wait_for_tasks
+server.TOOLS["workflow_snapshot"] = workflow_snapshot
 
 handle = server.handle
 list_tools = server.list_tools
