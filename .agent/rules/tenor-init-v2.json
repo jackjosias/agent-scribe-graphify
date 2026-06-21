@@ -230,7 +230,17 @@
         "TENOR INIT terminé",
         "INIT_CONFORME"
       ],
-      "project_writes_allowed": "only with explicit user order"
+      "project_writes_allowed": "only with explicit user order",
+      "default_init_status": "INIT_BLOCKED_HOST_MCP_UNBOUND",
+      "must_stop_before_filesystem_bootstrap": true,
+      "forbidden_commands_without_explicit_unsafe_bootstrap_permission": [
+        ".agent/workflow/scribe/scribe bootstrap",
+        ".agent/workflow/scribe/scribe tenor-init --type cli"
+      ],
+      "must_ask_user_choice": [
+        "configure MCP .agent in this host",
+        "explicit filesystem bootstrap despite UNSAFE host"
+      ]
     },
     "filesystem_bootstrap_despite_unsafe_host": {
       "allowed_only_if_user_explicitly_requests": true,
@@ -238,7 +248,10 @@
       "forbidden_claims": [
         "TENOR INIT terminé",
         "INIT_CONFORME"
-      ]
+      ],
+      "requires_explicit_user_phrase": true,
+      "explicit_user_phrase": "oui, bootstrap filesystem malgré host UNSAFE",
+      "tenor_init_trigger_is_not_permission": true
     },
     "when_tools_visible": {
       "continue_normal_init": true,
@@ -264,6 +277,10 @@
       "INIT_CONFORME",
       "FILESYSTEM_INIT_OK_MCP_UNBOUND",
       "INIT_BLOCKED_HOST_MCP_UNBOUND"
-    ]
+    ],
+    "tenor_init_is_not_explicit_unsafe_filesystem_bootstrap_permission": true,
+    "default_when_unbound": "INIT_BLOCKED_HOST_MCP_UNBOUND",
+    "required_question_when_unbound": "Veux-tu que je configure le MCP .agent dans ce host ? Ou veux-tu explicitement un bootstrap filesystem malgré host UNSAFE ?",
+    "explicit_unsafe_bootstrap_phrase": "oui, bootstrap filesystem malgré host UNSAFE"
   }
 }

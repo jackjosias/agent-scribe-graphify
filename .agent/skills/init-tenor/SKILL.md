@@ -115,7 +115,17 @@ Ne jamais confondre ces deux états. `server_entry.py --list-tools` OK signifie
 
 ### 3. Si les tools MCP `.agent` ne sont pas visibles au LLM host
 
-STOP avant de déclarer l'init conforme. L'agent doit :
+STOP avant de déclarer l'init conforme. `TENOR INIT` seul ne vaut PAS
+permission explicite de bootstrap filesystem quand le host est UNSAFE.
+
+Par défaut, si `MCP tools visibles au LLM: NO`, la seule sortie autorisée est :
+
+```text
+HOST_MCP_UNBOUND
+Init status: INIT_BLOCKED_HOST_MCP_UNBOUND
+```
+
+L'agent doit :
 
 1. Lire `.agent/docs/hosts/AGENT_MCP_INSTALL_MATRIX.md`.
 2. Lire la fiche host correspondante dans `.agent/docs/hosts/`.
@@ -123,11 +133,27 @@ STOP avant de déclarer l'init conforme. L'agent doit :
 4. Afficher `Verdict host: UNSAFE`.
 5. Demander permission à l'utilisateur pour configurer le MCP dans le host.
 6. Dire explicitement qu'un redémarrage du host peut être nécessaire.
-7. Ne pas déclarer `TENOR INIT terminé`.
-8. Ne pas autoriser les écritures projet sauf ordre explicite.
+7. Demander exactement :
 
-Si l'utilisateur demande explicitement un bootstrap filesystem malgré host UNSAFE,
-l'agent peut lancer `tenor-init`, mais le statut final doit être :
+```text
+Veux-tu que je configure le MCP .agent dans ce host ?
+Ou veux-tu explicitement un bootstrap filesystem malgré host UNSAFE ?
+```
+
+8. Ne pas déclarer `TENOR INIT terminé`.
+9. Ne pas lancer `.agent/workflow/scribe/scribe bootstrap`.
+10. Ne pas lancer `.agent/workflow/scribe/scribe tenor-init --type cli`.
+11. Ne pas autoriser les écritures projet sauf ordre explicite.
+
+Le bootstrap filesystem malgré host UNSAFE est autorisé uniquement si
+l'utilisateur répond clairement avec une phrase équivalente à :
+
+```text
+oui, bootstrap filesystem malgré host UNSAFE
+```
+
+Dans ce cas seulement, l'agent peut lancer `tenor-init`, mais le statut final
+doit être :
 
 ```text
 FILESYSTEM_INIT_OK_MCP_UNBOUND
