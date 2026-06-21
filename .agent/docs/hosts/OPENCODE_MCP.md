@@ -12,7 +12,18 @@ https://opencode.ai/docs/mcp-servers
 
 ## Note OpenCode
 
-Pour OpenCode, une configuration projet-locale peut eviter les chemins globaux figes vers un ancien `.agent/mcp/server_entry.py`. Mais ce n'est qu'une strategie propre a OpenCode. La regle universelle reste: le root MCP doit etre prouve par hash sentinel cote host et cote MCP.
+Pour OpenCode, la strategie recommandee est projet-local si le workspace le
+supporte. Cette regle ne s'applique pas automatiquement aux autres hosts.
+
+Une configuration projet-locale peut eviter les chemins globaux figes vers un
+ancien `.agent/mcp/server_entry.py`. Mais ce n'est qu'une strategie propre a
+OpenCode. La regle universelle reste: le root MCP doit etre prouve par hash
+sentinel cote host et cote MCP.
+
+Ne pas ajouter de chemin absolu vers `agent-scribe-graphify` dans une config
+globale OpenCode sans instruction explicite. Si une entree globale existe deja,
+demander permission avant de la supprimer ou de la desactiver, et ne pas toucher
+aux autres MCP comme `chrome-devtools`.
 
 ## Commande `.agent`
 

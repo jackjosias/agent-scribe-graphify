@@ -286,6 +286,37 @@
     "required_question_when_unbound": "Veux-tu que je configure le MCP .agent dans ce host ? Ou veux-tu explicitement un bootstrap filesystem malgré host UNSAFE ?",
     "explicit_unsafe_bootstrap_phrase": "oui, bootstrap filesystem malgré host UNSAFE"
   },
+  "host_adapter_resolution": {
+    "applies_to_all_hosts": true,
+    "do_not_hardcode_opencode": true,
+    "do_not_use_one_host_strategy_for_another_host": true,
+    "host_to_guide": {
+      "OpenCode": ".agent/docs/hosts/OPENCODE_MCP.md",
+      "Codex CLI": ".agent/docs/hosts/OPENAI_CODEX_MCP.md",
+      "Claude Code": ".agent/docs/hosts/CLAUDE_CODE_MCP.md",
+      "Cursor": ".agent/docs/hosts/CURSOR_MCP.md",
+      "Gemini CLI": ".agent/docs/hosts/GEMINI_CLI_MCP.md",
+      "VS Code / Copilot": ".agent/docs/hosts/VSCODE_COPILOT_MCP.md",
+      "Cline": ".agent/docs/hosts/CLINE_MCP.md",
+      "Roo Code": ".agent/docs/hosts/ROO_CODE_MCP.md",
+      "Kilo Code": ".agent/docs/hosts/KCODE_MCP.md",
+      "Windsurf": ".agent/docs/hosts/WINDSURF_MCP.md",
+      "autre / unknown": ".agent/docs/hosts/README.md"
+    },
+    "universal_invariants": [
+      "MCP tools visible to LLM host must be verified separately from local server list-tools",
+      "MCP root binding must be proven with sentinel hash on host side and MCP side",
+      "host-specific config strategy must be read from the corresponding host guide",
+      "absolute paths to another project are forbidden",
+      "global/user config writes require explicit user permission"
+    ],
+    "when_host_guide_missing_or_incomplete": {
+      "status": "HOST_GUIDE_INCOMPLETE",
+      "init_status": "INIT_BLOCKED_HOST_GUIDE_INCOMPLETE",
+      "must_ask_user_for_host_config_details": true,
+      "must_not_guess_config": true
+    }
+  },
   "mcp_root_binding_check": {
     "applies_to_all_hosts": true,
     "mcp_visible_is_not_enough": true,

@@ -85,6 +85,40 @@ Classer l'environnement courant dans une seule catégorie :
 * Windsurf
 * autre / unknown
 
+### 1B. HOST ADAPTER RESOLUTION — MULTI-HOST
+
+Après détection du host, l'agent doit résoudre une fiche host dans
+`.agent/docs/hosts/`. `.agent` ne hardcode pas une stratégie OpenCode comme
+stratégie globale: `.agent` définit les invariants universels, puis chaque
+host applique son adaptateur documentaire.
+
+Mapping indicatif :
+
+* OpenCode → `.agent/docs/hosts/OPENCODE_MCP.md`
+* Codex CLI → `.agent/docs/hosts/OPENAI_CODEX_MCP.md` ou `CODEX_CLI_MCP.md`
+* Claude Code → `.agent/docs/hosts/CLAUDE_CODE_MCP.md`
+* Cursor → `.agent/docs/hosts/CURSOR_MCP.md`
+* Gemini CLI → `.agent/docs/hosts/GEMINI_CLI_MCP.md`
+* VS Code / Copilot → `.agent/docs/hosts/VSCODE_COPILOT_MCP.md`
+* Cline → `.agent/docs/hosts/CLINE_MCP.md`
+* Roo Code → `.agent/docs/hosts/ROO_CODE_MCP.md`
+* Kilo Code → `.agent/docs/hosts/KCODE_MCP.md`
+* Windsurf → `.agent/docs/hosts/WINDSURF_MCP.md`
+* unknown → `.agent/docs/hosts/README.md` + `AGENT_MCP_INSTALL_MATRIX.md`
+
+Règles :
+
+* Ne pas appliquer une stratégie OpenCode à Cursor.
+* Ne pas appliquer une stratégie Cursor à Gemini CLI.
+* Ne pas inventer un fichier de config.
+* Ne pas écrire dans une config globale/user sans que la fiche host le
+  recommande explicitement et sans permission utilisateur.
+* Ne pas utiliser de chemin absolu figé vers un ancien projet.
+* Toujours préférer les mécanismes project/workspace-local quand le host les
+  supporte.
+* Si la fiche host est incomplète ou non confirmée : statut
+  `HOST_GUIDE_INCOMPLETE` et demander clarification.
+
 ### 2. Vérifier deux états séparés
 
 **MCP local server** : vérifier que le serveur local existe avec :

@@ -6,18 +6,24 @@ Commande locale commune: `python3 .agent/mcp/server_entry.py`.
 
 Root binding check obligatoire pour tous les hosts: MCP visible ne suffit pas; `MCP_BOUND_TO_CURRENT_PROJECT` doit etre prouve par hash sentinelle cote host et cote MCP.
 
-| Host | Source officielle deja listee | Fichier de config | Statut terrain | Verdict |
-|---|---|---|---|---|
-| OpenCode | https://opencode.ai/docs/mcp-servers | `opencode.jsonc` | a retester | UNKNOWN |
-| Codex CLI | https://developers.openai.com/codex/mcp | `.codex/config.toml` | teste dans le host courant | ACCEPTABLE |
-| Claude Code | https://docs.anthropic.com/en/docs/claude-code/mcp | `.mcp.json` | a tester | UNKNOWN |
-| VS Code / Copilot MCP | a verifier dans la doc IDE officielle | `.vscode/mcp.json` | a tester | UNKNOWN |
-| Cline | https://docs.cline.bot/mcp/mcp-overview | `mcp.json` | a tester | UNKNOWN |
-| Kilo Code | source officielle non confirmee dans cette passe | `kilo.jsonc` | a tester | UNKNOWN |
-| Roo Code | https://docs.roocode.com/features/mcp/using-mcp-in-roo | `.roo/mcp.json` | a tester | UNKNOWN |
-| Cursor | source officielle non confirmee dans cette passe | `.cursor/mcp.json` | a verifier | UNKNOWN |
-| Windsurf | source officielle MCP specifique non confirmee pendant cette passe | a verifier | a verifier | UNKNOWN |
-| CommandCode CLI | nom ambigu, source officielle a clarifier | a verifier | a verifier | UNKNOWN |
+Host guide obligatoire avant correction config: detecter le host, lire sa
+fiche dans `.agent/docs/hosts/`, puis appliquer uniquement cette strategie. Ne
+pas transposer la strategie OpenCode, Cursor, Codex CLI ou Gemini CLI vers un
+autre host.
+
+| Host | Source officielle deja listee | Fichier de config | Fiche host | Statut terrain | Verdict |
+|---|---|---|---|---|---|
+| OpenCode | https://opencode.ai/docs/mcp-servers | `opencode.jsonc` | `OPENCODE_MCP.md` | a retester | UNKNOWN |
+| Codex CLI | https://developers.openai.com/codex/mcp | `.codex/config.toml` | `OPENAI_CODEX_MCP.md` | teste dans le host courant | ACCEPTABLE |
+| Claude Code | https://docs.anthropic.com/en/docs/claude-code/mcp | `.mcp.json` | `CLAUDE_CODE_MCP.md` | a tester | UNKNOWN |
+| VS Code / Copilot MCP | a verifier dans la doc IDE officielle | `.vscode/mcp.json` | `VSCODE_COPILOT_MCP.md` | a tester | UNKNOWN |
+| Cline | https://docs.cline.bot/mcp/mcp-overview | `mcp.json` | `CLINE_MCP.md` | a tester | UNKNOWN |
+| Kilo Code | source officielle non confirmee dans cette passe | `kilo.jsonc` | `KCODE_MCP.md` | a tester | UNKNOWN |
+| Roo Code | https://docs.roocode.com/features/mcp/using-mcp-in-roo | `.roo/mcp.json` | `ROO_CODE_MCP.md` | a tester | UNKNOWN |
+| Cursor | source officielle non confirmee dans cette passe | `.cursor/mcp.json` | `CURSOR_MCP.md` | a verifier | UNKNOWN |
+| Gemini CLI | source officielle non confirmee dans cette passe | a verifier | `GEMINI_CLI_MCP.md` | a verifier | UNKNOWN |
+| Windsurf | source officielle MCP specifique non confirmee pendant cette passe | a verifier | `WINDSURF_MCP.md` | a verifier | UNKNOWN |
+| CommandCode CLI | nom ambigu, source officielle a clarifier | a verifier | `COMMAND_CODE_CLI.md` | a verifier | UNKNOWN |
 
 Validation minimale par host:
 

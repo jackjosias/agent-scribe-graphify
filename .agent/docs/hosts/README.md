@@ -4,6 +4,21 @@ Derniere recherche web: 2026-06-21.
 
 Ce dossier regroupe les fiches d'installation MCP par host, IDE et extension. Objectif: documenter comment brancher le serveur MCP local `.agent` et comment auditer si le host conserve des chemins d'ecriture directs.
 
+## Architecture multi-host
+
+Ce dossier n'est pas une doc OpenCode. C'est un registre d'adaptateurs host. Le
+protocole universel est:
+
+1. detecter le host
+2. lire la fiche host
+3. verifier MCP visible
+4. verifier root binding
+5. appliquer uniquement la strategie de ce host
+
+Ne jamais copier la strategie d'un host vers un autre. OpenCode, Cursor,
+Gemini CLI, Codex CLI, Claude Code, Cline, Roo, Kilo et VS Code peuvent avoir
+des formats de config differents.
+
 Commande MCP `.agent` standard pour les hosts STDIO:
 
 ```bash
@@ -38,6 +53,7 @@ Fiches:
 - `WINDSURF_MCP.md`
 - `COMMAND_CODE_CLI.md`
 - `CURSOR_MCP.md`
+- `GEMINI_CLI_MCP.md`
 
 Verdicts:
 
