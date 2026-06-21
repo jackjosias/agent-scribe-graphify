@@ -1,5 +1,3 @@
 # Codex CLI MCP
 
-Recherche web: 2026-06-21.
-
-Source: https://developers.openai.com/codex/mcp
+Voir la fiche canonique: `OPENAI_CODEX_MCP.md`.

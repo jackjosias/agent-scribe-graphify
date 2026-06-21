@@ -1,14 +1,14 @@
-# Roo Code MCP
+# Cursor MCP
 
 Recherche web: 2026-06-21.
 
 ## Source officielle
 
-https://docs.roocode.com/features/mcp/using-mcp-in-roo
+Source officielle non confirmee dans cette passe. A verifier dans la documentation Cursor MCP correspondant a la version installee.
 
 ## Fichier de config
 
-`.roo/mcp.json`
+`.cursor/mcp.json`
 
 ## Commande `.agent`
 
@@ -37,10 +37,10 @@ python3 .agent/mcp/server_entry.py --list-tools
 
 ## Permissions a verifier
 
-- Shell direct: verifier si Roo Code expose terminal/commande shell.
-- Edit direct: verifier si Roo Code peut ecrire directement dans le workspace hors MCP.
-- Desactivation: verifier si les modes/permissions Roo Code permettent de bloquer shell/edit directs.
-- Sandbox: verifier si l'IDE contenant Roo Code peut etre lance via `.agent/scripts/agent_sandbox.py` ou isolation equivalente.
+- Shell direct: verifier si Cursor Agent expose terminal/commande shell.
+- Edit direct: verifier si Cursor Agent peut modifier les fichiers hors MCP.
+- Desactivation: verifier si shell/edit directs peuvent etre retires ou soumis a approbation stricte.
+- Sandbox: verifier si Cursor peut etre lance via `.agent/scripts/agent_sandbox.py` ou isolation OS equivalente.
 
 ## Verdict terrain
 

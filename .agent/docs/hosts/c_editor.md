@@ -1,5 +1,3 @@
 # C Editor MCP
 
-Recherche web: 2026-06-21.
-
-Fiche a verifier manuellement dans l'IDE concerne.
+Fiche non canonique. Voir `editor_mcp.md` et la fiche specifique de l'IDE reel utilise.
