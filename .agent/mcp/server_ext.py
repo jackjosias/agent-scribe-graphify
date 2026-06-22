@@ -9,16 +9,17 @@ import time
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import delete_ops, patch_queue, task_context  # type: ignore
+from runtime import db, delete_ops, patch_queue, task_context  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 
-server.SERVER_VERSION = "0.2.8"
+server.SERVER_VERSION = "0.2.11"
 _BASE_WORKFLOW_NEXT = server.workflow_next
 _BASE_TOOL_SCHEMA = server.tool_schema
 _BASE_BEFORE_TASK = server.before_task
 _BASE_SCRIBE_QUERY = server.scribe_query
 _BASE_GRAPHIFY_QUERY = server.graphify_query
 _BASE_FINISH_TASK = server.finish_task
+_BASE_CLAIM_RESOURCE = server.claim_resource
 _DELETE_INTENTS = {"delete", "remove"}
 _SCRIBE_VERDICTS = {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}
 _GRAPHIFY_VERDICTS = {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}
@@ -30,6 +31,17 @@ _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix",
 _MUTATING_CONTEXT_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove"}
 _GRAPHIFY_KEYWORDS = {"api", "architecture", "backend", "base de données", "bug", "code", "database", "db", "frontend", "migration", "module", "production", "refactor", "sécurité", "security", "test"}
 _DEBUG_KEYWORDS = {"bug", "debug", "erreur", "error", "fail", "failure", "fix", "regression", "refactor", "test"}
+_LOOP_VERDICTS = {
+    "TASK_NOT_ACKED",
+    "ACTIVE_TASK_EXISTS",
+    "AGENT_UNKNOWN_OR_UNREGISTERED",
+    "TASK_CONTEXT_UNKNOWN_TASK",
+    "TASK_CONTEXT_TOKEN_MISMATCH",
+    "CLAIM_CONTEXT_NOT_READY",
+    "BEFORE_TASK_REQUIRED",
+}
+_HARD_STOP_FORBIDDEN = ["bootstrap", "before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"]
+_PRE_CONTEXT_FORBIDDEN = ["before_task", "scribe_query", "graphify_query", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"]
 
 
 def _last(last_verdict: str) -> str:
@@ -80,7 +92,84 @@ def _missing_context_payload() -> Dict[str, Any]:
     })
 
 
+def _stop_workflow_loop(retry: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        with db.connect(server.ROOT) as con:
+            db.add_event(con, "workflow.loop_detected", {"retry": retry}, retry.get("agent_id"))
+    except Exception:
+        pass
+    return server.ok({
+        "verdict": "STOP_WORKFLOW_LOOP_DIRECT_WRITE_FORBIDDEN",
+        "state": "WORKFLOW_LOOP_DETECTED",
+        "reason": "Repeated MCP workflow loop detected. Stop and ask the user. Direct file edit is forbidden.",
+        "retry": retry,
+        "forbidden": _HARD_STOP_FORBIDDEN,
+    })
+
+
+def _track_loop(agent_id: str, resource: str, verdict: str) -> Dict[str, Any] | None:
+    if verdict not in _LOOP_VERDICTS and not verdict.startswith("TASK_CONTEXT"):
+        return None
+    retry = task_context.record_retry(agent_id, resource, verdict, limit=3)
+    if retry.get("verdict") == "MAX_WORKFLOW_RETRIES_EXCEEDED":
+        return _stop_workflow_loop(retry)
+    if retry.get("verdict") == "RETRY_LOOP_DETECTED":
+        return server.ok({
+            "verdict": "RETRY_LOOP_DETECTED",
+            "state": "RETRY_LOOP_DETECTED",
+            "reason": "Repeated MCP workflow warning detected. Continue only through the required MCP recovery tools; direct file edit is forbidden.",
+            "retry": retry,
+            "forbidden": ["bootstrap", "before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+        })
+    return None
+
+
+def _before_task_agent_block(agent_id: str, code: str) -> Dict[str, Any]:
+    if code == "AGENT_ID_REQUIRED":
+        return server.ok({
+            "verdict": "AGENT_ID_REQUIRED",
+            "state": "AGENT_ID_REQUIRED",
+            "reason": "before_task requires a registered active agent_id. No task_context was created.",
+            "must_call": {"tool": "register_agent", "args": {"host_tool": "unknown", "model_name": ""}},
+            "forbidden": _PRE_CONTEXT_FORBIDDEN,
+        })
+    if code == "AGENT_UNKNOWN_OR_UNREGISTERED":
+        return server.ok({
+            "verdict": "AGENT_UNKNOWN_OR_UNREGISTERED",
+            "state": "AGENT_UNKNOWN_OR_UNREGISTERED",
+            "reason": "before_task cannot create a task_context for an unknown agent.",
+            "must_call": {"tool": "register_agent", "args": {"agent_id": agent_id, "host_tool": "unknown", "model_name": ""}},
+            "forbidden": _PRE_CONTEXT_FORBIDDEN,
+        })
+    if code == "AGENT_IDLE_RESUME_REQUIRED":
+        return server.ok({
+            "verdict": "AGENT_IDLE_RESUME_REQUIRED",
+            "state": "AGENT_IDLE_RESUME_REQUIRED",
+            "reason": "before_task requires an active agent. Resume the existing identity; do not create a replacement.",
+            "must_call": {"tool": "resume_agent", "args": {"agent_id": agent_id}},
+            "forbidden": ["before_task", "claim_resource", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+        })
+    return server.ok({
+        "verdict": code,
+        "state": code,
+        "reason": "before_task requires a registered active agent. No task_context was created.",
+        "forbidden": _PRE_CONTEXT_FORBIDDEN,
+    })
+
+
 def before_task(request: str, agent_id: str = "", intent: str = "", resource: str = "") -> Dict[str, Any]:
+    try:
+        db.require_agent_active(agent_id)
+    except db.CoordinationError as exc:
+        code = str(exc)
+        event_type = "agent.required" if code == "AGENT_ID_REQUIRED" else "agent.unknown_refused_before_task"
+        try:
+            with db.connect(server.ROOT) as con:
+                db.add_event(con, event_type, {"reason": code, "request": request, "intent": intent, "resource": resource}, agent_id or None)
+        except Exception:
+            pass
+        return _before_task_agent_block(agent_id, code)
+
     result = _BASE_BEFORE_TASK(request=request, agent_id=agent_id)
     payload = json.loads(result["content"][0]["text"])
     if payload.get("verdict") != "BEFORE_TASK_OK":
@@ -94,14 +183,16 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             requires_graphify=_requires_graphify(request, intent, resource),
         )
     except task_context.TaskContextError as exc:
-        if str(exc) == "ACTIVE_TASK_EXISTS":
+        if exc.code == "ACTIVE_TASK_EXISTS":
+            task_id = exc.details.get("task_id") or ""
             return server.ok({
                 "verdict": "ACTIVE_TASK_EXISTS",
                 "state": "ACTIVE_TASK_EXISTS",
-                "reason": "An active task already exists for this agent/request/resource. Use resume_task/task_status or start a new task explicitly; before_task will not rotate context silently.",
+                "reason": "An active task already exists for this agent/resource/intent. Do not create a new task.",
                 "agent_id": agent_id,
                 "resource": resource or "",
-                "forbidden": ["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+                "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                "forbidden": ["before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
             })
         raise _context_error(exc) from exc
     payload.update(context)
@@ -172,6 +263,53 @@ def _require_context_ready(
         )
     except task_context.TaskContextError as exc:
         raise _context_error(exc) from exc
+
+
+def resume_task_context(agent_id: str, task_id: str) -> Dict[str, Any]:
+    try:
+        context = task_context.resume_task_context(agent_id=agent_id, task_id=task_id)
+    except task_context.TaskContextError as exc:
+        raise _context_error(exc) from exc
+    return server.ok({"verdict": "TASK_CONTEXT_RESUMED", **context})
+
+
+def _claim_context_not_ready(agent_id: str, resource: str, reason: str, missing: List[str] | None = None) -> Dict[str, Any]:
+    try:
+        with db.connect(server.ROOT) as con:
+            db.add_event(con, "claim.context_not_ready", {"resource": resource, "reason": reason, "missing_inputs": missing or []}, agent_id or None)
+    except Exception:
+        pass
+    return server.ok({
+        "verdict": "CLAIM_CONTEXT_NOT_READY",
+        "state": "CLAIM_CONTEXT_NOT_READY",
+        "reason": reason,
+        "missing_inputs": missing or [],
+        "forbidden": ["claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+    })
+
+
+def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_seconds: int = 1800, task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+    try:
+        db.require_agent_active(agent_id)
+    except db.CoordinationError as exc:
+        return _claim_context_not_ready(agent_id, resource, str(exc), ["agent_id"])
+    requested_mode = "patch_queue" if mode in server.WRITE_MODES else mode
+    if requested_mode in server.WRITE_MODES:
+        missing = [name for name, value in {"task_id": task_id, "context_token": context_token}.items() if not value]
+        if missing:
+            return _claim_context_not_ready(agent_id, resource, "claim_resource write/patch_queue/exclusive requires a ready task_id/context_token.", missing)
+        try:
+            task_context.require_context_ready(
+                agent_id,
+                task_id,
+                context_token,
+                resource=resource,
+                strict_resource=True,
+                allowed_intents=_MUTATING_CONTEXT_INTENTS,
+            )
+        except task_context.TaskContextError as exc:
+            return _claim_context_not_ready(agent_id, resource, str(exc), ["task_id", "context_token"])
+    return _BASE_CLAIM_RESOURCE(agent_id=agent_id, resource=resource, mode=mode, ttl_seconds=ttl_seconds)
 
 
 def scribe_query(query: str, limit: int = 5, agent_id: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
@@ -328,16 +466,37 @@ def workflow_next(
     normalized = (intent or "").strip().lower()
     last = _last(last_verdict)
 
-    if last.startswith("TASK_CONTEXT") or last in {"READ_INTENT_CANNOT_WRITE", "ACTIVE_TASK_EXISTS"}:
-        retry = task_context.record_retry(agent_id, resource, last)
-        if retry.get("verdict") in {"RETRY_LOOP_DETECTED", "MAX_WORKFLOW_RETRIES_EXCEEDED"}:
+    stop = _track_loop(agent_id, resource, last)
+    if stop is not None:
+        return stop
+
+    task_data: Dict[str, Any] | None = None
+    if task_id:
+        try:
+            task_data = task_context.task_status(task_id)
+        except task_context.TaskContextError as exc:
+            stop = _track_loop(agent_id, resource, exc.code)
+            if stop is not None:
+                return stop
+            raise _context_error(exc) from exc
+        if task_data.get("agent_id") != agent_id:
+            raise server.ToolError("TASK_CONTEXT_AGENT_MISMATCH")
+        if task_data.get("status") == "active" and not context_token:
             return server.ok({
-                "verdict": retry["verdict"],
-                "state": retry["verdict"],
-                "reason": "The same agent/resource/error repeated. Stop instead of retrying or falling back to direct writes.",
-                "retry": retry,
-                "forbidden": ["bootstrap", "before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "TASK_CONTEXT_TOKEN_REQUIRED",
+                "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                "reason": "An active task exists and its context_token is required. Do not call before_task again.",
+                "forbidden": ["before_task", "direct_file_edit"],
             })
+        if task_data.get("status") == "active" and request and last not in _CONTEXT_VERDICTS:
+            if not task_data.get("scribe_done"):
+                last_verdict = "BEFORE_TASK_OK"
+            elif task_data.get("requires_graphify") and not task_data.get("graphify_done"):
+                last_verdict = "SCRIBE_QUERY_DONE"
+            else:
+                last_verdict = "GRAPHIFY_QUERY_DONE" if task_data.get("requires_graphify") else "SCRIBE_QUERY_DONE"
+            last = _last(last_verdict)
 
     if not agent_id or agent_id not in server._active_agent_ids():
         return _BASE_WORKFLOW_NEXT(
@@ -404,9 +563,18 @@ def workflow_next(
             model_name=model_name,
         )
         payload = json.loads(result["content"][0]["text"])
-        if (payload.get("must_call") or {}).get("tool") == "propose_patch":
+        must_tool = (payload.get("must_call") or {}).get("tool")
+        if must_tool in {"claim_resource", "propose_patch"}:
             payload["must_call"]["args"].update({"task_id": task_id, "context_token": context_token})
             return server.ok(payload)
+        if must_tool == "before_task" and task_id:
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "TASK_CONTEXT_TOKEN_REQUIRED" if not context_token else "TASK_CONTEXT_CONTINUE_REQUIRED",
+                "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                "reason": "workflow_next refused to re-enter before_task while an active task_id is present.",
+                "forbidden": ["before_task", "direct_file_edit"],
+            })
         return result
 
     if not resource:
@@ -425,7 +593,7 @@ def workflow_next(
         return server._next_payload(
             state="CLAIM_REQUIRED_FOR_DELETE",
             tool="claim_resource",
-            args={"agent_id": agent_id, "resource": safe, "mode": "patch_queue", "ttl_seconds": 600},
+            args={"agent_id": agent_id, "resource": safe, "mode": "patch_queue", "ttl_seconds": 600, "task_id": task_id, "context_token": context_token},
             reason="A compatible claim is mandatory before deletion.",
             forbidden=["delete_resource", "direct_file_edit", "finish_task"],
             context={"foreign_claims": claims["foreign"]},
@@ -504,8 +672,12 @@ def tool_schema(name: str) -> Dict[str, Any]:
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"intent": "string", "resource": "string"})
     if name == "workflow_next":
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+    if name == "resume_task_context":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}}, "additionalProperties": False}
     if name in {"scribe_query", "graphify_query"}:
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"agent_id": "string", "task_id": "string", "context_token": "string"})
+    if name == "claim_resource":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
     if name == "propose_patch":
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
     if name == "finish_task":
@@ -635,6 +807,8 @@ def workflow_snapshot(
 server.workflow_next = workflow_next
 server.workflow_snapshot = workflow_snapshot
 server.before_task = before_task
+server.resume_task_context = resume_task_context
+server.claim_resource = claim_resource
 server.scribe_query = scribe_query
 server.graphify_query = graphify_query
 server.propose_patch = propose_patch
@@ -647,6 +821,8 @@ server.wait_for_tasks = wait_for_tasks
 server.tool_schema = tool_schema
 server.TOOLS["workflow_next"] = workflow_next
 server.TOOLS["before_task"] = before_task
+server.TOOLS["resume_task_context"] = resume_task_context
+server.TOOLS["claim_resource"] = claim_resource
 server.TOOLS["scribe_query"] = scribe_query
 server.TOOLS["graphify_query"] = graphify_query
 server.TOOLS["propose_patch"] = propose_patch

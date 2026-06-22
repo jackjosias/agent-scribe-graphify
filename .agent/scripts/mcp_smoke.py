@@ -149,7 +149,7 @@ def smoke_nominal_workflow() -> None:
         **ctx,
     }, "claim_resource")
 
-    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600})
+    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600, **ctx})
     if claim.get("verdict") != "CLAIM_GRANTED" or claim.get("mode") != "patch_queue":
         fail(f"claim should be granted as patch_queue write-gate: {claim}")
     claim_id = claim["claim_id"]

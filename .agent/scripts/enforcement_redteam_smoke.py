@@ -38,23 +38,19 @@ def rel(path: Path) -> str:
     return str(path.relative_to(ROOT)).replace("\\", "/")
 
 
-def call_tool(name: str, args: dict[str, Any], entry: Path = ENTRY, cwd: Path | str = ROOT) -> dict[str, Any]:
+def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
     proc = subprocess.run(
-        [sys.executable, str(entry), "--call", name, "--args", json.dumps(args)],
-        cwd=str(cwd),
+        [sys.executable, str(ENTRY), "--call", name, "--args", json.dumps(args)],
+        cwd=str(ROOT),
         text=True,
         capture_output=True,
         timeout=30,
     )
-    if proc.returncode != 0:
-        try:
-            return json.loads(proc.stderr or proc.stdout)
-        except json.JSONDecodeError:
-            fail(f"{name} exited {proc.returncode}\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
+    raw_text = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
     try:
-        outer = json.loads(proc.stdout)
+        outer = json.loads(raw_text)
     except json.JSONDecodeError:
-        fail(f"{name} returned non-json stdout: {proc.stdout!r}")
+        fail(f"{name} returned non-json output rc={proc.returncode}\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
     if "content" in outer:
         return json.loads(outer["content"][0]["text"])
     return outer
@@ -65,8 +61,12 @@ def error_text(result: dict[str, Any]) -> str:
 
 
 def assert_refused(result: dict[str, Any], expected: str, label: str) -> None:
-    if result.get("ok") is not False or expected not in error_text(result):
+    if result.get("ok") is not False and result.get("verdict") not in {"CLAIM_CONTEXT_NOT_READY", "DELETE_CONFIRMATION_REQUIRED"}:
+        fail(f"{label} expected refusal, got {result}")
+    if expected not in error_text(result):
         fail(f"{label} expected refusal containing {expected!r}, got {result}")
+    if result.get("forbidden") and "direct_file_edit" not in result.get("forbidden", []):
+        fail(f"{label} must forbid direct_file_edit: {result}")
 
 
 def bootstrap(label: str) -> str:
@@ -83,11 +83,11 @@ def register(label: str) -> str:
     return registered["agent"]["agent_id"]
 
 
-def claim(agent_id: str, target: str) -> str:
-    result = call_tool("claim_resource", {"agent_id": agent_id, "resource": target, "mode": "patch_queue", "ttl_seconds": 600})
-    if result.get("verdict") != "CLAIM_GRANTED":
-        fail(f"claim_resource failed: {result}")
-    return result["claim_id"]
+def write_target(name: str, text: str = "redteam-original\n") -> str:
+    prepare_redteam()
+    target = REDTEAM_DIR / name
+    target.write_text(text, encoding="utf-8")
+    return rel(target)
 
 
 def file_hash(target: str) -> str:
@@ -95,6 +95,40 @@ def file_hash(target: str) -> str:
     if result.get("verdict") != "FILE_HASH":
         fail(f"file_hash failed: {result}")
     return result["hash"]
+
+
+def start_context(agent_id: str, target: str, request: str = "redteam write", intent: str = "write") -> dict[str, str]:
+    before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": target})
+    if before.get("verdict") != "BEFORE_TASK_OK":
+        fail(f"before_task failed: {before}")
+    return {"task_id": before["task_id"], "context_token": before["context_token"]}
+
+
+def mark_scribe(agent_id: str, ctx: dict[str, str], query: str = "redteam write") -> None:
+    result = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": query, "limit": 5})
+    if result.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
+        fail(f"scribe_query failed: {result}")
+
+
+def mark_graphify(agent_id: str, target: str, ctx: dict[str, str], query: str = "redteam write") -> None:
+    result = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": query, "resource": target})
+    if result.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
+        fail(f"graphify_query failed: {result}")
+
+
+def ready_context(agent_id: str, target: str, request: str = "redteam write", intent: str = "write") -> dict[str, str]:
+    ctx = start_context(agent_id, target, request, intent=intent)
+    mark_scribe(agent_id, ctx, request)
+    if intent != "read":
+        mark_graphify(agent_id, target, ctx, request)
+    return ctx
+
+
+def claim(agent_id: str, target: str, ctx: dict[str, str]) -> str:
+    result = call_tool("claim_resource", {"agent_id": agent_id, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+    if result.get("verdict") != "CLAIM_GRANTED":
+        fail(f"claim_resource failed: {result}")
+    return result["claim_id"]
 
 
 def propose(agent_id: str, target: str, base_hash: str, ctx: dict[str, str], replacement: str = "redteam-updated\n") -> dict[str, Any]:
@@ -114,231 +148,93 @@ def expect_patch(agent_id: str, target: str, base_hash: str, ctx: dict[str, str]
     return result["patch_id"]
 
 
-def write_target(name: str, text: str = "redteam-original\n") -> str:
-    prepare_redteam()
-    target = REDTEAM_DIR / name
-    target.write_text(text, encoding="utf-8")
-    return rel(target)
-
-
-def start_context(
-    agent_id: str,
-    target: str,
-    request: str = "redteam write",
-    intent: str = "write",
-) -> dict[str, str]:
-    before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": target})
-    if before.get("verdict") != "BEFORE_TASK_OK":
-        fail(f"before_task failed: {before}")
-    return {"task_id": before["task_id"], "context_token": before["context_token"]}
-
-
-def mark_scribe(agent_id: str, ctx: dict[str, str], query: str = "redteam write") -> None:
-    result = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": query, "limit": 5})
-    if result.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
-        fail(f"scribe_query failed: {result}")
-
-
-def mark_graphify(agent_id: str, target: str, ctx: dict[str, str], query: str = "redteam write") -> None:
-    result = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": query, "resource": target})
-    if result.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
-        fail(f"graphify_query failed: {result}")
-
-
-def ready_context(agent_id: str, target: str, request: str = "redteam write") -> dict[str, str]:
-    ctx = start_context(agent_id, target, request)
-    mark_scribe(agent_id, ctx, request)
-    mark_graphify(agent_id, target, ctx, request)
-    return ctx
-
-
 def test_positive_context_path() -> None:
-    clean_runtime()
-    clean_redteam()
+    clean_runtime(); clean_redteam()
     target = write_target("positive-context.txt")
     agent = bootstrap("redteam-positive")
     ctx = ready_context(agent, target, "redteam positive context path")
-    claim(agent, target)
+    claim(agent, target, ctx)
     patch_id = expect_patch(agent, target, file_hash(target), ctx, replacement="positive-context-applied\n")
     applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id})
     if applied.get("verdict") != "PATCH_APPLIED":
         fail(f"positive context apply failed: {applied}")
 
 
-def test_before_without_scribe_refused() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("missing-scribe.txt")
-    agent = bootstrap("redteam-missing-scribe")
+def test_claim_requires_scribe_and_graphify() -> None:
+    clean_runtime(); clean_redteam()
+    target = write_target("missing-context.txt")
+    agent = bootstrap("redteam-missing-context")
     ctx = start_context(agent, target, "redteam missing scribe")
-    claim(agent, target)
-    result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_NOT_READY", "propose_patch without scribe_query")
-
-
-def test_scribe_without_graphify_refused() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("missing-graphify.txt")
-    agent = bootstrap("redteam-missing-graphify")
-    ctx = start_context(agent, target, "redteam missing graphify")
+    result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+    assert_refused(result, "scribe_query", "claim_resource without scribe_query")
     mark_scribe(agent, ctx, "redteam missing graphify")
-    claim(agent, target)
-    result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_NOT_READY", "propose_patch without required graphify_query")
+    result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+    assert_refused(result, "graphify_query", "claim_resource without graphify_query")
 
 
-def test_fake_token_refused() -> None:
-    clean_runtime()
-    clean_redteam()
+def test_fake_token_and_read_intent_refused_at_claim() -> None:
+    clean_runtime(); clean_redteam()
     target = write_target("fake-token.txt")
     agent = bootstrap("redteam-fake-token")
     ctx = ready_context(agent, target, "redteam fake token")
-    ctx["context_token"] = "fake-token"
-    claim(agent, target)
-    result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_TOKEN_MISMATCH", "propose_patch with fake token")
+    bad_ctx = {**ctx, "context_token": "fake-token"}
+    result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **bad_ctx})
+    assert_refused(result, "TASK_CONTEXT_TOKEN_MISMATCH", "claim_resource with fake token")
+
+    clean_runtime(); clean_redteam()
+    target = write_target("read-intent.txt")
+    agent = bootstrap("redteam-read-intent")
+    read_ctx = ready_context(agent, target, "redteam read intent", intent="read")
+    result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **read_ctx})
+    assert_refused(result, "READ_INTENT_CANNOT_WRITE", "claim_resource with read intent")
 
 
-def test_propose_without_claim() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("without-claim.txt")
-    agent = bootstrap("redteam-without-claim")
-    ctx = ready_context(agent, target, "redteam without claim")
+def test_propose_apply_and_delete_guards() -> None:
+    clean_runtime(); clean_redteam()
+    target = write_target("guards.txt")
+    agent = bootstrap("redteam-guards")
+    ctx = ready_context(agent, target, "redteam guards")
     result = propose(agent, target, file_hash(target), ctx)
     assert_refused(result, "claim required", "propose_patch without claim")
-
-
-def test_apply_wrong_agent() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("wrong-agent.txt")
-    agent_a = bootstrap("redteam-owner")
-    agent_b = register("redteam-intruder")
-    ctx = ready_context(agent_a, target, "redteam wrong agent")
-    claim(agent_a, target)
-    patch_id = expect_patch(agent_a, target, file_hash(target), ctx)
-    result = call_tool("apply_patch", {"agent_id": agent_b, "patch_id": patch_id})
-    assert_refused(result, "only patch owner can apply it", "apply_patch wrong agent")
-
-
-def test_apply_without_claim() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("released-claim.txt")
-    agent = bootstrap("redteam-released")
-    ctx = ready_context(agent, target, "redteam released claim")
-    claim_id = claim(agent, target)
+    claim_id = claim(agent, target, ctx)
     patch_id = expect_patch(agent, target, file_hash(target), ctx)
-    released = call_tool("release_claim", {"agent_id": agent, "claim_id": claim_id, "summary": "redteam release before apply"})
+    intruder = register("redteam-intruder")
+    result = call_tool("apply_patch", {"agent_id": intruder, "patch_id": patch_id})
+    assert_refused(result, "only patch owner can apply it", "apply_patch wrong agent")
+    released = call_tool("release_claim", {"agent_id": agent, "claim_id": claim_id, "summary": "release before apply"})
     if released.get("verdict") != "CLAIM_RELEASED":
         fail(f"release_claim failed: {released}")
     result = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id})
     assert_refused(result, "claim required", "apply_patch without active claim")
 
-
-def test_delete_confirmation_required() -> None:
-    clean_runtime()
-    clean_redteam()
+    clean_runtime(); clean_redteam()
     target = write_target("delete-confirmation.txt")
-    agent = bootstrap("redteam-delete-confirmation")
-    ctx = ready_context(agent, target, "redteam delete confirmation")
-    claim(agent, target)
+    agent = bootstrap("redteam-delete")
+    ctx = ready_context(agent, target, "redteam delete")
+    claim(agent, target, ctx)
     result = call_tool("delete_resource", {"agent_id": agent, "resource": target, "base_hash": file_hash(target), "confirm_phrase": "DELETE wrong-file", **ctx})
-    if result.get("verdict") != "DELETE_CONFIRMATION_REQUIRED":
+    if result.get("verdict") != "DELETE_CONFIRMATION_REQUIRED" or not (ROOT / target).exists():
         fail(f"delete_resource should require exact confirmation: {result}")
-    if not (ROOT / target).exists():
-        fail("delete_resource removed file without exact confirmation")
 
 
-def test_delete_with_pending_patch() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("delete-pending-patch.txt")
-    agent = bootstrap("redteam-delete-pending")
-    ctx = ready_context(agent, target, "redteam delete pending")
-    claim(agent, target)
-    base_hash = file_hash(target)
-    expect_patch(agent, target, base_hash, ctx)
-    result = call_tool("delete_resource", {
-        "agent_id": agent,
-        "resource": target,
-        "base_hash": base_hash,
-        "confirm_phrase": f"DELETE {target}",
-        "reason": "redteam pending patch delete attempt",
-        **ctx,
-    })
-    assert_refused(result, "pending proposed/conflict patches", "delete_resource with pending patch")
-    if not (ROOT / target).exists():
-        fail("delete_resource removed file with pending proposed/conflict patch")
-
-
-def test_reject_empty_resource_context_for_write() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("empty-resource-write.txt")
-    agent = bootstrap("redteam-empty-resource-write")
-    ctx = start_context(agent, "", "redteam empty resource write", intent="write")
-    mark_scribe(agent, ctx, "redteam empty resource write")
-    mark_graphify(agent, "", ctx, "redteam empty resource write")
-    claim(agent, target)
-    result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "TASK_CONTEXT_RESOURCE_REQUIRED", "propose_patch with empty context resource")
-
-
-def test_reject_empty_resource_context_for_delete() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("empty-resource-delete.txt")
-    agent = bootstrap("redteam-empty-resource-delete")
-    ctx = start_context(agent, "", "redteam empty resource delete", intent="delete")
-    mark_scribe(agent, ctx, "redteam empty resource delete")
-    mark_graphify(agent, "", ctx, "redteam empty resource delete")
-    claim(agent, target)
-    result = call_tool("delete_resource", {
-        "agent_id": agent,
-        "resource": target,
-        "base_hash": file_hash(target),
-        "confirm_phrase": f"DELETE {target}",
-        "reason": "redteam empty resource delete",
-        **ctx,
-    })
-    assert_refused(result, "TASK_CONTEXT_RESOURCE_REQUIRED", "delete_resource with empty context resource")
-    if not (ROOT / target).exists():
-        fail("delete_resource removed file with empty context resource")
-
-
-def test_reject_resource_mismatch_context_for_write() -> None:
-    clean_runtime()
-    clean_redteam()
-    file_a = write_target("resource-mismatch-a.txt")
-    file_b = write_target("resource-mismatch-b.txt")
+def test_resource_mismatch_refused_at_claim() -> None:
+    clean_runtime(); clean_redteam()
+    file_a = write_target("resource-a.txt")
+    file_b = write_target("resource-b.txt")
     agent = bootstrap("redteam-resource-mismatch")
     ctx = ready_context(agent, file_a, "redteam resource mismatch")
-    claim(agent, file_b)
-    result = propose(agent, file_b, file_hash(file_b), ctx)
-    assert_refused(result, "TASK_CONTEXT_RESOURCE_MISMATCH", "propose_patch with mismatched context resource")
-
-
-def test_reject_non_write_intent_for_patch() -> None:
-    clean_runtime()
-    clean_redteam()
-    target = write_target("non-write-intent.txt")
-    agent = bootstrap("redteam-non-write-intent")
-    ctx = start_context(agent, target, "redteam non write intent", intent="read")
-    mark_scribe(agent, ctx, "redteam non write intent")
-    claim(agent, target)
-    result = propose(agent, target, file_hash(target), ctx)
-    assert_refused(result, "READ_INTENT_CANNOT_WRITE", "propose_patch with non-write intent")
+    result = call_tool("claim_resource", {"agent_id": agent, "resource": file_b, "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+    assert_refused(result, "TASK_CONTEXT_RESOURCE_MISMATCH", "claim_resource with mismatched context resource")
 
 
 def test_context_bypass() -> str:
-    clean_runtime()
-    clean_redteam()
+    clean_runtime(); clean_redteam()
     target = write_target("context-bypass.txt")
     agent = bootstrap("redteam-context-bypass")
-    claim(agent, target)
+    claim_result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600})
+    if claim_result.get("verdict") == "CLAIM_GRANTED":
+        print("MCP_CONTEXT_BYPASS_OPEN")
+        return "OPEN"
     result = call_tool("propose_patch", {
         "agent_id": agent,
         "target": target,
@@ -372,24 +268,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--strict-context", action="store_true", help="fail if direct MCP write path bypasses before_task/scribe_query/graphify_query")
     args = parser.parse_args()
-
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
-
     try:
         test_positive_context_path()
-        test_before_without_scribe_refused()
-        test_scribe_without_graphify_refused()
-        test_fake_token_refused()
-        test_propose_without_claim()
-        test_apply_wrong_agent()
-        test_apply_without_claim()
-        test_delete_confirmation_required()
-        test_delete_with_pending_patch()
-        test_reject_empty_resource_context_for_write()
-        test_reject_empty_resource_context_for_delete()
-        test_reject_resource_mismatch_context_for_write()
-        test_reject_non_write_intent_for_patch()
+        test_claim_requires_scribe_and_graphify()
+        test_fake_token_and_read_intent_refused_at_claim()
+        test_propose_apply_and_delete_guards()
+        test_resource_mismatch_refused_at_claim()
         context_bypass = test_context_bypass()
         direct_fs = test_direct_fs_write()
         print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs}")

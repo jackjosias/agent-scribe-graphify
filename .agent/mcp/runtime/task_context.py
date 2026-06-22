@@ -10,16 +10,19 @@ from typing import Any
 
 try:
     from . import patch_queue
-    from .db import connect, init_db, now_ts as db_now_ts
+    from .db import add_event, connect, init_db, now_ts as db_now_ts, require_agent_active
 except Exception:
     import patch_queue  # type: ignore
-    from db import connect, init_db, now_ts as db_now_ts  # type: ignore
+    from db import add_event, connect, init_db, now_ts as db_now_ts, require_agent_active  # type: ignore
 
 DEFAULT_TTL_SECONDS = 900
 
 
 class TaskContextError(RuntimeError):
-    pass
+    def __init__(self, code: str, details: dict[str, Any] | None = None):
+        super().__init__(code)
+        self.code = code
+        self.details = details or {}
 
 
 def now_ts() -> int:
@@ -93,6 +96,57 @@ def _safe_resource(resource: str) -> str:
     return patch_queue.safe_resource(resource) if resource else ""
 
 
+def _normalize_intent(intent: str) -> str:
+    value = (intent or "").strip().lower()
+    if value in {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create"}:
+        return "write"
+    if value in {"delete", "remove"}:
+        return "delete"
+    if value in {"read", "inspect", "query"}:
+        return "read"
+    return value
+
+
+def _task_public(row: Any) -> dict[str, Any]:
+    return {
+        "task_id": row["task_id"],
+        "agent_id": row["agent_id"],
+        "request": row["request"],
+        "intent": row["intent"],
+        "resource": row["resource"],
+        "requires_graphify": bool(row["requires_graphify"]),
+        "before_done": bool(row["before_done"]),
+        "scribe_done": bool(row["scribe_done"]),
+        "graphify_done": bool(row["graphify_done"]),
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+        "finished_at": row["finished_at"],
+    }
+
+
+def find_active_task(agent_id: str, intent: str, resource: str) -> dict[str, Any] | None:
+    if not agent_id:
+        return None
+    ensure_schema()
+    safe_resource = _safe_resource(resource)
+    normalized = _normalize_intent(intent)
+    current = now_ts()
+    with connect() as con:
+        rows = con.execute(
+            """
+            SELECT * FROM task_context_v2
+            WHERE agent_id=? AND resource=? AND status='active' AND expires_at>=?
+            ORDER BY created_at DESC
+            """,
+            (agent_id, safe_resource, current),
+        ).fetchall()
+    for row in rows:
+        if _normalize_intent(row["intent"] or "") == normalized:
+            return _task_public(row)
+    return None
+
+
 def create_task_context(
     agent_id: str,
     request: str,
@@ -105,25 +159,20 @@ def create_task_context(
         raise TaskContextError("TASK_CONTEXT_REQUIRED: agent_id is required")
     if not request:
         raise TaskContextError("TASK_CONTEXT_REQUIRED: request is required")
+    require_agent_active(agent_id)
     ensure_schema()
     safe_resource = _safe_resource(resource)
+    existing = find_active_task(agent_id, intent, safe_resource)
+    if existing:
+        with connect() as con:
+            add_event(con, "task.active_exists", {"task_id": existing["task_id"], "intent": _normalize_intent(intent), "resource": safe_resource}, agent_id)
+        raise TaskContextError("ACTIVE_TASK_EXISTS", {"task_id": existing["task_id"], "task": existing})
     token = secrets.token_urlsafe(32)
     task_id = f"task-{uuid.uuid4().hex[:16]}"
     created = now_ts()
     ttl = ttl_seconds if ttl_seconds is not None else globals()["ttl_seconds"]()
     expires = created + ttl
     with connect() as con:
-        existing = con.execute(
-            """
-            SELECT task_id,agent_id,request,intent,resource,expires_at
-            FROM task_context_v2
-            WHERE agent_id=? AND request_hash=? AND status='active' AND expires_at>=?
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (agent_id, _request_hash(request, intent, safe_resource), created),
-        ).fetchone()
-        if existing:
-            raise TaskContextError("ACTIVE_TASK_EXISTS")
         con.execute(
             """
             INSERT INTO task_context_v2(
@@ -150,7 +199,35 @@ def create_task_context(
                 None,
             ),
         )
+        add_event(con, "task.context_created", {"task_id": task_id, "intent": _normalize_intent(intent), "resource": safe_resource}, agent_id)
     return {"task_id": task_id, "context_token": token, "expires_at": expires, "requires_graphify": bool(requires_graphify)}
+
+
+def resume_task_context(agent_id: str, task_id: str) -> dict[str, Any]:
+    if not agent_id:
+        raise TaskContextError("TASK_CONTEXT_REQUIRED: agent_id is required")
+    if not task_id:
+        raise TaskContextError("TASK_CONTEXT_REQUIRED: task_id is required")
+    require_agent_active(agent_id)
+    ensure_schema()
+    token = secrets.token_urlsafe(32)
+    refreshed = now_ts()
+    expires = refreshed + ttl_seconds()
+    with connect() as con:
+        row = con.execute("SELECT * FROM task_context_v2 WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            raise TaskContextError("TASK_CONTEXT_UNKNOWN_TASK")
+        data = dict(row)
+        if data["agent_id"] != agent_id:
+            raise TaskContextError("TASK_CONTEXT_AGENT_MISMATCH")
+        if data["status"] != "active" or data["expires_at"] < refreshed:
+            raise TaskContextError("TASK_CONTEXT_EXPIRED_RENEW_REQUIRED")
+        con.execute(
+            "UPDATE task_context_v2 SET token_hash=?, expires_at=? WHERE task_id=? AND agent_id=?",
+            (_hash(token), expires, task_id, agent_id),
+        )
+        add_event(con, "task.context_resumed", {"task_id": task_id, "expires_at": expires}, agent_id)
+    return {"task_id": task_id, "context_token": token, "status": "active", "expires_at": expires}
 
 
 def _load_ready(agent_id: str, task_id: str, context_token: str) -> dict[str, Any]:

@@ -154,6 +154,32 @@ def register_agent(host_tool: str, model_name: str = "", agent_id: Optional[str]
     return {"agent_id": aid, "status": data["status"], "host_tool": host_tool, "model_name": model_name}
 
 
+def get_agent(agent_id: str) -> Dict[str, Any] | None:
+    if not agent_id:
+        return None
+    init_db()
+    with connect() as con:
+        expire_stale(con)
+        row = con.execute("SELECT * FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def require_agent_active(agent_id: str) -> Dict[str, Any]:
+    if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
+        raise CoordinationError("AGENT_ID_REQUIRED")
+    agent = get_agent(agent_id.strip())
+    if not agent:
+        raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
+    status = str(agent.get("status") or "")
+    if status == "idle":
+        raise CoordinationError("AGENT_IDLE_RESUME_REQUIRED")
+    if status == "retired":
+        raise CoordinationError("AGENT_RETIRED")
+    if status != "active":
+        raise CoordinationError("AGENT_NOT_ACTIVE")
+    return agent
+
+
 def heartbeat(agent_id: str) -> Dict[str, Any]:
     if not agent_id:
         raise CoordinationError("agent_id is required")
@@ -300,11 +326,19 @@ def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_second
     t = now_ts()
     with connect() as con:
         expire_stale(con)
-        agent = con.execute("SELECT agent_id,status FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+        agent = con.execute("SELECT * FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
         if not agent:
+            add_event(con, "claim.context_not_ready", {"resource": res, "mode": mode, "reason": "AGENT_UNKNOWN_OR_UNREGISTERED"}, agent_id)
             raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
-        if agent["status"] != "active":
+        if agent["status"] == "idle":
+            add_event(con, "claim.context_not_ready", {"resource": res, "mode": mode, "reason": "AGENT_IDLE_RESUME_REQUIRED"}, agent_id)
             raise CoordinationError("AGENT_IDLE_RESUME_REQUIRED")
+        if agent["status"] == "retired":
+            add_event(con, "claim.context_not_ready", {"resource": res, "mode": mode, "reason": "AGENT_RETIRED"}, agent_id)
+            raise CoordinationError("AGENT_RETIRED")
+        if agent["status"] != "active":
+            add_event(con, "claim.context_not_ready", {"resource": res, "mode": mode, "reason": "AGENT_NOT_ACTIVE"}, agent_id)
+            raise CoordinationError("AGENT_NOT_ACTIVE")
         existing = [dict(r) for r in con.execute("SELECT * FROM claims WHERE resource=? AND status='active'", (res,))]
         blocking = [c for c in existing if c["agent_id"] != agent_id and (mode != "read" or c["mode"] != "read")]
         if blocking:

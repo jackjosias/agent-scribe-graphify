@@ -88,7 +88,7 @@ def main() -> int:
         if (fourth.get("must_call") or {}).get("tool") != "claim_resource":
             fail(f"workflow_next should route delete to claim after context: {fourth}")
 
-        claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "mode": "patch_queue", "ttl_seconds": 600})
+        claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "mode": "patch_queue", "ttl_seconds": 600, **ctx})
         if claim.get("verdict") != "CLAIM_GRANTED":
             fail(f"claim failed: {claim}")
 
