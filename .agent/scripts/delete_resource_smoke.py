@@ -33,6 +33,19 @@ def task_context_args(before: dict[str, Any]) -> dict[str, str]:
     return {"task_id": before["task_id"], "context_token": before["context_token"]}
 
 
+def acquire_lease(agent_id: str, action: str, ctx: dict[str, str], resource: str = "tmp-delete-resource-smoke/delete-me.txt") -> str:
+    lease = call_tool("pre_action_guard", {
+        "agent_id": agent_id,
+        "intent": "write",
+        "resource": resource,
+        "planned_action": action,
+        **ctx,
+    })
+    if lease.get("verdict") != "PRE_ACTION_GUARD_OK" or lease.get("state") != "ACTION_LEASE_ISSUED":
+        fail(f"pre_action_guard failed for {action}: {lease}")
+    return lease["action_lease"]["lease_id"]
+
+
 def main() -> int:
     work = ROOT / "tmp-delete-resource-smoke"
     shutil.rmtree(work, ignore_errors=True)
@@ -88,7 +101,7 @@ def main() -> int:
         if (fourth.get("must_call") or {}).get("tool") != "claim_resource":
             fail(f"workflow_next should route delete to claim after context: {fourth}")
 
-        claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+        claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "mode": "patch_queue", "ttl_seconds": 600, "action_lease_id": acquire_lease(agent_id, "claim_resource", ctx), **ctx})
         if claim.get("verdict") != "CLAIM_GRANTED":
             fail(f"claim failed: {claim}")
 
@@ -96,12 +109,12 @@ def main() -> int:
         if h.get("verdict") != "FILE_HASH" or not h.get("exists"):
             fail(f"hash failed: {h}")
 
-        refused = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], **ctx})
+        refused = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], "action_lease_id": acquire_lease(agent_id, "delete_resource", ctx), **ctx})
         if refused.get("verdict") != "DELETE_CONFIRMATION_REQUIRED" or not target.exists():
             fail(f"delete without permission should be refused: {refused}")
 
         confirm = refused["required_confirmation"]
-        deleted = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], "confirm_phrase": confirm, "reason": "smoke confirmed deletion", **ctx})
+        deleted = call_tool("delete_resource", {"agent_id": agent_id, "resource": "tmp-delete-resource-smoke/delete-me.txt", "base_hash": h["hash"], "confirm_phrase": confirm, "reason": "smoke confirmed deletion", "action_lease_id": acquire_lease(agent_id, "delete_resource", ctx), **ctx})
         if deleted.get("verdict") != "RESOURCE_DELETED" or target.exists():
             fail(f"confirmed deletion failed: {deleted}")
 
@@ -112,7 +125,7 @@ def main() -> int:
         record = call_tool("scribe_record", {"agent_id": agent_id, "request": "delete smoke workflow file", "summary": "delete resource smoke ok", "touched_resources": ["tmp-delete-resource-smoke/delete-me.txt"], "verdict": "CLAIM_RELEASED", "tags": ["smoke", "delete"]})
         if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
             fail(f"scribe_record failed after delete: {record}")
-        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok", **ctx})
+        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok", "action_lease_id": acquire_lease(agent_id, "finish_task", ctx, resource=""), **ctx})
         if finished.get("verdict") != "TASK_FINISHED_OK":
             fail(f"finish failed: {finished}")
         print("DELETE_RESOURCE_SMOKE_OK")

@@ -80,7 +80,10 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         self.assertEqual(refused["verdict"], "CLAIM_CONTEXT_NOT_READY")
         self.assertIn("direct_file_edit", refused["forbidden"])
         ctx = self.ready_context()
-        claim = self.call("claim_resource", agent_id="host-gemini", resource="README.md", mode="write", ttl_seconds=600, task_id=ctx["task_id"], context_token=ctx["context_token"])
+        lease = self.call("pre_action_guard", agent_id="host-gemini", task_id=ctx["task_id"], context_token=ctx["context_token"], resource="README.md", planned_action="claim_resource")
+        self.assertEqual(lease["verdict"], "PRE_ACTION_GUARD_OK")
+        lease_id = lease["action_lease"]["lease_id"]
+        claim = self.call("claim_resource", agent_id="host-gemini", resource="README.md", mode="write", ttl_seconds=600, task_id=ctx["task_id"], context_token=ctx["context_token"], action_lease_id=lease_id)
         self.assertEqual(claim["verdict"], "CLAIM_GRANTED")
 
     def test_workflow_next_does_not_loop_before_task_when_task_exists(self) -> None:

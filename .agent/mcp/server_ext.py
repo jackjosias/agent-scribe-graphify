@@ -9,10 +9,14 @@ import time
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, patch_queue, task_context  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, task_context  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 
-server.SERVER_VERSION = "0.2.11"
+server.SERVER_VERSION = "0.2.12"
+if os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT"):
+    from pathlib import Path
+    server.ROOT = Path(os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"]).resolve()
+    server.AGENT_DIR = server.ROOT / ".agent"
 _BASE_WORKFLOW_NEXT = server.workflow_next
 _BASE_TOOL_SCHEMA = server.tool_schema
 _BASE_BEFORE_TASK = server.before_task
@@ -42,6 +46,8 @@ _LOOP_VERDICTS = {
 }
 _HARD_STOP_FORBIDDEN = ["bootstrap", "before_task", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"]
 _PRE_CONTEXT_FORBIDDEN = ["before_task", "scribe_query", "graphify_query", "claim_resource", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"]
+_LEASE_FORBIDDEN = ["direct_file_edit"]
+_STRICT_LEASE_TOOLS = {"propose_patch", "apply_patch", "delete_resource", "finish_task"}
 
 
 def _last(last_verdict: str) -> str:
@@ -62,6 +68,50 @@ def _requires_graphify(request: str, intent: str, resource: str) -> bool:
 def _requires_scribe_record(intent: str, last_verdict: str) -> bool:
     normalized = (intent or "").strip().lower()
     return _last(last_verdict) in _RECORD_REQUIRED_VERDICTS or normalized in _WRITE_OR_DECISION_INTENTS
+
+
+def _require_action_lease(
+    action_lease_id: str, tool_name: str, agent_id: str, action: str,
+    task_id: str = "", resource: str = "", intent: str = "",
+) -> dict[str, Any] | None:
+    if not action_lease_id:
+        return server.ok({
+            "ok": True,
+            "verdict": "ACTION_LEASE_REQUIRED",
+            "state": "ACTION_LEASE_REQUIRED",
+            "reason": f"{tool_name} requires a fresh action_lease from pre_action_guard.",
+            "must_call": {
+                "tool": "pre_action_guard",
+                "args": {
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "resource": resource or "",
+                    "intent": intent or "",
+                    "planned_action": action,
+                },
+            },
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    try:
+        discipline.validate_action_lease(
+            action_lease_id, agent_id=agent_id, action=action,
+            task_id=task_id, resource=resource, intent=intent,
+        )
+        discipline.consume_action_lease(
+            action_lease_id, agent_id=agent_id, action=action,
+            task_id=task_id, resource=resource, intent=intent,
+        )
+    except discipline.DisciplineError as exc:
+        code = exc.code if exc.code in {"ACTION_LEASE_EXPIRED", "ACTION_LEASE_CONSUMED"} else "ACTION_LEASE_INVALID"
+        return server.ok({
+            "ok": True,
+            "verdict": code,
+            "state": code,
+            "reason": exc.code,
+            "details": exc.details,
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    return None
 
 
 def _targeted_scribe_query(request: str, intent: str, resource: str) -> str:
@@ -288,7 +338,7 @@ def _claim_context_not_ready(agent_id: str, resource: str, reason: str, missing:
     })
 
 
-def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_seconds: int = 1800, task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_seconds: int = 1800, task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
     try:
         db.require_agent_active(agent_id)
     except db.CoordinationError as exc:
@@ -309,6 +359,12 @@ def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_second
             )
         except task_context.TaskContextError as exc:
             return _claim_context_not_ready(agent_id, resource, str(exc), ["task_id", "context_token"])
+        lease_check = _require_action_lease(
+            action_lease_id, "claim_resource", agent_id, "claim_resource",
+            task_id=task_id, resource=resource, intent="write",
+        )
+        if lease_check is not None:
+            return lease_check
     return _BASE_CLAIM_RESOURCE(agent_id=agent_id, resource=resource, mode=mode, ttl_seconds=ttl_seconds)
 
 
@@ -338,7 +394,7 @@ def graphify_query(query: str = "", resource: str = "", agent_id: str = "", task
     return result
 
 
-def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
     _require_context_ready(
         agent_id,
         task_id,
@@ -347,7 +403,28 @@ def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, ta
         strict_resource=True,
         allowed_intents=_MUTATING_CONTEXT_INTENTS,
     )
+    lease_check = _require_action_lease(
+        action_lease_id, "propose_patch", agent_id, "propose_patch",
+        task_id=task_id, resource=target,
+    )
+    if lease_check is not None:
+        return lease_check
     return server.ok(patch_queue.propose_patch(agent_id=agent_id, target=target, base_hash=base_hash, diff_text=diff_text))
+
+
+def apply_patch(agent_id: str, patch_id: str, task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
+    _require_context_ready(
+        agent_id, task_id, context_token, "",
+        strict_resource=False,
+        allowed_intents=_MUTATING_CONTEXT_INTENTS,
+    )
+    lease_check = _require_action_lease(
+        action_lease_id, "apply_patch", agent_id, "apply_patch",
+        task_id=task_id,
+    )
+    if lease_check is not None:
+        return lease_check
+    return server.ok(patch_queue.apply_patch(agent_id=agent_id, patch_id=patch_id))
 
 
 def delete_resource(
@@ -358,7 +435,22 @@ def delete_resource(
     reason: str = "",
     task_id: str = "",
     context_token: str = "",
+    action_lease_id: str = "",
 ) -> Dict[str, Any]:
+    _require_context_ready(
+        agent_id,
+        task_id,
+        context_token,
+        resource,
+        strict_resource=True,
+        allowed_intents=_MUTATING_CONTEXT_INTENTS,
+    )
+    lease_check = _require_action_lease(
+        action_lease_id, "delete_resource", agent_id, "delete_resource",
+        task_id=task_id, resource=resource,
+    )
+    if lease_check is not None:
+        return lease_check
     _require_context_ready(
         agent_id,
         task_id,
@@ -370,7 +462,13 @@ def delete_resource(
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
-def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
+def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
+    lease_check = _require_action_lease(
+        action_lease_id, "finish_task", agent_id, "finish_task",
+        task_id=task_id,
+    )
+    if lease_check is not None:
+        return lease_check
     result = _BASE_FINISH_TASK(agent_id=agent_id, summary=summary)
     if task_id or context_token:
         payload = json.loads(result["content"][0]["text"])
@@ -444,6 +542,232 @@ def scribe_record(
     return server.ok({"verdict": "SCRIBE_RECORD_WRITTEN", "record": str(target.relative_to(server.ROOT)), "entry": payload})
 
 
+def discipline_ping(
+    agent_id: str = "",
+    phase: str = "",
+    resource: str = "",
+) -> Dict[str, Any]:
+    if not agent_id:
+        return server.ok({
+            "verdict": "AGENT_ID_REQUIRED",
+            "state": "AGENT_ID_REQUIRED",
+            "reason": "discipline_ping requires agent_id.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    try:
+        result = discipline.record_guard_ping(agent_id, phase=phase, resource=resource)
+    except db.CoordinationError as exc:
+        return server.ok({
+            "verdict": str(exc),
+            "state": str(exc),
+            "reason": str(exc),
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    return server.ok({
+        "verdict": "DISCIPLINE_PING_OK",
+        "state": "DISCIPLINE_PING_OK",
+        "message": "Before any code write/fix/refactor/test, call pre_action_guard.",
+        **result,
+        "forbidden": ["direct_file_edit_without_mcp"],
+    })
+
+
+def pre_action_guard(
+    agent_id: str = "",
+    request: str = "",
+    intent: str = "",
+    resource: str = "",
+    task_id: str = "",
+    context_token: str = "",
+    planned_action: str = "",
+) -> Dict[str, Any]:
+    if not agent_id:
+        return server.ok({
+            "verdict": "AGENT_ID_REQUIRED",
+            "state": "AGENT_ID_REQUIRED",
+            "reason": "pre_action_guard requires agent_id.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    if not planned_action:
+        return server.ok({
+            "verdict": "PLANNED_ACTION_REQUIRED",
+            "state": "PLANNED_ACTION_REQUIRED",
+            "reason": "pre_action_guard requires a planned_action.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+
+    safe_resource = patch_queue.safe_resource(resource) if resource else ""
+
+    try:
+        agent = db.require_agent_active(agent_id)
+    except db.CoordinationError as exc:
+        code = str(exc)
+        if code == "AGENT_ID_REQUIRED":
+            return server.ok({
+                "verdict": "AGENT_ID_REQUIRED",
+                "state": "AGENT_ID_REQUIRED",
+                "must_call": {"tool": "register_agent", "args": {"host_tool": "unknown"}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        if code == "AGENT_UNKNOWN_OR_UNREGISTERED":
+            return server.ok({
+                "verdict": "AGENT_UNKNOWN_OR_UNREGISTERED",
+                "state": "AGENT_UNKNOWN_OR_UNREGISTERED",
+                "must_call": {"tool": "register_agent", "args": {"agent_id": agent_id, "host_tool": "unknown"}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        if code == "AGENT_IDLE_RESUME_REQUIRED":
+            return server.ok({
+                "verdict": "AGENT_IDLE_RESUME_REQUIRED",
+                "state": "AGENT_IDLE_RESUME_REQUIRED",
+                "must_call": {"tool": "resume_agent", "args": {"agent_id": agent_id}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        return server.ok({
+            "verdict": code,
+            "state": code,
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+
+    if task_id:
+        try:
+            tdata = task_context.task_status(task_id)
+            if tdata.get("status") == "active" and not context_token:
+                return server.ok({
+                    "verdict": "NEXT_ACTION_REQUIRED",
+                    "state": "TASK_CONTEXT_TOKEN_REQUIRED",
+                    "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                    "forbidden": _LEASE_FORBIDDEN,
+                })
+        except task_context.TaskContextError:
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "TASK_CONTEXT_UNKNOWN_TASK",
+                "must_call": {"tool": "before_task", "args": {"agent_id": agent_id, "request": request or "", "intent": intent or "", "resource": safe_resource}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+
+    normalized = (intent or "").strip().lower()
+    action_aliases = {"edit": "propose_patch", "write": "propose_patch", "delete": "delete_resource", "finish": "finish_task"}
+    normalized_action = action_aliases.get(planned_action, planned_action)
+    needs_context = normalized_action in {"claim_resource", "propose_patch", "apply_patch", "delete_resource", "finish_task"}
+    write_like_intent = normalized in discipline.WRITE_INTENTS or needs_context
+
+    if needs_context and write_like_intent:
+        if not task_id:
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "BEFORE_TASK_REQUIRED",
+                "must_call": {"tool": "before_task", "args": {"agent_id": agent_id, "request": request or "", "intent": intent or "", "resource": safe_resource}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        try:
+            ctx = task_context.require_context_ready(
+                agent_id, task_id, context_token,
+                resource=safe_resource,
+                strict_resource=bool(safe_resource),
+                allowed_intents=discipline.WRITE_INTENTS,
+            )
+        except task_context.TaskContextError as exc:
+            code = exc.code if hasattr(exc, "code") else str(exc)
+            if code in {"TASK_CONTEXT_UNKNOWN_TASK", "TASK_CONTEXT_TOKEN_MISMATCH"}:
+                return server.ok({
+                    "verdict": "NEXT_ACTION_REQUIRED",
+                    "state": code,
+                    "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                    "forbidden": _LEASE_FORBIDDEN,
+                })
+            if code == "ACTIVE_TASK_EXISTS":
+                ed = exc.details if hasattr(exc, "details") else {}
+                return server.ok({
+                    "verdict": "ACTIVE_TASK_EXISTS",
+                    "state": "ACTIVE_TASK_EXISTS",
+                    "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": ed.get("task_id", task_id)}},
+                    "forbidden": _LEASE_FORBIDDEN,
+                })
+            if "scribe_query is required" in code:
+                return server.ok({
+                    "verdict": "NEXT_ACTION_REQUIRED",
+                    "state": "SCRIBE_CONTEXT_REQUIRED",
+                    "must_call": {"tool": "scribe_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": _targeted_scribe_query(request or "", intent or "", safe_resource), "limit": 5}},
+                    "forbidden": _LEASE_FORBIDDEN,
+                })
+            if "graphify_query is required" in code:
+                return server.ok({
+                    "verdict": "NEXT_ACTION_REQUIRED",
+                    "state": "GRAPHIFY_CONTEXT_REQUIRED",
+                    "must_call": {"tool": "graphify_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": request or "current task", "resource": safe_resource}},
+                    "forbidden": _LEASE_FORBIDDEN,
+                })
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": code,
+                "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": task_id}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+
+        if not ctx.get("scribe_done"):
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "SCRIBE_CONTEXT_REQUIRED",
+                "must_call": {"tool": "scribe_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": _targeted_scribe_query(request or "", intent or "", safe_resource), "limit": 5}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        if ctx.get("requires_graphify") and not ctx.get("graphify_done"):
+            return server.ok({
+                "verdict": "NEXT_ACTION_REQUIRED",
+                "state": "GRAPHIFY_CONTEXT_REQUIRED",
+                "must_call": {"tool": "graphify_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": request or "current task", "resource": safe_resource}},
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+
+    action = normalized_action
+
+    if action in _STRICT_LEASE_TOOLS or action == "claim_resource":
+        try:
+            lease = discipline.issue_action_lease(
+                agent_id=agent_id, action=action, task_id=task_id or "",
+                resource=safe_resource, intent="write" if action in discipline.MUTATING_ACTIONS else (normalized or ""),
+            )
+        except discipline.DisciplineError as exc:
+            return server.ok({
+                "verdict": "ACTION_LEASE_FAILED",
+                "state": "ACTION_LEASE_FAILED",
+                "reason": str(exc),
+                "forbidden": _LEASE_FORBIDDEN,
+            })
+        return server.ok({
+            "verdict": "PRE_ACTION_GUARD_OK",
+            "state": "ACTION_LEASE_ISSUED",
+            "action_lease": lease,
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+
+    return server.ok({
+        "verdict": "PRE_ACTION_GUARD_OK",
+        "state": "READ_ONLY_NO_LEASE",
+        "forbidden": _LEASE_FORBIDDEN,
+    })
+
+
+def workspace_audit(
+    agent_id: str = "",
+    task_id: str = "",
+    resource: str = "",
+) -> Dict[str, Any]:
+    try:
+        result = discipline.detect_direct_write_bypass(
+            agent_id=agent_id, task_id=task_id, resource=resource,
+        )
+    except db.CoordinationError as exc:
+        return server.ok({
+            "verdict": str(exc),
+            "state": str(exc),
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    return server.ok(result)
+
+
 def _claims_for(agent_id: str, resource: str) -> Dict[str, Any]:
     return server._active_claims_for(agent_id, resource)
 
@@ -478,10 +802,12 @@ def workflow_next(
             stop = _track_loop(agent_id, resource, exc.code)
             if stop is not None:
                 return stop
-            raise _context_error(exc) from exc
-        if task_data.get("agent_id") != agent_id:
+            # Unknown task: clear task_id so base workflow_next handles it
+            task_id = ""
+            task_data = None
+        if task_data and task_data.get("agent_id") != agent_id:
             raise server.ToolError("TASK_CONTEXT_AGENT_MISMATCH")
-        if task_data.get("status") == "active" and not context_token:
+        if task_data and task_data.get("status") == "active" and not context_token:
             return server.ok({
                 "verdict": "NEXT_ACTION_REQUIRED",
                 "state": "TASK_CONTEXT_TOKEN_REQUIRED",
@@ -489,7 +815,7 @@ def workflow_next(
                 "reason": "An active task exists and its context_token is required. Do not call before_task again.",
                 "forbidden": ["before_task", "direct_file_edit"],
             })
-        if task_data.get("status") == "active" and request and last not in _CONTEXT_VERDICTS:
+        if task_data and task_data.get("status") == "active" and request and last not in _CONTEXT_VERDICTS:
             if not task_data.get("scribe_done"):
                 last_verdict = "BEFORE_TASK_OK"
             elif task_data.get("requires_graphify") and not task_data.get("graphify_done"):
@@ -677,11 +1003,22 @@ def tool_schema(name: str) -> Dict[str, Any]:
     if name in {"scribe_query", "graphify_query"}:
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"agent_id": "string", "task_id": "string", "context_token": "string"})
     if name == "claim_resource":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string"})
     if name == "propose_patch":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string"})
+    if name == "apply_patch":
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string"})
+    if name == "delete_resource":
+        return _schema_props({
+            "type": "object", "properties": {
+                "agent_id": {"type": "string"}, "resource": {"type": "string"},
+                "base_hash": {"type": "string"}, "confirm_phrase": {"type": "string"},
+                "reason": {"type": "string"}, "task_id": {"type": "string"},
+                "context_token": {"type": "string"}, "action_lease_id": {"type": "string"},
+            }, "additionalProperties": False,
+        }, {})
     if name == "finish_task":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string"})
     if name == "scribe_record":
         return {
             "type": "object",
@@ -720,20 +1057,12 @@ def tool_schema(name: str) -> Dict[str, Any]:
             },
             "additionalProperties": False,
         }
-    if name == "delete_resource":
-        return {
-            "type": "object",
-            "properties": {
-                "agent_id": {"type": "string"},
-                "resource": {"type": "string"},
-                "base_hash": {"type": "string"},
-                "confirm_phrase": {"type": "string"},
-                "reason": {"type": "string"},
-                "task_id": {"type": "string"},
-                "context_token": {"type": "string"},
-            },
-            "additionalProperties": False,
-        }
+    if name == "discipline_ping":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "phase": {"type": "string"}, "resource": {"type": "string"}}, "additionalProperties": False}
+    if name == "pre_action_guard":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "request": {"type": "string"}, "intent": {"type": "string"}, "resource": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}, "planned_action": {"type": "string"}}, "additionalProperties": False}
+    if name == "workspace_audit":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "resource": {"type": "string"}}, "additionalProperties": False}
     if name == "workflow_snapshot":
         return {
             "type": "object",
@@ -820,19 +1149,23 @@ server.task_status = task_status
 server.wait_for_tasks = wait_for_tasks
 server.tool_schema = tool_schema
 server.TOOLS["workflow_next"] = workflow_next
+server.TOOLS["workflow_snapshot"] = workflow_snapshot
 server.TOOLS["before_task"] = before_task
 server.TOOLS["resume_task_context"] = resume_task_context
 server.TOOLS["claim_resource"] = claim_resource
 server.TOOLS["scribe_query"] = scribe_query
 server.TOOLS["graphify_query"] = graphify_query
 server.TOOLS["propose_patch"] = propose_patch
+server.TOOLS["apply_patch"] = apply_patch
 server.TOOLS["delete_resource"] = delete_resource
 server.TOOLS["finish_task"] = finish_task
 server.TOOLS["scribe_record"] = scribe_record
 server.TOOLS["list_tasks"] = list_tasks
 server.TOOLS["task_status"] = task_status
 server.TOOLS["wait_for_tasks"] = wait_for_tasks
-server.TOOLS["workflow_snapshot"] = workflow_snapshot
+server.TOOLS["discipline_ping"] = discipline_ping
+server.TOOLS["pre_action_guard"] = pre_action_guard
+server.TOOLS["workspace_audit"] = workspace_audit
 
 handle = server.handle
 list_tools = server.list_tools

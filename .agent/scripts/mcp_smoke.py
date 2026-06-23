@@ -65,6 +65,23 @@ def task_context_args(before: dict[str, Any]) -> dict[str, str]:
     return {"task_id": before["task_id"], "context_token": before["context_token"]}
 
 
+def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None, resource: str = "", task_id: str = "", context_token: str = "") -> str:
+    args: dict[str, Any] = {"agent_id": agent_id, "planned_action": action, "intent": "write"}
+    if ctx:
+        args["task_id"] = ctx.get("task_id", "")
+        args["context_token"] = ctx.get("context_token", "")
+    if task_id:
+        args["task_id"] = task_id
+    if context_token:
+        args["context_token"] = context_token
+    if resource:
+        args["resource"] = resource
+    result = call_tool("pre_action_guard", args)
+    if result.get("verdict") == "PRE_ACTION_GUARD_OK" and "action_lease" in result:
+        return result["action_lease"]["lease_id"]
+    return ""
+
+
 def establish_context(agent_id: str, request: str, intent: str, resource: str) -> dict[str, str]:
     before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": resource})
     if before.get("verdict") != "BEFORE_TASK_OK":
@@ -149,7 +166,7 @@ def smoke_nominal_workflow() -> None:
         **ctx,
     }, "claim_resource")
 
-    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600, **ctx})
+    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600, **ctx, "action_lease_id": acquire_lease(agent_id, "claim_resource", ctx, resource="tmp-smoke-workflow/file.txt")})
     if claim.get("verdict") != "CLAIM_GRANTED" or claim.get("mode") != "patch_queue":
         fail(f"claim should be granted as patch_queue write-gate: {claim}")
     claim_id = claim["claim_id"]
@@ -187,6 +204,7 @@ def smoke_nominal_workflow() -> None:
         "base_hash": file_hash["hash"],
         "diff_text": "@@ -1,1 +1,1 @@\n-line1\n+line2\n",
         **ctx,
+        "action_lease_id": acquire_lease(agent_id, "propose_patch", ctx, resource="tmp-smoke-workflow/file.txt"),
     })
     if patch.get("status") != "PATCH_PROPOSED":
         fail(f"patch failed: {patch}")
@@ -202,11 +220,11 @@ def smoke_nominal_workflow() -> None:
     if "direct_file_edit" not in next_apply.get("forbidden", []):
         fail(f"workflow_next must forbid direct writes before apply_patch: {next_apply}")
 
-    finish_pending = call_tool("finish_task", {"agent_id": agent_id, "summary": "should be refused"})
+    finish_pending = call_tool("finish_task", {"agent_id": agent_id, "summary": "should be refused", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
     if finish_pending.get("verdict") != "FINISH_REFUSED_PENDING_PATCHES":
         fail(f"finish should be refused before apply_patch: {finish_pending}")
 
-    applied = call_tool("apply_patch", {"agent_id": agent_id, "patch_id": patch_id})
+    applied = call_tool("apply_patch", {"agent_id": agent_id, "patch_id": patch_id, **ctx, "action_lease_id": acquire_lease(agent_id, "apply_patch", ctx)})
     if applied.get("verdict") != "PATCH_APPLIED":
         fail(f"apply_patch failed: {applied}")
     if target.read_text(encoding="utf-8") != "line2\n":
@@ -250,7 +268,7 @@ def smoke_nominal_workflow() -> None:
         "last_verdict": "SCRIBE_RECORD_WRITTEN",
     }, "finish_task")
 
-    finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx})
+    finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
     if finished.get("verdict") != "TASK_FINISHED_OK":
         fail(f"finish failed: {finished}")
 
@@ -289,6 +307,7 @@ def smoke_bad_paths() -> None:
             "base_hash": "__new_file__",
             "diff_text": "@@ -0,0 +1 @@\n+bad\n",
             **ctx,
+            "action_lease_id": acquire_lease(agent_id, "propose_patch", ctx, resource=target),
         }, "parent escapes project root")
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -310,6 +329,7 @@ def smoke_unregistered_patch() -> None:
         "base_hash": file_hash["hash"],
         "diff_text": "@@ -1,1 +1,1 @@\n-line1\n+line2\n",
         **ctx,
+        "action_lease_id": acquire_lease(agent_id, "propose_patch", ctx, resource="tmp-smoke-auth/file.txt"),
     }, "claim required")
     shutil.rmtree(work, ignore_errors=True)
     clean_runtime()

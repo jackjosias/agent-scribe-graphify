@@ -124,20 +124,38 @@ def ready_context(agent_id: str, target: str, request: str = "redteam write", in
     return ctx
 
 
+def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None, resource: str = "") -> str:
+    args: dict[str, Any] = {"agent_id": agent_id, "planned_action": action, "intent": "write"}
+    if ctx:
+        args["task_id"] = ctx.get("task_id", "")
+        args["context_token"] = ctx.get("context_token", "")
+    if resource:
+        args["resource"] = resource
+    result = call_tool("pre_action_guard", args)
+    if result.get("verdict") == "PRE_ACTION_GUARD_OK" and "action_lease" in result:
+        return result["action_lease"]["lease_id"]
+    return ""
+
+
 def claim(agent_id: str, target: str, ctx: dict[str, str]) -> str:
-    result = call_tool("claim_resource", {"agent_id": agent_id, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **ctx})
+    lease_id = acquire_lease(agent_id, "claim_resource", ctx, resource=target)
+    result = call_tool("claim_resource", {
+        "agent_id": agent_id, "resource": target, "mode": "patch_queue",
+        "ttl_seconds": 600, **ctx, "action_lease_id": lease_id,
+    })
     if result.get("verdict") != "CLAIM_GRANTED":
         fail(f"claim_resource failed: {result}")
     return result["claim_id"]
 
 
 def propose(agent_id: str, target: str, base_hash: str, ctx: dict[str, str], replacement: str = "redteam-updated\n") -> dict[str, Any]:
+    lease_id = acquire_lease(agent_id, "propose_patch", ctx, resource=target)
     return call_tool("propose_patch", {
         "agent_id": agent_id,
         "target": target,
         "base_hash": base_hash,
         "diff_text": f"@@ -1,1 +1,1 @@\n-redteam-original\n+{replacement.rstrip()}\n",
-        **ctx,
+        **ctx, "action_lease_id": lease_id,
     })
 
 
@@ -155,7 +173,8 @@ def test_positive_context_path() -> None:
     ctx = ready_context(agent, target, "redteam positive context path")
     claim(agent, target, ctx)
     patch_id = expect_patch(agent, target, file_hash(target), ctx, replacement="positive-context-applied\n")
-    applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id})
+    lease_id = acquire_lease(agent, "apply_patch", ctx)
+    applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, **ctx, "action_lease_id": lease_id})
     if applied.get("verdict") != "PATCH_APPLIED":
         fail(f"positive context apply failed: {applied}")
 
@@ -198,13 +217,16 @@ def test_propose_apply_and_delete_guards() -> None:
     assert_refused(result, "claim required", "propose_patch without claim")
     claim_id = claim(agent, target, ctx)
     patch_id = expect_patch(agent, target, file_hash(target), ctx)
-    intruder = register("redteam-intruder")
-    result = call_tool("apply_patch", {"agent_id": intruder, "patch_id": patch_id})
+    intruder = bootstrap("redteam-intruder")
+    intruder_ctx = ready_context(intruder, target, "redteam intruder apply")
+    intruder_lease = acquire_lease(intruder, "apply_patch", intruder_ctx)
+    result = call_tool("apply_patch", {"agent_id": intruder, "patch_id": patch_id, **intruder_ctx, "action_lease_id": intruder_lease})
     assert_refused(result, "only patch owner can apply it", "apply_patch wrong agent")
     released = call_tool("release_claim", {"agent_id": agent, "claim_id": claim_id, "summary": "release before apply"})
     if released.get("verdict") != "CLAIM_RELEASED":
         fail(f"release_claim failed: {released}")
-    result = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id})
+    apply_lease = acquire_lease(agent, "apply_patch", ctx)
+    result = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, **ctx, "action_lease_id": apply_lease})
     assert_refused(result, "claim required", "apply_patch without active claim")
 
     clean_runtime(); clean_redteam()
@@ -212,7 +234,8 @@ def test_propose_apply_and_delete_guards() -> None:
     agent = bootstrap("redteam-delete")
     ctx = ready_context(agent, target, "redteam delete")
     claim(agent, target, ctx)
-    result = call_tool("delete_resource", {"agent_id": agent, "resource": target, "base_hash": file_hash(target), "confirm_phrase": "DELETE wrong-file", **ctx})
+    lease_id = acquire_lease(agent, "delete_resource", ctx, resource=target)
+    result = call_tool("delete_resource", {"agent_id": agent, "resource": target, "base_hash": file_hash(target), "confirm_phrase": "DELETE wrong-file", **ctx, "action_lease_id": lease_id})
     if result.get("verdict") != "DELETE_CONFIRMATION_REQUIRED" or not (ROOT / target).exists():
         fail(f"delete_resource should require exact confirmation: {result}")
 
@@ -231,19 +254,23 @@ def test_context_bypass() -> str:
     clean_runtime(); clean_redteam()
     target = write_target("context-bypass.txt")
     agent = bootstrap("redteam-context-bypass")
-    claim_result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600})
+    lease_id = acquire_lease(agent, "claim_resource", resource=target)
+    claim_result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, "action_lease_id": lease_id})
     if claim_result.get("verdict") == "CLAIM_GRANTED":
         print("MCP_CONTEXT_BYPASS_OPEN")
         return "OPEN"
+    lease_id = acquire_lease(agent, "propose_patch", resource=target)
     result = call_tool("propose_patch", {
         "agent_id": agent,
         "target": target,
         "base_hash": file_hash(target),
         "diff_text": "@@ -1,1 +1,1 @@\n-redteam-original\n+context-bypass-applied\n",
+        "action_lease_id": lease_id,
     })
     if result.get("status") == "PATCH_PROPOSED":
         patch_id = result["patch_id"]
-        applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id})
+        lease_apply = acquire_lease(agent, "apply_patch")
+        applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, "action_lease_id": lease_apply})
         if applied.get("verdict") == "PATCH_APPLIED":
             print("MCP_CONTEXT_BYPASS_OPEN")
             return "OPEN"

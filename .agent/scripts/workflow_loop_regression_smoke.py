@@ -84,7 +84,11 @@ def main() -> int:
         graphify = call_tool(entry, project, "graphify_query", {"agent_id": "host-gemini", **ctx, "query": "impact", "resource": "README.md"})
         if graphify.get("verdict") not in {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}:
             fail(f"graphify_query failed: {graphify}")
-        claim = call_tool(entry, project, "claim_resource", {"agent_id": "host-gemini", "resource": "README.md", "mode": "write", "ttl_seconds": 600, **ctx})
+        lease = call_tool(entry, project, "pre_action_guard", {"agent_id": "host-gemini", "task_id": ctx["task_id"], "context_token": ctx["context_token"], "resource": "README.md", "planned_action": "claim_resource"})
+        if lease.get("verdict") != "PRE_ACTION_GUARD_OK":
+            fail(f"pre_action_guard failed: {lease}")
+        lease_id = lease["action_lease"]["lease_id"]
+        claim = call_tool(entry, project, "claim_resource", {"agent_id": "host-gemini", "resource": "README.md", "mode": "write", "ttl_seconds": 600, "action_lease_id": lease_id, **ctx})
         if claim.get("verdict") != "CLAIM_GRANTED":
             fail(f"claim_resource with ready context failed: {claim}")
         next_after_claim = call_tool(entry, project, "workflow_next", {"agent_id": "host-gemini", "request": "edit README", "intent": "write", "resource": "README.md", "last_verdict": "CLAIM_GRANTED", **ctx})
