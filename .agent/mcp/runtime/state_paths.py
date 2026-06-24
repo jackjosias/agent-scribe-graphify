@@ -25,16 +25,20 @@ def prepare_state_dirs(project_root: Optional[Path] = None) -> Dict[str, Path]:
     agent = root / ".agent"
     state = agent / "state"
     runtime = state / "runtime"
-    scribe_out = state / "scribe-out"
-    graphify_out = state / "graphify-out"
+    scribe_out = root / "scribe-out"
+    graphify_out = root / "graphify-out"
 
     legacy_runtime = agent / "runtime"
-    legacy_scribe_out = agent / "scribe-out"
-    legacy_graphify_out = agent / "graphify-out"
+    legacy_scribe_out = state / "scribe-out"
+    legacy_scribe_out_agent = agent / "scribe-out"
+    legacy_graphify_out = state / "graphify-out"
+    legacy_graphify_out_agent = agent / "graphify-out"
 
     _move_legacy_path(legacy_runtime, runtime)
     _move_legacy_path(legacy_scribe_out, scribe_out)
+    _move_legacy_path(legacy_scribe_out_agent, scribe_out)
     _move_legacy_path(legacy_graphify_out, graphify_out)
+    _move_legacy_path(legacy_graphify_out_agent, graphify_out)
 
     runtime.mkdir(parents=True, exist_ok=True)
     scribe_out.mkdir(parents=True, exist_ok=True)

@@ -11,8 +11,29 @@ from typing import Any, Dict, List
 import server  # type: ignore
 from runtime import db, delete_ops, discipline, patch_queue, task_context  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
+try:
+    from runtime import portability  # type: ignore
+except Exception:
+    portability = None  # type: ignore
+try:
+    from runtime import graphify_scribe_bridge as _gsb  # type: ignore
+except Exception:
+    _gsb = None  # type: ignore
 
-server.SERVER_VERSION = "0.2.12"
+# Proof signer — non-circular TENOR proof verification (v0.2.15+)
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _SEL_SCRIPTS = _Path(__file__).parent.parent / "workflow" / "scribe" / "sel" / "scripts"
+    if str(_SEL_SCRIPTS) not in _sys.path:
+        _sys.path.insert(0, str(_SEL_SCRIPTS))
+    from proof_signer import verify_proof as _verify_proof, purge_expired_proofs as _purge_expired_proofs  # type: ignore
+    _PROOF_SIGNER_AVAILABLE = True
+except Exception as _proof_import_exc:  # noqa: BLE001
+    _PROOF_SIGNER_AVAILABLE = False
+    _proof_import_exc_msg = str(_proof_import_exc)
+
+server.SERVER_VERSION = "0.2.15"
 if os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT"):
     from pathlib import Path
     server.ROOT = Path(os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"]).resolve()
@@ -1082,6 +1103,74 @@ def tool_schema(name: str) -> Dict[str, Any]:
             },
             "additionalProperties": False,
         }
+    if name == "lease_extend":
+        return {
+            "type": "object",
+            "properties": {
+                "lease_id": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "extend_seconds": {"type": "integer"},
+            },
+            "required": ["lease_id", "agent_id"],
+            "additionalProperties": False,
+        }
+    if name == "resource_lock_claim":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "resource": {"type": "string"},
+                "task_id": {"type": "string"},
+                "ttl_seconds": {"type": "integer"},
+            },
+            "required": ["agent_id", "resource"],
+            "additionalProperties": False,
+        }
+    if name == "resource_lock_release":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "resource": {"type": "string"},
+                "lock_id": {"type": "string"},
+            },
+            "required": ["agent_id", "resource"],
+            "additionalProperties": False,
+        }
+    if name == "resource_lock_status":
+        return {
+            "type": "object",
+            "properties": {"resource": {"type": "string"}},
+            "required": ["resource"],
+            "additionalProperties": False,
+        }
+    if name == "portability_check":
+        return {
+            "type": "object",
+            "properties": {"workspace_root": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    if name == "graphify_scribe_bridge":
+        return {
+            "type": "object",
+            "properties": {
+                "workspace_root": {"type": "string"},
+                "dry_run": {"type": "boolean"},
+                "drift_threshold": {"type": "number"},
+            },
+            "additionalProperties": False,
+        }
+    if name == "verify_proof":
+        return {
+            "type": "object",
+            "properties": {
+                "token": {"type": "string"},
+                "agent_id": {"type": "string"},
+                "workspace_root": {"type": "string"},
+            },
+            "required": ["token", "agent_id"],
+            "additionalProperties": False,
+        }
     return _BASE_TOOL_SCHEMA(name)
 
 
@@ -1133,6 +1222,285 @@ def workflow_snapshot(
     return server.ok(result)
 
 
+# ─────────────────────────────────────────────────────────────
+# New V2.14 tools: lease_extend, resource_lock_*, portability_check,
+# graphify_scribe_bridge
+# ─────────────────────────────────────────────────────────────
+
+def lease_extend(
+    lease_id: str = "",
+    agent_id: str = "",
+    extend_seconds: int | None = None,
+) -> Dict[str, Any]:
+    """Extend an active action lease TTL without losing FSM context.
+
+    Use this BEFORE your lease expires when an operation takes longer than
+    expected (high-latency network, large file write, slow tool call).
+    Prevents ACTION_LEASE_EXPIRED blocking you mid-operation.
+
+    Limits: max 10 extensions, max 3600s cumulative from original issue.
+    This anti-loop guard means lease_extend cannot be used to hold a lease
+    forever — you must finish the task.
+    """
+    if not lease_id:
+        return server.ok({
+            "verdict": "LEASE_ID_REQUIRED",
+            "state": "LEASE_ID_REQUIRED",
+            "reason": "lease_extend requires lease_id from a previously issued action lease.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    if not agent_id:
+        return server.ok({
+            "verdict": "AGENT_ID_REQUIRED",
+            "state": "AGENT_ID_REQUIRED",
+            "reason": "lease_extend requires agent_id.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    try:
+        result = discipline.extend_action_lease(
+            lease_id=lease_id,
+            agent_id=agent_id,
+            extend_seconds=extend_seconds,
+        )
+    except discipline.DisciplineError as exc:
+        code = exc.code
+        hints: Dict[str, Any] = {
+            "ACTION_LEASE_EXPIRED": "The lease already expired before you could extend it. Call pre_action_guard again.",
+            "ACTION_LEASE_CONSUMED": "The lease was already consumed. Call pre_action_guard for a new one.",
+            "ACTION_LEASE_EXTEND_LIMIT": "Maximum extensions reached. Finish the task or restart with workflow_next.",
+            "ACTION_LEASE_EXTEND_CEILING_REACHED": "Maximum cumulative TTL reached. Finish the task.",
+        }
+        return server.ok({
+            "verdict": code,
+            "state": code,
+            "reason": hints.get(code, exc.code),
+            "details": exc.details,
+            "must_call": {
+                "tool": "pre_action_guard",
+                "args": {"agent_id": agent_id, "planned_action": "propose_patch"},
+            } if code in {"ACTION_LEASE_EXPIRED", "ACTION_LEASE_CONSUMED"} else None,
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    except db.CoordinationError as exc:
+        return server.ok({"verdict": str(exc), "state": str(exc), "forbidden": _LEASE_FORBIDDEN})
+    return server.ok(result)
+
+
+def resource_lock_claim(
+    agent_id: str = "",
+    resource: str = "",
+    task_id: str = "",
+    ttl_seconds: int | None = None,
+) -> Dict[str, Any]:
+    """Claim an exclusive write lock on a resource.
+
+    Prevents N agents (including orchestrator sub-agents) from writing
+    to the same resource concurrently. Use before long multi-file operations.
+
+    Returns lock_id on success. Raises RESOURCE_ALREADY_LOCKED with owner
+    details if another agent holds the lock. Same agent calling again is
+    idempotent (returns existing lock).
+    """
+    if not agent_id:
+        return server.ok({"verdict": "AGENT_ID_REQUIRED", "state": "AGENT_ID_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
+    if not resource:
+        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED",
+                          "reason": "resource_lock_claim requires a resource path.", "forbidden": _LEASE_FORBIDDEN})
+    try:
+        result = discipline.resource_lock_claim(
+            agent_id=agent_id, resource=resource, task_id=task_id or "",
+            ttl_seconds=ttl_seconds,
+        )
+    except discipline.DisciplineError as exc:
+        return server.ok({
+            "verdict": exc.code,
+            "state": exc.code,
+            "reason": f"Resource is locked by another agent. Details: {exc.details}",
+            "details": exc.details,
+            "next_step": "Wait for the lock to expire or ask the owning agent to call resource_lock_release.",
+            "forbidden": _LEASE_FORBIDDEN,
+        })
+    except db.CoordinationError as exc:
+        return server.ok({"verdict": str(exc), "state": str(exc), "forbidden": _LEASE_FORBIDDEN})
+    return server.ok(result)
+
+
+def resource_lock_release(
+    agent_id: str = "",
+    resource: str = "",
+    lock_id: str = "",
+) -> Dict[str, Any]:
+    """Release an active resource lock held by this agent.
+
+    Only the owning agent can release its own lock.
+    Releasing an already-released lock is idempotent (no error).
+    """
+    if not agent_id:
+        return server.ok({"verdict": "AGENT_ID_REQUIRED", "state": "AGENT_ID_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
+    if not resource:
+        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
+    try:
+        result = discipline.resource_lock_release(agent_id=agent_id, resource=resource, lock_id=lock_id or "")
+    except discipline.DisciplineError as exc:
+        return server.ok({"verdict": exc.code, "state": exc.code, "details": exc.details, "forbidden": _LEASE_FORBIDDEN})
+    except db.CoordinationError as exc:
+        return server.ok({"verdict": str(exc), "state": str(exc), "forbidden": _LEASE_FORBIDDEN})
+    return server.ok(result)
+
+
+def resource_lock_status(resource: str = "") -> Dict[str, Any]:
+    """Check who holds the lock on a resource.
+
+    Safe to call from any agent. Does not mutate state.
+    Use before long operations to confirm the resource is free.
+    """
+    if not resource:
+        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
+    try:
+        result = discipline.resource_lock_status(resource=resource)
+    except discipline.DisciplineError as exc:
+        return server.ok({"verdict": exc.code, "state": exc.code, "forbidden": _LEASE_FORBIDDEN})
+    return server.ok(result)
+
+
+def portability_check(workspace_root: str = "") -> Dict[str, Any]:
+    """Validate that .agent is correctly placed at the project root.
+
+    Checks: .agent/ exists, server_entry.py present, git root matches.
+    Returns a simple OK/FAIL verdict with corrective_action if needed.
+
+    Use at session start to confirm the .agent bundle is properly installed
+    before running any workflow. Small LLMs: if verdict != ROOT_VALID, STOP
+    and show the corrective_action to the user.
+    """
+    if portability is None:
+        return server.ok({
+            "verdict": "PORTABILITY_MODULE_UNAVAILABLE",
+            "ok": False,
+            "reason": "portability.py module not loaded. Check .agent/mcp/runtime/ contents.",
+        })
+    root = workspace_root.strip() if workspace_root else ""
+    try:
+        result = portability.portability_check(workspace_root=root if root else None)
+    except Exception as exc:
+        return server.ok({"verdict": "PORTABILITY_CHECK_ERROR", "ok": False, "error": str(exc)})
+    return server.ok(result)
+
+
+def graphify_scribe_bridge(
+    workspace_root: str = "",
+    dry_run: bool = False,
+    drift_threshold: float = 0.30,
+) -> Dict[str, Any]:
+    """Check for Graphify centrality drift on SCAR-tagged nodes and write GHOSTs.
+
+    Reads graphify-out/graph.json and SCRIBE file. For each function/class
+    referenced in a SCAR, computes current centrality. If drift > threshold
+    (default 30%), appends a GHOST entry to SCRIBE.
+
+    Idempotent: same drift event is only written once (deterministic drift_id).
+    dry_run=True detects drifts without writing anything.
+    """
+    if _gsb is None:
+        return server.ok({
+            "verdict": "BRIDGE_MODULE_UNAVAILABLE",
+            "ok": False,
+            "reason": "graphify_scribe_bridge.py module not loaded.",
+        })
+    root = workspace_root.strip() if workspace_root else ""
+    try:
+        result = _gsb.run_bridge_check(
+            workspace_root=root if root else None,
+            drift_threshold=max(0.01, min(1.0, float(drift_threshold))),
+            dry_run=bool(dry_run),
+        )
+    except Exception as exc:
+        return server.ok({"verdict": "BRIDGE_ERROR", "ok": False, "error": str(exc)})
+    return server.ok(result)
+
+
+# ─────────────────────────────────────────────────────────────
+# verify_proof — non-circular TENOR proof verification (V2.15)
+# ─────────────────────────────────────────────────────────────
+
+def verify_proof(
+    token: str = "",
+    agent_id: str = "",
+    workspace_root: str = "",
+) -> Dict[str, Any]:
+    """Verify a TENOR proof token issued during tenor-init.
+
+    This tool breaks the circular trust loop in TENOR INIT:
+    the proof token was signed server-side by HMAC-SHA256 with a project-bound
+    key during `scribe tenor-init`. The LLM cannot fabricate a valid token
+    without having actually run the command.
+
+    Args:
+        token          : the proof token from the SCRIBE-CHECK V4 output line
+                         «Proof token».
+        agent_id       : the agent_id from the same SCRIBE-CHECK (must match token).
+        workspace_root : optional; defaults to the server's current project root.
+
+    Returns JSON with:
+        ok       : bool
+        verdict  : one of the values below
+        detail   : human-readable explanation
+
+    Verdict codes:
+        PROOF_VALID              — authentic, project-bound, within TTL.
+        PROOF_INVALID_FORMAT     — token malformed (not issued by this server).
+        PROOF_INVALID_SIGNATURE  — HMAC mismatch (fabricated or tampered).
+        PROOF_INVALID_NOT_IN_STORE — nonce absent (token was never issued).
+        PROOF_INVALID_AGENT_MISMATCH — agent_id does not match token.
+        PROOF_EXPIRED            — TTL exceeded (>24 h since tenor-init).
+        PROOF_CONSUMED           — already verified once; replay detected.
+        PROOF_MODULE_UNAVAILABLE — proof_signer.py failed to load at startup.
+
+    Usage after TENOR INIT:
+        verify_proof(token="v1.<...>", agent_id="<agent_session_id>")
+    """
+    if not _PROOF_SIGNER_AVAILABLE:
+        return server.ok({
+            "ok": False,
+            "verdict": "PROOF_MODULE_UNAVAILABLE",
+            "detail": (
+                f"proof_signer.py could not be loaded: {_proof_import_exc_msg}"
+                if "_proof_import_exc_msg" in dir()
+                else "proof_signer.py not available."
+            ),
+        })
+    if not token or not agent_id:
+        return server.ok({
+            "ok": False,
+            "verdict": "PROOF_INVALID_MISSING_INPUT",
+            "detail": "Both `token` and `agent_id` are required.",
+        })
+    from pathlib import Path as _LocalPath
+    root_str = workspace_root.strip() if workspace_root else ""
+    try:
+        root = _LocalPath(root_str).resolve() if root_str else server.ROOT.resolve()
+    except Exception as exc:  # noqa: BLE001
+        return server.ok({
+            "ok": False,
+            "verdict": "PROOF_INVALID_ROOT",
+            "detail": f"Cannot resolve workspace_root: {exc}",
+        })
+    # Best-effort housekeeping — never blocks the verify call
+    try:
+        _purge_expired_proofs(root)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        result = _verify_proof(root, token, agent_id)
+    except Exception as exc:  # noqa: BLE001
+        return server.ok({"ok": False, "verdict": "PROOF_INTERNAL_ERROR", "detail": str(exc)})
+    return server.ok(result)
+
+
+# ─────────────────────────────────────────────────────────────
+# Wire all tools into the server
+# ─────────────────────────────────────────────────────────────
+
 server.workflow_next = workflow_next
 server.workflow_snapshot = workflow_snapshot
 server.before_task = before_task
@@ -1166,6 +1534,15 @@ server.TOOLS["wait_for_tasks"] = wait_for_tasks
 server.TOOLS["discipline_ping"] = discipline_ping
 server.TOOLS["pre_action_guard"] = pre_action_guard
 server.TOOLS["workspace_audit"] = workspace_audit
+# V2.14 new tools
+server.TOOLS["lease_extend"] = lease_extend
+server.TOOLS["resource_lock_claim"] = resource_lock_claim
+server.TOOLS["resource_lock_release"] = resource_lock_release
+server.TOOLS["resource_lock_status"] = resource_lock_status
+server.TOOLS["portability_check"] = portability_check
+server.TOOLS["graphify_scribe_bridge"] = graphify_scribe_bridge
+# V2.15 new tools
+server.TOOLS["verify_proof"] = verify_proof
 
 handle = server.handle
 list_tools = server.list_tools

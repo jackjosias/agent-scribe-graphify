@@ -17,6 +17,19 @@ from scribe_identity import DEFAULT_TTL_SECONDS, write_presence
 from scribe_lock import DEFAULT_SURFACE, active_lock, remove_lock, stale_reason
 from scribe_state import AGENT_TYPES, check_sync
 
+# Proof signer — graceful fallback if module not yet installed
+try:
+    import sys as _sys
+    _SELF_DIR = Path(__file__).parent
+    if str(_SELF_DIR) not in _sys.path:
+        _sys.path.insert(0, str(_SELF_DIR))
+    from proof_signer import issue_proof as _issue_proof  # type: ignore
+    _PROOF_SIGNER_OK = True
+except Exception:  # noqa: BLE001
+    _PROOF_SIGNER_OK = False
+    def _issue_proof(*_a, **_kw) -> str:  # type: ignore
+        return "PROOF_SIGNER_UNAVAILABLE"
+
 
 PROJECT_SCRIBE = Path("AGENT-MEMOIRE_PROJECT_STATUS.scribe")
 SKILL_PATH = Path(".agent") / "skills" / "init-tenor" / "SKILL.md"
@@ -196,6 +209,7 @@ def emit_report(
     rag_journal: CommandResult,
     rag_scars: CommandResult,
     rag_ne_pas: CommandResult,
+    proof_token: str = "",
 ) -> int:
     state = state_summary(project_root)
     claims, cleaned = active_claims_with_cleanup()
@@ -213,6 +227,8 @@ def emit_report(
     print(f"Blast radius node 1  : {graph['blast_radius']}")
     print(f"Agent session        : {agent_id}")
     print(f"Whoami proof         : {'OK' if whoami.returncode == 0 else 'FAIL'}")
+    print(f"Proof token          : {proof_token}")
+    print(f"Proof verify MCP     : verify_proof(token=<above>, agent_id='{agent_id}')")
     print(f"Agent type           : {agent_type}")
     print(f"Lock status          : {lock_summary()}")
     print(f"Last writer          : {state['last_writer']} ({state['last_writer_type']})")
@@ -276,6 +292,10 @@ def main() -> int:
     agent_id = args.agent or os.environ.get("SCRIBE_AGENT_ID") or f"{args.agent_type}-{os.getpid()}-tenor-init"
     write_presence(agent_id, args.agent_type, args.surface, DEFAULT_TTL_SECONDS, status="idle")
 
+    # Issue signed proof token BEFORE bootstrap so the token exists even if bootstrap partially fails.
+    # The token is project-bound (HMAC keyed to project root) and non-falsifiable.
+    proof_token = _issue_proof(project_root, agent_id)
+
     bootstrap_report = bootstrap_project(
         project_root,
         agent=agent_id,
@@ -306,6 +326,7 @@ def main() -> int:
         rag_journal=rag_journal,
         rag_scars=rag_scars,
         rag_ne_pas=rag_ne_pas,
+        proof_token=proof_token,
     )
 
 

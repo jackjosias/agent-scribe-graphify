@@ -420,7 +420,7 @@ def graphify_query(query: str = "", resource: str = "") -> Dict[str, Any]:
             text = p.read_text(encoding="utf-8", errors="replace")
             found.append({"path": str(p), "excerpt": text[:12000]})
     if not found:
-        return ok({"verdict": "GRAPHIFY_UNAVAILABLE", "query": query, "resource": resource, "reason": "No graphify report found in .agent/state/graphify-out or legacy locations"})
+        return ok({"verdict": "GRAPHIFY_UNAVAILABLE", "query": query, "resource": resource, "reason": "No graphify report found in graphify-out or legacy locations"})
     return ok({"verdict": "GRAPHIFY_QUERY_DONE", "query": query, "resource": resource, "results": found})
 
 

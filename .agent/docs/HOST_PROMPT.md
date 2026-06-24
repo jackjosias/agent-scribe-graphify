@@ -145,13 +145,13 @@ Si `workflow_next` retourne `INPUT_REQUIRED`, demande l'information à l'utilisa
 
 Si `workflow_next` demande `scribe_record`, le host doit l'appeler avant `finish_task`.
 
-Le host ne doit pas écrire directement dans `.agent/state/scribe-out/`. La seule écriture mémoire acceptée côté MCP est :
+Le host ne doit pas écrire directement dans `scribe-out/`. La seule écriture mémoire acceptée côté MCP est :
 
 ```text
 scribe_record
 ```
 
-`scribe_record` écrit une note structurée dans `.agent/state/scribe-out/records/`. Il sert aussi aux cicatrices, patterns, erreurs, décisions, dettes, invariants, conflits et approches interdites, pas seulement aux fins de tâche.
+`scribe_record` écrit une note structurée dans `scribe-out/records/`. Il sert aussi aux cicatrices, patterns, erreurs, décisions, dettes, invariants, conflits et approches interdites, pas seulement aux fins de tâche.
 
 ## Fin de tâche
 

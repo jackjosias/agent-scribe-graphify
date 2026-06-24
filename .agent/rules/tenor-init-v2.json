@@ -21,8 +21,8 @@
   },
   "required_surfaces": [
     ".scribe",
-    ".agent/state/scribe-out/",
-    ".agent/state/graphify-out/",
+    "scribe-out/",
+    "graphify-out/",
     ".agent/rules/scribe.md",
     ".graphifyignore"
   ],

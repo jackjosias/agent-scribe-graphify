@@ -1,0 +1,191 @@
+schema_version: "TENOR_SCRIBE_v3.2"
+meta_project:
+  project_name: "agent-scribe-graphify"
+  stack: "Unknown"
+  initialized_at: "2026-06-23T14:12:30.655235Z"
+  scribe_version: "3.2-local-causal-retrieval"
+  graphify_graph: "graphify-out/graph.json"
+tiers:
+  hot: ["PAT-GRAPH-001", "PAT-GIT-001", "PAT-SCRIBE-RAG-001", "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001", "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001", "GHOST-SCRIBE-RAG-SEL-DIRECT-001", "GHOST-SCRIBE-STRICT-MEMORY-001"]
+  warm: []
+  cold: []
+invariants:
+  - id: "INV-F001"
+    status: "ACTIVE"
+    tier: "hot"
+    titre: "Graphify before codebase work"
+    l0_abstract: "Read graphify-out/GRAPH_REPORT.md before architecture, dependency, or blast-radius work when it exists."
+  - id: "INV-F002"
+    status: "ACTIVE"
+    tier: "hot"
+    titre: "SCRIBE stores causal memory only"
+    l0_abstract: "Write decisions, failures, rejected options, and learned safeguards in SCRIBE; leave structural facts to Graphify."
+  - id: "INV-F003"
+    status: "ACTIVE"
+    tier: "hot"
+    titre: "Anti-drift closing question"
+    l0_abstract: "Before closing a real coding session, ask what will hurt the next LLM if undocumented; concrete future pain becomes SCAR or GHOST, otherwise JOURNAL is enough."
+  - id: "INV-F004"
+    status: "ACTIVE"
+    tier: "hot"
+    titre: "Generated agent state stays out of product commits"
+    l0_abstract: "Version host product source by default; keep graphify-out and scribe-out out of commits unless explicitly requested."
+patterns:
+  - id: "PAT-GRAPH-001"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    titre: "Graphify and SCRIBE separation"
+    l0_abstract: "Use Graphify for structural code facts and SCRIBE for causal project memory."
+    scope: "dev"
+    evidence:
+      type: "OBSERVED"
+      source: "JOURNAL-000"
+      observable: "Bootstrap initialized a project with separate graphify-out, scribe-out, and SCRIBE memory surfaces."
+    liens_causaux:
+      source: "JOURNAL-000"
+  - id: "PAT-GIT-001"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    titre: "Agent artifact versioning boundary"
+    l0_abstract: "Commit/push product source by default; share AGENT-MEMOIRE_PROJECT_STATUS.scribe only when causal memory should be collaborative, never graphify-out or scribe-out by default."
+    scope: "dev"
+    evidence:
+      type: "REASONED"
+      source: "JOURNAL-000"
+      observable: "graphify-out and scribe-out are generated local state, while AGENT-MEMOIRE_PROJECT_STATUS.scribe is optional shared causal memory."
+    liens_causaux:
+      source: "JOURNAL-000"
+
+  - id: "PAT-SCRIBE-RAG-001"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    titre: "scribe-rag preflight proof"
+    l0_abstract: "Agents must use scribe-rag preflight/context/query/challenge as the proof surface before significant work."
+    scope: "dev bundle"
+    approved: true
+    evidence:
+      type: "OBSERVED"
+      source: "JOURNAL-000"
+      observable: "Bootstrap installed the portable scribe-rag CLI and the always-on host rule points every model to it."
+    liens_causaux:
+      source: "JOURNAL-000"
+  - id: "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    titre: "Dashboard causal-density is informational"
+    l0_abstract: "Do not create SCAR/GHOST/PAT to clean dashboard ratios; write causal memory only after real pain, bugs, durable decisions, or rejected alternatives."
+    scope: "dev bundle"
+    approved: true
+    evidence:
+      type: "REASONED"
+      source: "JOURNAL-000"
+      observable: "A low causal-density ratio is a quality reminder, not a write trigger."
+    liens_causaux:
+      source: "GHOST-SCRIBE-STRICT-MEMORY-001"
+  - id: "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    titre: "Real pain must become an immediately reusable SCAR"
+    l0_abstract: "Do not chase causal-density ratios, but any resolved bug after more than two attempts, regression, costly rollback, or broken browser/visual smoke must be recorded immediately as a SCAR with cause_racine, resolution, and test_binding; before adjacent future work, retrieve and challenge against that memory."
+    scope: "dev bundle"
+    approved: true
+    evidence:
+      type: "REASONED"
+      source: "JOURNAL-000"
+      observable: "Bootstrap installs the pain-capture reflex so copied SCRIBE bundles keep the same host-agent behavior across projects."
+    regle_operationnelle:
+      - "Bug resolved after more than two attempts => SCAR immediately, not journal-only."
+      - "Regression, costly rollback, or broken browser/visual smoke => SCAR immediately with test_binding."
+      - "SCAR must include cause_racine, resolution, test_binding, and attention_future when relevant."
+      - "Before a task near a known scar, run scribe-rag query/explain/challenge so the memory is exploited at decision time."
+      - "Never create SCAR/GHOST/PAT solely to improve a causal-density ratio."
+    liens_causaux:
+      - "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001"
+      - "INV-F003"
+ghosts:
+  - id: "GHOST-SCRIBE-RAG-SEL-DIRECT-001"
+    titre: "No SEL direct retrieval for agents"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    l0_abstract: "SEL direct context/query/challenge is rejected for host-agent retrieval; use scribe-rag so retrieval is compact and auditable."
+    scope: "dev bundle"
+    alternatives_rejetees:
+      - nom: "SEL direct retrieval"
+        raison_rejet: "It bypasses the compact agent proof surface and makes policy compliance invisible."
+    ne_pas_reproposer:
+      - "appeler SEL direct context query pour retrieval agent"
+      - "utiliser scribe context au lieu de scribe-rag"
+      - "lire AGENT-MEMOIRE_PROJECT_STATUS.scribe directement pour retrieval agent"
+    evidence:
+      type: "OBSERVED"
+      source: "JOURNAL-000"
+      observable: "The host-facing retrieval path is scribe-rag; SEL remains the internal guard/write engine."
+    liens_causaux:
+      source: "PAT-SCRIBE-RAG-001"
+  - id: "GHOST-SCRIBE-STRICT-MEMORY-001"
+    titre: "Strict causal memory beats clean dashboard"
+    date: "2026-06-23"
+    schema_patch_date: "2026-06-23"
+    tier: "hot"
+    status: "ACTIVE"
+    l0_abstract: "Keep SCRIBE strict even when the dashboard shows low causal density; a visible warning is better than artificial memory."
+    scope: "dev bundle"
+    alternatives_rejetees:
+      - nom: "Artificial dashboard cleanup memory"
+        raison_rejet: "It improves the ratio while degrading retrieval with entries that did not come from real project pain."
+      - nom: "Treat P2 density as mandatory write work"
+        raison_rejet: "The P2 signal is a discipline reminder; it becomes actionable only when a concrete bug, decision, or rejected option exists."
+    ne_pas_reproposer:
+      - "creer SCAR/GHOST/PAT pour nettoyer le dashboard"
+      - "traiter une alerte densite causale comme dette bloquante"
+    evidence:
+      type: "REASONED"
+      source: "JOURNAL-000"
+      observable: "Strict causal memory preserves retrieval quality better than a clean dashboard ratio."
+    liens_causaux:
+      source: "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001"
+journal:
+  - id: "JOURNAL-000"
+    date: "2026-06-23"
+    mode: "STANDARD"
+    agent_type: "unknown"
+    surface: ""
+    hot_entries_consulted: ["PAT-GRAPH-001", "PAT-GIT-001", "PAT-SCRIBE-RAG-001", "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001", "GHOST-SCRIBE-STRICT-MEMORY-001"]
+    l0_abstract: "Bootstrap initial."
+    pourquoi: "This project received the portable SCRIBE/TENOR local causal retrieval bundle. Graphify owns structural retrieval; SCRIBE starts as strict causal memory, dashboard density warnings are informational, and generated agent runtime artifacts stay outside product commits by default."
+    scribe_delta: "PAT-GRAPH-001 | PAT-GIT-001 | PAT-SCRIBE-RAG-001 | PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001 | GHOST-SCRIBE-RAG-SEL-DIRECT-001 | GHOST-SCRIBE-STRICT-MEMORY-001 | JOURNAL-000"
+    multi_agent_context:
+      surface: ""
+      other_agents_active: []
+metrics:
+  sessions_total: 1
+  scars_total: 0
+  vaccins_actifs: 0
+  taux_recidive: 0.0
+  bugs_prevenus_par_vaccin: 0
+  complexite_moyenne: 0.0
+  mode_distribution:
+    CRITICAL: 0
+    STANDARD: 1
+    QUICK: 0
+  dette_p0_p1_courante: 0
+  dezoom_total: 0
+  taux_dezoom_par_session: 0.0
+  torvalds_items_total: 0
+  torvalds_items_traites: 0
+  taux_completion_prod_moyenne: 0.0
+  delta_feuille_vs_prod_moyen: 0.0
+  graphify_queries_total: 0
+  tokens_saved_via_graphify: 0

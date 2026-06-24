@@ -171,10 +171,10 @@ before_task → task_id/context_token → targeted_scribe_query → targeted_gra
 `scribe_record` écrit une note structurée de fin de tâche, cicatrice, pattern, erreur, décision, dette, invariant, conflit ou approche interdite dans :
 
 ```text
-.agent/state/scribe-out/records/
+scribe-out/records/
 ```
 
-Le host ne doit pas écrire directement dans `.agent/state/scribe-out/`. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant `finish_task`.
+Le host ne doit pas écrire directement dans `scribe-out/`. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant `finish_task`.
 
 ## Workflow mécanique attendu
 

@@ -32,8 +32,8 @@ Ce protocole définit :
 * le bootstrap via `workflow_next`
 * l'initialisation `.agent/workflow/scribe/scribe tenor-init --type cli`
 * la vérification `.scribe`
-* la vérification `.agent/state/scribe-out/`
-* la vérification `.agent/state/graphify-out/`
+* la vérification `scribe-out/`
+* la vérification `graphify-out/`
 * les tools obligatoires `workflow_next`, `apply_patch`, `delete_resource`
 * la boucle de lecture/recherche SCRIBE/Graphify
 * la boucle d'écriture via `apply_patch`
@@ -60,7 +60,7 @@ Pas Graphify. Pas README. Pas SCRIBE. **Ce fichier d'abord.**
 Ce skill DOIT lancer l'initialisation machine à chaque TENOR INIT avant
 de considérer la session valide. Ne cherche pas à deviner si `.agent/` vient
 d'être copié: la commande est idempotente, donc elle est le test et la
-réparation portable. Elle initialise ou vérifie le SCRIBE projet, `.agent/state/scribe-out/`,
+réparation portable. Elle initialise ou vérifie le SCRIBE projet, `scribe-out/`,
 `.agent/rules/scribe.md`, le bloc `AGENTS.md`, `.graphifyignore` et les
 surfaces portables attendues.
 
@@ -637,7 +637,7 @@ tu n'as PAS le droit de lire :
 ```
 /home/*/.config/*/AGENTS.md
 ~/.gemini/GEMINI.md
-.agent/state/graphify-out/GRAPH_REPORT.md
+graphify-out/GRAPH_REPORT.md
 README.md
 AGENT-MEMOIRE_PROJECT_STATUS.scribe
 ```
@@ -662,7 +662,7 @@ ORDRE DE LECTURE STRICT (ne pas sauter, ne pas réorganiser) :
 2. ${HOME}/.gemini/GEMINI.md
    ← TENOR global — protocole de lecture absolue
 
-3. .agent/state/graphify-out/GRAPH_REPORT.md
+3. graphify-out/GRAPH_REPORT.md
    ← graphe structurel — carte de l'architecture
 
 4. .agent/rules/scribe.md
@@ -866,13 +866,13 @@ Elle te donne en 30 secondes ce qui prendrait 50 000 tokens :
 **Un LLM qui ne le lit pas = junior qui défriche à l'aveugle.**
 
 ```bash
-cat .agent/state/graphify-out/GRAPH_REPORT.md
+cat graphify-out/GRAPH_REPORT.md
 ```
 
 Si absent, générer d'abord :
 ```bash
 graphify update .
-cat .agent/state/graphify-out/GRAPH_REPORT.md
+cat graphify-out/GRAPH_REPORT.md
 ```
 
 **🔴 Protocole de lecture absolue applicable ici.**
@@ -1210,7 +1210,7 @@ PROCEED → Implémenter.
 
 ```bash
 # JAMAIS CES COMMANDES :
-git add .            # inclut .agent/, .agent/state/scribe-out/ → INTERDIT
+git add .            # inclut .agent/, scribe-out/ → INTERDIT
 git add .agent       # surfaces agentiques → INTERDIT
 git add graphify-out # artefacts générés → INTERDIT
 git add scribe-out   # état runtime → INTERDIT
@@ -1226,7 +1226,7 @@ git add src/styles/monStyle.scss
 .agent/skills/init-tenor/SKILL.md
 .agent/workflow/scribe/
 graphify-out/
-.agent/state/scribe-out/
+scribe-out/
 ```
 
 **AGENTS.md et .agent/rules/scribe.md :**
@@ -1353,7 +1353,7 @@ date +"%Y-%m-%d %H:%M:%S %Z %z"
 cat ${HOME}/.gemini/GEMINI.md
 
 # 3. Graphify
-cat .agent/state/graphify-out/GRAPH_REPORT.md
+cat graphify-out/GRAPH_REPORT.md
 
 # 4. Bootstrap + identité
 .agent/workflow/scribe/scribe bootstrap
