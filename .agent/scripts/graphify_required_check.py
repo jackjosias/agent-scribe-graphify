@@ -87,6 +87,20 @@ def main() -> int:
             print(f"    - {action}")
         return 1
 
+    if verdict == gg.VERDICT_GRAPH_INVALID_JSON:
+        print("GRAPHIFY_GRAPH_JSON_INVALID")
+        print("  graph.json is corrupted or missing required 'nodes' key.")
+        for action in result.get("next_actions", []):
+            print(f"    - {action}")
+        return 1
+
+    if verdict == gg.VERDICT_BINARY_FAILED:
+        print("GRAPHIFY_BINARY_CHECK_FAILED")
+        print("  Graphify binary found but does not respond to --version or --help.")
+        for action in result.get("next_actions", []):
+            print(f"    - {action}")
+        return 1
+
     if verdict == gg.VERDICT_OUTPUTS_MISSING:
         print("GRAPHIFY_OUTPUTS_MISSING")
         print("  Graphify is installed but graphify-out/ is missing or incomplete.")

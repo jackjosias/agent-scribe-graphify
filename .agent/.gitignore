@@ -2,7 +2,11 @@
 state/runtime/coordination.sqlite
 state/runtime/coordination.sqlite-wal
 state/runtime/coordination.sqlite-shm
+state/runtime/coordination.backup-*.sqlite
 state/runtime/events.log
+state/runtime/events.log.*
+state/proof/
+state/proof/*.json
 
 # New canonical local runtime outputs
 state/scribe-out/

@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import time
+from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
@@ -41,7 +42,6 @@ except Exception as _proof_import_exc:  # noqa: BLE001
 
 server.SERVER_VERSION = "0.2.15"
 if os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT"):
-    from pathlib import Path
     server.ROOT = Path(os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"]).resolve()
     server.AGENT_DIR = server.ROOT / ".agent"
 _BASE_WORKFLOW_NEXT = server.workflow_next

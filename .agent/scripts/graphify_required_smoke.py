@@ -208,11 +208,95 @@ def smoke_07_diagnostic_flag_when_missing() -> None:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-# ─── Main ────────────────────────────────────────────────────────────────────
+# ─── Smoke 8: graph.json invalid JSON ──────────────────────────────────────────
+
+def smoke_08_graph_json_invalid_blocks() -> None:
+    tmp = make_fake_workspace()
+    try:
+        bindir = fake_graphify_binary(tmp)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(bindir) + os.pathsep + old_path
+        try:
+            out = tmp / "graphify-out"
+            out.mkdir()
+            (out / "graph.json").write_text("INVALID_JSON{{{", encoding="utf-8")
+            (out / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
+            (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+            result = gg.check_graphify_required(tmp, host_type="opencode", auto_write_guide=False)
+        finally:
+            os.environ["PATH"] = old_path
+
+        ok = (
+            result.get("ok") is False
+            and result.get("verdict") == gg.VERDICT_GRAPH_INVALID_JSON
+            and result.get("blocking") is True
+        )
+        check("[8] graph.json invalid JSON blocks write", ok, str(result.get("verdict", "")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ─── Smoke 9: graph.json missing nodes key ─────────────────────────────────────
+
+def smoke_09_graph_json_missing_nodes_blocks() -> None:
+    tmp = make_fake_workspace()
+    try:
+        bindir = fake_graphify_binary(tmp)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(bindir) + os.pathsep + old_path
+        try:
+            out = tmp / "graphify-out"
+            out.mkdir()
+            (out / "graph.json").write_text('{"edges": []}', encoding="utf-8")
+            (out / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
+            (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+            result = gg.check_graphify_required(tmp, host_type="opencode", auto_write_guide=False)
+        finally:
+            os.environ["PATH"] = old_path
+
+        ok = (
+            result.get("ok") is False
+            and result.get("verdict") == gg.VERDICT_GRAPH_INVALID_JSON
+            and result.get("blocking") is True
+        )
+        check("[9] graph.json missing nodes key blocks write", ok, str(result.get("verdict", "")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ─── Smoke 10: Binary exists but unresponsive ─────────────────────────────────
+
+def smoke_10_binary_unresponsive_blocks() -> None:
+    """Create a fake graphify that always fails → GRAPHIFY_BINARY_CHECK_FAILED."""
+    tmp = make_fake_workspace()
+    try:
+        bindir = tmp / "bin"
+        bindir.mkdir()
+        script = bindir / "graphify"
+        script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        script.chmod(0o755)
+        old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(bindir) + os.pathsep + old_path
+        try:
+            result = gg.check_graphify_required(tmp, host_type="opencode", auto_write_guide=False)
+        finally:
+            os.environ["PATH"] = old_path
+
+        ok = (
+            result.get("ok") is False
+            and result.get("verdict") == gg.VERDICT_BINARY_FAILED
+            and result.get("blocking") is True
+        )
+        check("[10] unresponsive binary blocks write", ok, str(result.get("verdict", "")))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ─── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> int:
     print(f"\n{'='*60}")
-    print(f"  GRAPHIFY REQUIRED SMOKE — V2.15")
+    print(f"  GRAPHIFY REQUIRED SMOKE — V2.15.1")
     print(f"  module  : {gg.__file__}")
     print(f"  platform: {sys.platform}")
     print(f"  python  : {sys.version.split()[0]}")
@@ -225,6 +309,9 @@ def main() -> int:
     smoke_05_guide_mentions_opencode()
     smoke_06_no_silent_grep_fallback()
     smoke_07_diagnostic_flag_when_missing()
+    smoke_08_graph_json_invalid_blocks()
+    smoke_09_graph_json_missing_nodes_blocks()
+    smoke_10_binary_unresponsive_blocks()
 
     total = _passes + len(_failures)
     print(f"\n{'='*60}")

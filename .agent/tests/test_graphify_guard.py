@@ -1,18 +1,14 @@
 """test_graphify_guard.py — Tests for runtime/graphify_guard.py.
 
-Coverage: 12 tests.
-   1. detect_graphify_binary() returns False when binary not on PATH
-   2. detect_graphify_binary() returns True when fake binary on PATH
-   3. get_graphify_version() returns None when binary missing
-   4. get_graphify_version() returns version string from fake binary
-   5. validate_graphify_installation() returns GRAPHIFY_REQUIRED_NOT_INSTALLED when missing
-   6. validate_graphify_outputs() returns GRAPHIFY_OUTPUTS_MISSING when dir absent
-   7. validate_graphify_outputs() returns GRAPHIFY_OUTPUTS_READY when all files present
-   8. validate_graphify_outputs() returns GRAPHIFY_OUTPUTS_MISSING when file empty
-   9. check_graphify_required() returns blocking = True when binary missing
-  10. check_graphify_required() returns blocking = True when outputs missing
-  11. check_graphify_required() returns GRAPHIFY_READY when everything ready
-  12. render_graphify_install_guide() contains graphifyy (double y)
+Coverage: 25 tests.
+   1-18: existing (binary detection, installation, outputs, check, guide, atomic, platform, subprocess)
+  19. validate_graphify_outputs() returns GRAPHIFY_GRAPH_JSON_INVALID when graph.json is not valid JSON
+  20. validate_graphify_outputs() returns GRAPHIFY_GRAPH_JSON_INVALID when graph.json has no 'nodes' key
+  21. validate_graphify_outputs() returns GRAPHIFY_OUTPUTS_READY when graph.json is valid with nodes
+  22. validate_graphify_installation() returns GRAPHIFY_BINARY_CHECK_FAILED when binary unresponsive
+  23. _graphify_binary_responsive() with --help fallback returning True, version=None
+  24. get_graphify_version() returns version string when --version and --help work
+  25. check_graphify_required() returns GRAPHIFY_BINARY_CHECK_FAILED with blocking=True
 """
 from __future__ import annotations
 
@@ -323,6 +319,156 @@ class TestGuardSafeSubprocess(unittest.TestCase):
         result = gg._safe_subprocess(["/nonexistent/command_xyz"])
         self.assertFalse(result["ok"])
         self.assertEqual(result["returncode"], 127)
+
+
+class TestGuardGraphJsonValidation(unittest.TestCase):
+    """Tests for graph.json JSON validation in validate_graphify_outputs()."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="test_guard_graphjson_")
+        self._root = Path(self._tmp)
+        out = self._root / "graphify-out"
+        out.mkdir()
+        (out / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
+        (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # 19. graph.json exists but contains invalid JSON → GRAPHIFY_GRAPH_JSON_INVALID
+    # ------------------------------------------------------------------
+    def test_19_graph_json_invalid_content(self) -> None:
+        out = self._root / "graphify-out"
+        (out / "graph.json").write_text("NOT_VALID_JSON{{{", encoding="utf-8")
+        result = gg.validate_graphify_outputs(self._root)
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("verdict"), gg.VERDICT_GRAPH_INVALID_JSON)
+        self.assertIsNotNone(result.get("files", {}).get("graph.json", {}).get("parse_error"))
+
+    # ------------------------------------------------------------------
+    # 20. graph.json is valid JSON but missing 'nodes' key →
+    #     GRAPHIFY_GRAPH_JSON_INVALID
+    # ------------------------------------------------------------------
+    def test_20_graph_json_missing_nodes_key(self) -> None:
+        out = self._root / "graphify-out"
+        (out / "graph.json").write_text('{"edges": []}', encoding="utf-8")
+        result = gg.validate_graphify_outputs(self._root)
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("verdict"), gg.VERDICT_GRAPH_INVALID_JSON)
+        self.assertFalse(result["files"]["graph.json"]["has_nodes_key"])
+
+    # ------------------------------------------------------------------
+    # 21. graph.json is valid JSON with nodes key → outputs ready
+    # ------------------------------------------------------------------
+    def test_21_graph_json_valid_with_nodes(self) -> None:
+        out = self._root / "graphify-out"
+        (out / "graph.json").write_text('{"nodes": [], "edges": []}', encoding="utf-8")
+        result = gg.validate_graphify_outputs(self._root)
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "GRAPHIFY_OUTPUTS_READY")
+        self.assertTrue(result["files"]["graph.json"]["valid_json"])
+        self.assertTrue(result["files"]["graph.json"]["has_nodes_key"])
+
+
+class TestGuardBinaryResponsiveness(unittest.TestCase):
+    """Tests for _graphify_binary_responsive() and --help fallback."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.mkdtemp(prefix="test_guard_responsive_")
+        self._root = Path(self._tmp)
+        self._bindir = self._root / "bin"
+        self._bindir.mkdir()
+        self._old_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(self._bindir) + os.pathsep + self._old_path
+
+    def tearDown(self) -> None:
+        os.environ["PATH"] = self._old_path
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def _fake_binary(self, name: str, stdout: str, exit_code: int = 0) -> Path:
+        path = self._bindir / name
+        if sys.platform == "win32":
+            path = path.with_suffix(".bat")
+            content = f"@echo {stdout}\nexit /b {exit_code}\n"
+        else:
+            content = f"#!/bin/sh\necho '{stdout}'\nexit {exit_code}\n"
+        path.write_text(content, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    # ------------------------------------------------------------------
+    # 22. Binary exists but both --version and --help fail →
+    #     GRAPHIFY_BINARY_CHECK_FAILED
+    # ------------------------------------------------------------------
+    def test_22_binary_not_responsive_blocks(self) -> None:
+        self._fake_binary("graphify", "no-op", exit_code=1)
+        install_result = gg.validate_graphify_installation()
+        self.assertFalse(install_result.get("ok"))
+        self.assertEqual(install_result.get("verdict"), gg.VERDICT_BINARY_FAILED)
+        self.assertIsNotNone(install_result.get("reason"))
+
+    # ------------------------------------------------------------------
+    # 23. Binary exists, --version fails but --help works →
+    #     VERDICT_BINARY_FOUND with version=None
+    # ------------------------------------------------------------------
+    def test_23_binary_help_fallback(self) -> None:
+        # Create a binary that fails --version but succeeds --help.
+        script = self._bindir / "graphify"
+        if sys.platform == "win32":
+            script = script.with_suffix(".bat")
+            content = (
+                "@echo off\n"
+                "if \"%1\"==\"--version\" exit /b 1\n"
+                "if \"%1\"==\"--help\" (\n"
+                "  echo Graphify CLI Help\n"
+                "  exit /b 0\n"
+                ")\n"
+                "exit /b 0\n"
+            )
+        else:
+            content = (
+                "#!/bin/sh\n"
+                'if [ "$1" = "--version" ]; then\n'
+                "  exit 1\n"
+                "fi\n"
+                'if [ "$1" = "--help" ]; then\n'
+                '  echo "Graphify CLI Help"\n'
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n"
+            )
+        script.write_text(content, encoding="utf-8")
+        script.chmod(0o755)
+
+        responsive = gg._graphify_binary_responsive()
+        self.assertTrue(responsive)
+        version = gg.get_graphify_version()
+        self.assertIsNone(version)
+
+    # ------------------------------------------------------------------
+    # 24. Binary exists with both --version and --help OK →
+    #     full version returned
+    # ------------------------------------------------------------------
+    def test_24_binary_version_and_help_ok(self) -> None:
+        self._fake_binary("graphify", "0.5.0", exit_code=0)
+        version = gg.get_graphify_version()
+        self.assertIsNotNone(version)
+        self.assertIn("0.5.0", version)
+
+    # ------------------------------------------------------------------
+    # 25. check_graphify_required returns VERDICT_BINARY_FAILED when
+    #     binary exists but is unresponsive
+    # ------------------------------------------------------------------
+    def test_25_check_required_binary_failed(self) -> None:
+        self._fake_binary("graphify", "boom", exit_code=1)
+        result = gg.check_graphify_required(
+            self._root, host_type="opencode", auto_write_guide=False,
+        )
+        self.assertFalse(result.get("ok"))
+        self.assertTrue(result.get("blocking"))
+        self.assertFalse(result.get("write_allowed"))
+        self.assertEqual(result.get("verdict"), gg.VERDICT_BINARY_FAILED)
 
 
 if __name__ == "__main__":

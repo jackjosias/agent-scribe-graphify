@@ -14,6 +14,7 @@ Design:
 """
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -47,6 +48,7 @@ VERDICT_OUTPUTS_MISSING = "GRAPHIFY_OUTPUTS_MISSING"
 VERDICT_BINARY_FOUND = "GRAPHIFY_BINARY_FOUND"
 VERDICT_BINARY_FAILED = "GRAPHIFY_BINARY_CHECK_FAILED"
 VERDICT_DIAGNOSTIC_ONLY = "GRAPHIFY_DIAGNOSTIC_ONLY"
+VERDICT_GRAPH_INVALID_JSON = "GRAPHIFY_GRAPH_JSON_INVALID"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,17 +207,37 @@ def detect_graphify_binary() -> bool:
 def get_graphify_version() -> str | None:
     """Return the graphify version string (e.g. '0.5.0') or None if unavailable.
 
-    Runs `graphify --version` with a timeout. Returns None on any failure
-    (binary missing, timeout, non-zero exit, etc.).
+    Runs `graphify --version` with a timeout. If --version fails, falls back
+    to `graphify --help` to confirm the binary is real. Returns the version
+    string or None if both commands fail.
     """
     binary = _graphify_on_path()
     if binary is None:
         return None
     result = _safe_subprocess([str(binary), "--version"])
-    if not result["ok"]:
+    if result["ok"]:
+        version_str = result["stdout"].strip() or result["stderr"].strip()
+        return version_str if version_str else None
+    help_result = _safe_subprocess([str(binary), "--help"])
+    if help_result["ok"]:
         return None
-    version_str = result["stdout"].strip() or result["stderr"].strip()
-    return version_str if version_str else None
+    return None
+
+
+def _graphify_binary_responsive() -> bool:
+    """Return True if the graphify binary responds to --version or --help.
+
+    Binary must be on PATH and respond to at least one of the two probes.
+    This prevents a fake/unrelated binary on PATH from being accepted.
+    """
+    binary = _graphify_on_path()
+    if binary is None:
+        return False
+    version_check = _safe_subprocess([str(binary), "--version"])
+    if version_check["ok"]:
+        return True
+    help_check = _safe_subprocess([str(binary), "--help"])
+    return help_check["ok"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,7 +249,7 @@ def validate_graphify_installation() -> dict[str, Any]:
 
     Returns structured dict:
         ok: bool
-        verdict: GRAPHIFY_READY | GRAPHIFY_REQUIRED_NOT_INSTALLED | GRAPHIFY_BINARY_CHECK_FAILED
+        verdict: GRAPHIFY_READY | GRAPHIFY_REQUIRED_NOT_INSTALLED | GRAPHIFY_BINARY_CHECK_FAILED | GRAPHIFY_BINARY_FOUND
         binary_path: str | None
         version: str | None
         python_version: str
@@ -251,16 +273,20 @@ def validate_graphify_installation() -> dict[str, Any]:
             **base,
         }
 
-    version = get_graphify_version()
-    if version is None:
-        # Binary exists but --version failed — still treat as found but degraded.
+    responsive = _graphify_binary_responsive()
+    if not responsive:
         return {
-            "ok": True,
-            "verdict": VERDICT_BINARY_FOUND,
+            "ok": False,
+            "verdict": VERDICT_BINARY_FAILED,
             "version": None,
+            "reason": (
+                f"Binary found at {binary} but does not respond to --version or --help. "
+                "This may be a different command shadowing the real graphify CLI."
+            ),
             **base,
         }
 
+    version = get_graphify_version()
     return {
         "ok": True,
         "verdict": VERDICT_BINARY_FOUND,
@@ -278,7 +304,8 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
 
     Checks:
         - graphify-out/ directory exists
-        - graph.json exists and is non-empty
+        - graph.json exists, is non-empty, and contains valid JSON
+          with at least a 'nodes' key (Graphify output structure)
         - GRAPH_REPORT.md exists and is non-empty
         - graph.html exists and is non-empty
 
@@ -301,23 +328,40 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
     file_status: dict[str, dict[str, Any]] = {}
     all_present = True
     any_present = False
+    graph_json_issues: list[str] = []
 
     for filename in GRAPHIFY_REQUIRED_FILES:
         path = out_dir / filename
         exists = path.is_file()
         size = path.stat().st_size if exists else 0
         non_empty = size > 0
-        file_status[filename] = {
+        entry: dict[str, Any] = {
             "exists": exists,
             "size_bytes": size,
             "non_empty": non_empty,
         }
         if exists and non_empty:
             any_present = True
+
+            if filename == "graph.json":
+                try:
+                    raw = path.read_text(encoding="utf-8", errors="replace")
+                    parsed = json.loads(raw)
+                    has_nodes = isinstance(parsed, dict) and "nodes" in parsed
+                    entry["valid_json"] = True
+                    entry["has_nodes_key"] = has_nodes
+                    if not has_nodes:
+                        graph_json_issues.append("graph.json is valid JSON but missing 'nodes' key")
+                except json.JSONDecodeError as exc:
+                    entry["valid_json"] = False
+                    entry["parse_error"] = str(exc)
+                    graph_json_issues.append(f"graph.json is not valid JSON: {exc}")
+
+        file_status[filename] = entry
         if not exists or not non_empty:
             all_present = False
 
-    if all_present:
+    if all_present and not graph_json_issues:
         return {
             "ok": True,
             "verdict": "GRAPHIFY_OUTPUTS_READY",
@@ -333,6 +377,20 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
         reason_parts.append(f"missing: {', '.join(missing_files)}")
     if empty_files:
         reason_parts.append(f"empty: {', '.join(empty_files)}")
+    reason_parts.extend(graph_json_issues)
+
+    if graph_json_issues:
+        return {
+            "ok": False,
+            "verdict": VERDICT_GRAPH_INVALID_JSON,
+            "reason": "; ".join(reason_parts),
+            "output_dir": str(out_dir),
+            "files": file_status,
+            "next_actions": [
+                f"Run `{GRAPHIFY_CLI_NAME} .` to regenerate the knowledge graph",
+                "Check graphify-out/graph.json for corruption",
+            ],
+        }
 
     return {
         "ok": False,
@@ -648,30 +706,49 @@ def check_graphify_required(
     binary_ok = install_result.get("ok") is True
     binary_verdict = install_result.get("verdict", "")
 
-    if not binary_ok and binary_verdict == VERDICT_BINARY_MISSING:
+    if not binary_ok:
         install_guide_path: str | None = None
         if auto_write_guide:
             write_result = write_graphify_install_guide(root, normalized_host)
             if write_result.get("ok"):
                 install_guide_path = write_result.get("path")
 
-        return {
-            "ok": False,
-            "verdict": VERDICT_BINARY_MISSING,
-            "blocking": True,
-            "write_allowed": False,
-            "reason": "Graphify CLI is not installed. Graphify is mandatory for this .agent workflow.",
-            "binary": install_result,
-            "install_guide": install_guide_path or str(root / INSTALL_GUIDE_REL_PATH),
-            "next_actions": [
-                "Install Graphify with: uv tool install graphifyy",
-                "Or: pipx install graphifyy",
-                "Run: graphify install --platform " + normalized_host,
-                "Run: graphify .",
-                "Re-run: graphify_required_check",
-            ],
-            "diagnostic_only": True,
-        }
+        if binary_verdict == VERDICT_BINARY_MISSING:
+            return {
+                "ok": False,
+                "verdict": VERDICT_BINARY_MISSING,
+                "blocking": True,
+                "write_allowed": False,
+                "reason": "Graphify CLI is not installed. Graphify is mandatory for this .agent workflow.",
+                "binary": install_result,
+                "install_guide": install_guide_path or str(root / INSTALL_GUIDE_REL_PATH),
+                "next_actions": [
+                    "Install Graphify with: uv tool install graphifyy",
+                    "Or: pipx install graphifyy",
+                    "Run: graphify install --platform " + normalized_host,
+                    "Run: graphify .",
+                    "Re-run: graphify_required_check",
+                ],
+                "diagnostic_only": True,
+            }
+
+        if binary_verdict == VERDICT_BINARY_FAILED:
+            return {
+                "ok": False,
+                "verdict": VERDICT_BINARY_FAILED,
+                "blocking": True,
+                "write_allowed": False,
+                "reason": install_result.get("reason", "Graphify binary is not responding correctly."),
+                "binary": install_result,
+                "install_guide": install_guide_path or str(root / INSTALL_GUIDE_REL_PATH),
+                "next_actions": [
+                    "Check PATH: ensure the real graphify CLI is the first match",
+                    "Run: which graphify && graphify --version",
+                    "Re-install: uv tool install graphifyy --force",
+                    "Re-run: graphify_required_check",
+                ],
+                "diagnostic_only": True,
+            }
 
     # Step 2: Output files check.
     outputs_result = validate_graphify_outputs(root)
@@ -679,6 +756,23 @@ def check_graphify_required(
     outputs_verdict = outputs_result.get("verdict", "")
 
     if not outputs_ok:
+        if outputs_verdict == VERDICT_GRAPH_INVALID_JSON:
+            return {
+                "ok": False,
+                "verdict": VERDICT_GRAPH_INVALID_JSON,
+                "blocking": True,
+                "write_allowed": False,
+                "reason": outputs_result.get("reason", "graph.json is corrupted or invalid."),
+                "binary": install_result,
+                "outputs": outputs_result,
+                "install_guide": str(root / INSTALL_GUIDE_REL_PATH),
+                "next_actions": [
+                    "Run: graphify .",
+                    "Check graphify-out/graph.json for valid JSON content",
+                ],
+                "diagnostic_only": True,
+            }
+
         return {
             "ok": False,
             "verdict": VERDICT_OUTPUTS_MISSING,
