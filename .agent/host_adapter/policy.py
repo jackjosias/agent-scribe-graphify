@@ -40,6 +40,7 @@ _REQUIRED_TOOLS = [
     "resource_lock_release",
     "resource_lock_status",
     "portability_check",
+    "graphify_required_check",
 ]
 
 # Auto-guard instruction markers (must be present in AGENTS.md / host instructions).

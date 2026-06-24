@@ -327,6 +327,11 @@ def run_preflight(
         else:
             instruction_block_ok = False
 
+    if instruction_block_ok is True:
+        verdict = policy.decide_host_safety_level(
+            tools_list, capabilities, instructions_installed=True,
+        )
+
     return {
         "ok": True,
         "verdict": verdict,
