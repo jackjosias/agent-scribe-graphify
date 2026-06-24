@@ -16,8 +16,17 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
+        (self.root / ".agent" / "state" / "runtime").mkdir(parents=True, exist_ok=True)
+        graphify_dir = self.root / "graphify-out"
+        graphify_dir.mkdir(parents=True)
+        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
+        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
+        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("test project\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
+        subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()

@@ -128,10 +128,11 @@ def call_mcp_tool(
 
     env = dict(os.environ)
     env["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(workspace_root)
-    # Ensure mcp dir is on PYTHONPATH so server_entry imports succeed.
     mcp_dir = str(workspace_root / ".agent" / "mcp")
     existing_pp = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{mcp_dir}{os.pathsep}{existing_pp}" if existing_pp else mcp_dir
+    parent_paths = [str(p) for p in sys.path if p and Path(p).is_dir()]
+    all_mcp_pp = os.pathsep.join([mcp_dir] + parent_paths)
+    env["PYTHONPATH"] = f"{all_mcp_pp}{os.pathsep}{existing_pp}" if existing_pp else all_mcp_pp
     if "agent_id" in args:
         env["AGENT_ID"] = str(args["agent_id"])
 

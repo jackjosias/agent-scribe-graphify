@@ -57,6 +57,11 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
         os.chdir(self.root)
         (self.root / ".agent" / "state").mkdir(parents=True, exist_ok=True)
         (self.root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
+        graphify_dir = self.root / "graphify-out"
+        graphify_dir.mkdir(parents=True, exist_ok=True)
+        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
+        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
+        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / RESOURCE).write_text("line1\n", encoding="utf-8")
         git(self.root, "init")
         git(self.root, "config", "user.email", "test@example.invalid")

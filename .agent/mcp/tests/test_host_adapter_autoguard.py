@@ -74,6 +74,13 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         (self.agent_dir / "state").mkdir(parents=True, exist_ok=True)
         (self.agent_dir / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
 
+        # Create graphify-out with valid files for Graphify Mandatory Guard
+        graphify_dir = self.root / "graphify-out"
+        graphify_dir.mkdir(parents=True, exist_ok=True)
+        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
+        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
+        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
+
         # Link server_entry.py mockup
         entry_file = self.agent_dir / "mcp" / "server_entry.py"
         entry_file.write_text(
@@ -131,7 +138,9 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         policy = HostPolicy(self.root)
         required = policy.get_required_tools()
         capabilities = {"direct_fs_write": True}
-        verdict = policy.decide_host_safety_level(required, capabilities)
+        verdict = policy.decide_host_safety_level(
+            required, capabilities, instructions_installed=True,
+        )
         self.assertEqual(verdict, HostVerdict.SAFE_CANDIDATE)
 
     def test_render_minimal_host_instructions_contains_required_steps(self) -> None:
