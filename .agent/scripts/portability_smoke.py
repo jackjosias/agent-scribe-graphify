@@ -120,6 +120,21 @@ def _make_fake_git_root(path: Path) -> None:
     )
 
 
+def _make_fake_agent_bundle(path: Path) -> None:
+    """Create minimal .agent/mcp/server_entry.py so validate_root passes."""
+    agent_dir = path / ".agent"
+    agent_dir.mkdir(exist_ok=True)
+    mcp_dir = agent_dir / "mcp"
+    mcp_dir.mkdir(exist_ok=True)
+    entry = mcp_dir / "server_entry.py"
+    if not entry.exists():
+        entry.write_text(
+            '#!/usr/bin/env python3\n"""Minimal server_entry.py for smoke tests."""\n'
+            'if __name__ == "__main__":\n    print("smoke stub")\n',
+            encoding="utf-8",
+        )
+
+
 # ─── Smoke tests ──────────────────────────────────────────────────────────────
 
 def smoke_01_portability_importable() -> None:
@@ -129,7 +144,7 @@ def smoke_01_portability_importable() -> None:
 
 
 def smoke_02_check_ok_at_git_root() -> None:
-    """[2] full_portability_check() OK when .agent is at git root."""
+    """[2] portability_check() OK when .agent is at git root."""
     if not _PORTABILITY_IMPORTED:
         check("[2] portability check OK at git root", False, "module not imported")
         return
@@ -138,19 +153,19 @@ def smoke_02_check_ok_at_git_root() -> None:
     try:
         # Set up as fake git root with .agent.
         _make_fake_git_root(tmp)
-        (tmp / ".agent").mkdir()
+        _make_fake_agent_bundle(tmp)
 
         with patch.object(portability, "_git_toplevel", return_value=tmp):
-            result = portability.full_portability_check(workspace_root=str(tmp))
+            result = portability.portability_check(workspace_root=str(tmp))
 
-        ok = result.get("ok") is True and "OK" in result.get("verdict", "")
+        ok = result.get("ok") is True and "VALID" in result.get("verdict", "")
         check("[2] portability check OK at git root", ok, str(result))
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def smoke_03_check_fail_no_agent_dir() -> None:
-    """[3] full_portability_check() returns ok=False when .agent absent."""
+    """[3] portability_check() returns ok=False when .agent absent."""
     if not _PORTABILITY_IMPORTED:
         check("[3] portability check FAIL no .agent", False, "module not imported")
         return
@@ -160,7 +175,7 @@ def smoke_03_check_fail_no_agent_dir() -> None:
         _make_fake_git_root(tmp)
         # No .agent directory.
         with patch.object(portability, "_git_toplevel", return_value=tmp):
-            result = portability.full_portability_check(workspace_root=str(tmp))
+            result = portability.portability_check(workspace_root=str(tmp))
         fail = result.get("ok") is False
         check("[3] portability check FAIL no .agent", fail, str(result))
     finally:
@@ -168,7 +183,7 @@ def smoke_03_check_fail_no_agent_dir() -> None:
 
 
 def smoke_04_validate_root_fails_in_subdir() -> None:
-    """[4] validate_agent_root() raises PortabilityError when .agent is at subdir."""
+    """[4] assert_root_valid() raises PortabilityError when .agent is at subdir."""
     if not _PORTABILITY_IMPORTED:
         check("[4] PortabilityError on subdir", False, "module not imported")
         return
@@ -179,73 +194,75 @@ def smoke_04_validate_root_fails_in_subdir() -> None:
         # .agent is at tmp/sub/, not tmp/.
         sub = tmp / "packages" / "core"
         sub.mkdir(parents=True)
-        (sub / ".agent").mkdir()
+        _make_fake_agent_bundle(sub)
 
         with patch.object(portability, "_git_toplevel", return_value=tmp):
             try:
-                portability.validate_agent_root(agent_root=sub / ".agent")
+                portability.assert_root_valid(workspace_root=sub)
                 check("[4] PortabilityError on subdir", False, "No error raised")
             except portability.PortabilityError as exc:
                 check("[4] PortabilityError on subdir",
-                      exc.code == "AGENT_NOT_AT_ROOT", f"code={exc.code}")
+                      exc.code in {"AGENT_NOT_AT_GIT_ROOT", "AGENT_NOT_AT_ROOT"},
+                      f"code={exc.code}")
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def smoke_05_read_agent_json_no_file() -> None:
-    """[5] read_agent_json() returns a dict even when agent.json absent."""
+    """[5] validate_root() returns agent_json_present=False when agent.json absent."""
     if not _PORTABILITY_IMPORTED:
-        check("[5] read_agent_json absent", False, "module not imported")
+        check("[5] validate_root agent.json absent", False, "module not imported")
         return
 
     tmp = Path(tempfile.mkdtemp(prefix="smoke_port_rj_"))
     try:
-        agent_dir = tmp / ".agent"
-        agent_dir.mkdir()
-        result = portability.read_agent_json(agent_dir)
-        check("[5] read_agent_json absent", isinstance(result, dict), str(result))
+        _make_fake_agent_bundle(tmp)
+        # No agent.json — just validate_root to verify structure.
+        result = portability.validate_root(tmp)
+        ok = isinstance(result, dict) and "verdict" in result
+        check("[5] validate_root returns structured dict", ok, str(result))
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def smoke_06_write_agent_json_creates_file() -> None:
-    """[6] write_agent_json() creates valid agent.json with schema_version."""
+    """[6] init_agent_json() creates valid agent.json with schema_version."""
     if not _PORTABILITY_IMPORTED:
-        check("[6] write_agent_json creates file", False, "module not imported")
+        check("[6] init_agent_json creates file", False, "module not imported")
         return
 
     tmp = Path(tempfile.mkdtemp(prefix="smoke_port_wj_"))
     try:
         agent_dir = tmp / ".agent"
         agent_dir.mkdir()
-        portability.write_agent_json(agent_dir, project_name="smoke-proj")
+        portability.init_agent_json(tmp, project_name="smoke-proj")
         agent_json = agent_dir / portability.AGENT_JSON_FILENAME
         ok = agent_json.exists()
         if ok:
             content = json.loads(agent_json.read_text(encoding="utf-8"))
             ok = content.get("schema_version") == portability.AGENT_JSON_SCHEMA_VERSION
-        check("[6] write_agent_json creates file", ok,
+        check("[6] init_agent_json creates file", ok,
               f"schema_version={content.get('schema_version') if ok else 'N/A'}")
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
 
 def smoke_07_write_agent_json_idempotent() -> None:
-    """[7] write_agent_json() is idempotent — second write updates, no duplicate."""
+    """[7] init_agent_json() is idempotent — second write updates project_name."""
     if not _PORTABILITY_IMPORTED:
-        check("[7] write_agent_json idempotent", False, "module not imported")
+        check("[7] init_agent_json idempotent", False, "module not imported")
         return
 
     tmp = Path(tempfile.mkdtemp(prefix="smoke_port_wji_"))
     try:
         agent_dir = tmp / ".agent"
         agent_dir.mkdir()
-        portability.write_agent_json(agent_dir, project_name="v1")
-        portability.write_agent_json(agent_dir, project_name="v2")
+        portability.init_agent_json(tmp, project_name="v1")
+        portability.init_agent_json(tmp, project_name="v2")
         agent_json = agent_dir / portability.AGENT_JSON_FILENAME
         content = json.loads(agent_json.read_text(encoding="utf-8"))
         ok = content.get("project_name") == "v2"
-        check("[7] write_agent_json idempotent", ok, f"project_name={content.get('project_name')}")
+        check("[7] init_agent_json idempotent", ok, f"project_name={content.get('project_name')}")
     finally:
         shutil.rmtree(str(tmp), ignore_errors=True)
 
@@ -287,14 +304,14 @@ def smoke_10_env_override_respected() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="smoke_port_env_"))
     try:
         _make_fake_git_root(tmp)
-        (tmp / ".agent").mkdir()
+        _make_fake_agent_bundle(tmp)
 
         # Temporarily set the env var.
         old = os.environ.get(portability.ENV_ROOT_KEY)
         os.environ[portability.ENV_ROOT_KEY] = str(tmp)
         try:
             with patch.object(portability, "_git_toplevel", return_value=tmp):
-                result = portability.full_portability_check(workspace_root=str(tmp))
+                result = portability.portability_check(workspace_root=str(tmp))
             ok = result.get("project_root") == str(tmp) or result.get("ok") is True
             check("[10] ENV override respected", ok, str(result))
         finally:

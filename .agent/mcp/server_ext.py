@@ -20,6 +20,12 @@ try:
 except Exception:
     _gsb = None  # type: ignore
 
+# Graphify Mandatory Guard (V2.15) — blocks writes when Graphify is absent.
+try:
+    from runtime import graphify_guard as _gg  # type: ignore
+except Exception:
+    _gg = None  # type: ignore
+
 # Proof signer — non-circular TENOR proof verification (v0.2.15+)
 try:
     import sys as _sys
@@ -650,6 +656,13 @@ def pre_action_guard(
             "forbidden": _LEASE_FORBIDDEN,
         })
 
+    # Graphify Mandatory Guard: block writes if Graphify is not ready.
+    normalized_intent = (intent or "").strip().lower()
+    if normalized_intent in discipline.WRITE_INTENTS or normalized_intent in _WRITE_OR_DECISION_INTENTS:
+        guard_block = _enforce_graphify_guard()
+        if guard_block is not None:
+            return guard_block
+
     if task_id:
         try:
             tdata = task_context.task_status(task_id)
@@ -1171,6 +1184,15 @@ def tool_schema(name: str) -> Dict[str, Any]:
             "required": ["token", "agent_id"],
             "additionalProperties": False,
         }
+    if name == "graphify_required_check":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "workspace_root": {"type": "string"},
+            },
+            "additionalProperties": False,
+        }
     return _BASE_TOOL_SCHEMA(name)
 
 
@@ -1498,6 +1520,126 @@ def verify_proof(
 
 
 # ─────────────────────────────────────────────────────────────
+# Graphify Mandatory Guard (V2.15) — enforce Graphify presence
+# ─────────────────────────────────────────────────────────────
+
+_GRAPHIFY_FORBIDDEN = [
+    "claim_resource", "file_hash", "propose_patch", "apply_patch",
+    "delete_resource", "finish_task", "direct_file_edit",
+]
+
+_GRAPHIFY_GUARD_CACHE: dict[str, Any] = {}
+
+
+def _enforce_graphify_guard(
+    workspace_root: Path | str | None = None,
+    agent_id: str = "",
+) -> dict[str, Any] | None:
+    """Check Graphify mandatory guard; return blocking payload or None.
+
+    Uses a simple module-level cache to avoid re-checking every call
+    within the same server invocation. The cache is reset on each
+    graphify_required_check() call.
+    """
+    if _gg is None:
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_GUARD_MODULE_UNAVAILABLE",
+            "state": "GRAPHIFY_GUARD_MODULE_UNAVAILABLE",
+            "reason": "graphify_guard.py runtime module not loaded.",
+            "blocking": True,
+            "write_allowed": False,
+            "forbidden": _GRAPHIFY_FORBIDDEN,
+        })
+
+    cached = _GRAPHIFY_GUARD_CACHE.get("result")
+    if cached is not None:
+        if not cached.get("ok") and cached.get("blocking"):
+            return server.ok({
+                **cached,
+                "state": cached.get("verdict", "GRAPHIFY_BLOCKED"),
+                "forbidden": _GRAPHIFY_FORBIDDEN,
+            })
+        return None
+
+    result = _gg.check_graphify_required(
+        workspace_root=workspace_root,
+        host_type="opencode",
+        auto_write_guide=True,
+    )
+    _GRAPHIFY_GUARD_CACHE["result"] = result
+
+    if not result.get("ok") and result.get("blocking"):
+        return server.ok({
+            **result,
+            "state": result.get("verdict", "GRAPHIFY_BLOCKED"),
+            "forbidden": _GRAPHIFY_FORBIDDEN,
+        })
+    return None
+
+
+def graphify_required_check(
+    agent_id: str = "",
+    workspace_root: str = "",
+) -> dict[str, Any]:
+    """Run the Graphify mandatory guard check and return structured verdict.
+
+    Checks:
+      1. Is the graphify CLI installed on PATH?
+      2. Are graphify-out/graph.json, GRAPH_REPORT.md, graph.html present?
+
+    If Graphify is missing or outputs are incomplete, write operations
+    are blocked. Use this tool proactively at session start to verify
+    Graphify readiness.
+
+    Returns a blocking payload with next_actions when Graphify is not ready.
+    """
+    # Reset the cache so this call is always fresh.
+    _GRAPHIFY_GUARD_CACHE.clear()
+
+    if _gg is None:
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_GUARD_MODULE_UNAVAILABLE",
+            "state": "GRAPHIFY_GUARD_MODULE_UNAVAILABLE",
+            "reason": "graphify_guard.py runtime module not loaded.",
+            "blocking": True,
+            "write_allowed": False,
+            "forbidden": _GRAPHIFY_FORBIDDEN,
+        })
+
+    root_path: Path | None = None
+    root_str = workspace_root.strip() if workspace_root else ""
+    if root_str:
+        root_path = Path(root_str).resolve()
+    elif os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT"):
+        root_path = Path(os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"]).resolve()
+    else:
+        root_path = server.ROOT if hasattr(server, "ROOT") else Path.cwd()
+
+    result = _gg.check_graphify_required(
+        workspace_root=root_path,
+        host_type="opencode",
+        auto_write_guide=True,
+    )
+    _GRAPHIFY_GUARD_CACHE["result"] = result
+
+    if result.get("ok") and result.get("write_allowed"):
+        return server.ok({
+            **result,
+            "verdict": result.get("verdict", "GRAPHIFY_READY"),
+            "state": "WRITE_ALLOWED",
+            "forbidden": _GRAPHIFY_FORBIDDEN,
+        })
+
+    return server.ok({
+        **result,
+        "state": result.get("verdict", "GRAPHIFY_BLOCKED"),
+        "forbidden": _GRAPHIFY_FORBIDDEN,
+    })
+
+
+# ─────────────────────────────────────────────────────────────
 # Wire all tools into the server
 # ─────────────────────────────────────────────────────────────
 
@@ -1543,6 +1685,7 @@ server.TOOLS["portability_check"] = portability_check
 server.TOOLS["graphify_scribe_bridge"] = graphify_scribe_bridge
 # V2.15 new tools
 server.TOOLS["verify_proof"] = verify_proof
+server.TOOLS["graphify_required_check"] = graphify_required_check
 
 handle = server.handle
 list_tools = server.list_tools

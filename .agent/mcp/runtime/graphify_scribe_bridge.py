@@ -191,12 +191,6 @@ _NODE_REF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_GHOST_MARKER_PATTERN = re.compile(
-    r"GHOST-([a-f0-9]{12})-graphify-drift",
-    re.IGNORECASE,
-)
-
-
 def _extract_structured_nodes(block_text: str) -> list[tuple[str, float | None]]:
     """PRIMARY parser: extract (node_name, centrality) from structured HTML comment tags.
 
@@ -333,8 +327,7 @@ def _existing_ghost_ids(workspace_root: Path) -> set[str]:
         content = scribe_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return set()
-    return set(GHOST_MARKER_PATTERN.findall(content) if False else
-               _GHOST_MARKER_PATTERN.findall(content))
+    return set(_GHOST_MARKER_PATTERN.findall(content))
 
 
 # ─────────────────────────────────────────────────────────────
