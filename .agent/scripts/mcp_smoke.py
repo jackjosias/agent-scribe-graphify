@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -25,10 +26,18 @@ def clean_runtime(root: Path = ROOT) -> None:
             path.unlink()
 
 
+def _smoke_env() -> dict[str, str]:
+    """Return env without AGENT_SCRIBE_GRAPHIFY_ROOT so subprocess DB path
+    is determined by the entry file location (SOURCE_ROOT) regardless of
+    parent process leakage."""
+    return {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
+
+
 def call_tool(name: str, args: dict[str, Any], entry: Path = ENTRY, cwd: Path | str = ROOT) -> dict[str, Any]:
     proc = subprocess.run(
         [sys.executable, str(entry), "--call", name, "--args", json.dumps(args)],
         cwd=str(cwd),
+        env=_smoke_env(),
         text=True,
         capture_output=True,
         timeout=30,
@@ -361,7 +370,7 @@ def smoke_portable_copy() -> None:
 
 
 def smoke_tool_listing() -> None:
-    proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), text=True, capture_output=True, timeout=30)
+    proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), env=_smoke_env(), text=True, capture_output=True, timeout=30)
     if proc.returncode != 0:
         fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
     for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "apply_patch", "delete_resource"):
