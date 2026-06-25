@@ -96,6 +96,7 @@ class TenorInitBridgeTest(unittest.TestCase):
     def tearDown(self) -> None:
         mcp._verify_proof = self._orig_verify_proof
         os.chdir(self.old_cwd)
+        os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_bridge_happy_path(self) -> None:

@@ -348,21 +348,25 @@ class TestE2ERealRuntime(unittest.TestCase):
 
     def test_e2e_tool_listed(self) -> None:
         import subprocess
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
         proc = subprocess.run(
             [sys.executable, self._entry, "--list-tools"],
             capture_output=True, text=True, timeout=30,
+            env=env,
         )
         self.assertEqual(proc.returncode, 0, f"stderr: {proc.stderr}")
         self.assertIn("tenor_task_prompt", proc.stdout)
 
     def test_e2e_tool_returns_ready(self) -> None:
         import subprocess
+        env = {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
         proc = subprocess.run(
             [
                 sys.executable, self._entry, "--call", "tenor_task_prompt",
                 "--args", '{"task": "fix auth bug"}',
             ],
             capture_output=True, text=True, timeout=30,
+            env=env,
         )
         self.assertEqual(
             proc.returncode, 0,
