@@ -28,7 +28,13 @@ except Exception:
     _gg = None  # type: ignore
 
 # TENOR task prompt generator (V2.15.4)
+# Uses __file__-relative import so it works even when .agent/ is not on sys.path
 try:
+    import sys as _ttp_sys
+    from pathlib import Path as _ttp_Path
+    _ttp_agent_dir = _ttp_Path(__file__).resolve().parent.parent
+    if str(_ttp_agent_dir) not in _ttp_sys.path:
+        _ttp_sys.path.insert(0, str(_ttp_agent_dir))
     from host_adapter import tenor_task_prompt as _ttp  # type: ignore
 except Exception:
     _ttp = None  # type: ignore
@@ -1564,7 +1570,13 @@ def tenor_task_prompt(
         return server.ok({
             "ok": False,
             "verdict": "TENOR_TASK_PROMPT_MODULE_UNAVAILABLE",
-            "reason": "tenor_task_prompt.py module not loaded.",
+            "state": "HARD_STOP",
+            "reason": (
+                "tenor_task_prompt.py module not loaded. "
+                "HARD STOP: do not continue, do not improvise, do not answer directly. "
+                "Use the TENOR TASK CLI instead: "
+                "python3 .agent/scripts/tenor_task.py --task '...'"
+            ),
             "prompt": "",
         })
     if not task or not task.strip():

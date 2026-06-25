@@ -296,5 +296,84 @@ class TestCLI(unittest.TestCase):
         self.assertIn("src/main.ts", proc.stdout)
 
 
+class TestE2ERealRuntime(unittest.TestCase):
+    """Validates that tenor_task_prompt loads in a real project runtime
+    without artificial .agent/ in sys.path — the exact scenario that was
+    broken in V2.15.4 field testing.
+
+    Uses the --list-tools and --call flags (not stdio MCP protocol) for
+    direct, isolated subprocess calls."""
+
+    def setUp(self) -> None:
+        import shutil
+        import subprocess
+        import tempfile
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="agent-e2e-real-"))
+        self._agent_src = HERE.parent.parent
+        shutil.copytree(
+            str(self._agent_src),
+            str(self._tmpdir / ".agent"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        self._entry = str(self._tmpdir / ".agent" / "mcp" / "server_entry.py")
+        # git init (server_ext.py may probe git repo)
+        subprocess.run(["git", "init"], cwd=str(self._tmpdir), capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "e2e@test"],
+            cwd=str(self._tmpdir), capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "E2E"],
+            cwd=str(self._tmpdir), capture_output=True,
+        )
+        Path(self._tmpdir, "README.md").write_text("# e2e\n")
+        subprocess.run(
+            ["git", "add", "."], cwd=str(self._tmpdir), capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=str(self._tmpdir), capture_output=True,
+        )
+        # graphify-out stub (graphify_required_check / scribe may need it)
+        graphify_out = self._tmpdir / "graphify-out"
+        graphify_out.mkdir(parents=True, exist_ok=True)
+        (graphify_out / "GRAPH_REPORT.md").write_text(
+            "# Graph Report\n\nStub for E2E.\n"
+        )
+
+    def tearDown(self) -> None:
+        import shutil
+        if self._tmpdir and self._tmpdir.exists():
+            shutil.rmtree(str(self._tmpdir))
+
+    def test_e2e_tool_listed(self) -> None:
+        import subprocess
+        proc = subprocess.run(
+            [sys.executable, self._entry, "--list-tools"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, f"stderr: {proc.stderr}")
+        self.assertIn("tenor_task_prompt", proc.stdout)
+
+    def test_e2e_tool_returns_ready(self) -> None:
+        import subprocess
+        proc = subprocess.run(
+            [
+                sys.executable, self._entry, "--call", "tenor_task_prompt",
+                "--args", '{"task": "fix auth bug"}',
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(
+            proc.returncode, 0,
+            f"returncode={proc.returncode} stderr={proc.stderr}",
+        )
+        mcp_resp = json.loads(proc.stdout)
+        inner_text = mcp_resp["content"][0]["text"]
+        result = json.loads(inner_text)
+        self.assertTrue(result["ok"], f"call failed: {result}")
+        self.assertEqual(result["verdict"], "TENOR_TASK_PROMPT_READY")
+
+
 if __name__ == "__main__":
     unittest.main()
