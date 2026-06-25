@@ -501,28 +501,53 @@ def delete_resource(
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
-def _resolve_stored_task_intent(agent_id: str, task_id: str) -> str | None:
+_READ_ONLY_INTENTS = {"read", "query", "ask", "explain", "list", "show", "status"}
+_SAFE_FINISH_INTENTS = {"read", "finish", "done", "complete", "end", "finalize"}
+
+
+def _resolve_stored_task_intent(agent_id: str, task_id: str) -> dict[str, Any]:
     if not task_id:
-        return None
+        return {"ok": True, "state": "NO_TASK_ID", "intent": None}
     try:
         status = task_context.task_status(task_id)
-        if status.get("agent_id") != agent_id:
-            return None
-        stored = (status.get("intent") or "").strip().lower()
-        return stored if stored else None
     except task_context.TaskContextError:
-        return None
+        return {
+            "ok": False, "state": "TASK_CONTEXT_UNKNOWN_TASK",
+            "verdict": "TASK_CONTEXT_UNKNOWN_TASK",
+            "reason": "task_id was provided but no task context exists.",
+        }
+    if status.get("agent_id") != agent_id:
+        return {
+            "ok": False, "state": "TASK_AGENT_MISMATCH",
+            "verdict": "TASK_AGENT_MISMATCH",
+            "reason": f"task_id belongs to agent '{status.get('agent_id')}' but caller is '{agent_id}'.",
+        }
+    stored = (status.get("intent") or "").strip().lower()
+    return {
+        "ok": True, "state": "TASK_CONTEXT_FOUND",
+        "intent": stored if stored else None,
+        "agent_id": status.get("agent_id"),
+    }
 
 
 def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "") -> Dict[str, Any]:
-    stored_intent = _resolve_stored_task_intent(agent_id, task_id)
+    ctx = _resolve_stored_task_intent(agent_id, task_id)
     normalized_intent = (intent or "").strip().lower()
-    _READ_ONLY_INTENTS = {"read", "query", "ask", "explain", "list", "show", "status"}
-    _SAFE_FINISH_INTENTS = {"read", "finish", "done", "complete", "end", "finalize"}
-    if stored_intent is not None:
-        is_read_only = stored_intent in _READ_ONLY_INTENTS
+
+    if not ctx["ok"]:
+        return server.ok({
+            "ok": False,
+            "verdict": ctx["verdict"],
+            "state": "HARD_STOP",
+            "reason": ctx["reason"],
+        })
+
+    if ctx["state"] == "TASK_CONTEXT_FOUND":
+        stored = ctx.get("intent") or ""
+        is_read_only = stored in _READ_ONLY_INTENTS
     else:
         is_read_only = normalized_intent in _SAFE_FINISH_INTENTS
+
     if not is_read_only:
         lease_check = _require_action_lease(
             action_lease_id, "finish_task", agent_id, "finish_task",

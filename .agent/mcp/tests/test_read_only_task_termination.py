@@ -160,3 +160,32 @@ class ReadOnlyTaskTerminationTest(unittest.TestCase):
         self.assertFalse(rtc.get("ok"), f"resume after finish should fail, got {rtc}")
         self.assertIn("TASK_CONTEXT_EXPIRED", rtc.get("error", ""),
                       f"resume after finish should complain about expired/finished context, got {rtc}")
+
+    def test_finish_task_unknown_task_id_does_not_fallback_to_declared_read(self) -> None:
+        """task_id inexistant + intent=read → TASK_CONTEXT_UNKNOWN_TASK, pas TASK_FINISHED_OK."""
+        agent_id = "unknown-task-agent"
+        self.register(agent_id)
+
+        ft = self.call("finish_task", agent_id=agent_id, task_id="nonexistent-task-42", context_token="ignored", intent="read")
+        self.assertFalse(ft.get("ok"), f"should fail, got {ft}")
+        self.assertEqual(ft.get("verdict"), "TASK_CONTEXT_UNKNOWN_TASK",
+                         f"expected TASK_CONTEXT_UNKNOWN_TASK, got {ft.get('verdict')}")
+        self.assertEqual(ft.get("state"), "HARD_STOP")
+
+    def test_finish_task_agent_mismatch_does_not_fallback_to_declared_read(self) -> None:
+        """Agent A crée tâche, Agent B finish avec task_id A + intent=read → TASK_AGENT_MISMATCH."""
+        agent_a = "mismatch-agent-a"
+        agent_b = "mismatch-agent-b"
+        self.register(agent_a)
+        self.register(agent_b)
+
+        bt = self.call("before_task", agent_id=agent_a, request="edit tracked", intent="write", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        context_token = bt["context_token"]
+
+        ft = self.call("finish_task", agent_id=agent_b, task_id=task_id, context_token=context_token, intent="read")
+        self.assertFalse(ft.get("ok"), f"should fail, got {ft}")
+        self.assertEqual(ft.get("verdict"), "TASK_AGENT_MISMATCH",
+                         f"expected TASK_AGENT_MISMATCH, got {ft.get('verdict')}")
+        self.assertEqual(ft.get("state"), "HARD_STOP")

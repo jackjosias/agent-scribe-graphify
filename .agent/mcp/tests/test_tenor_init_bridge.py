@@ -273,6 +273,45 @@ class TenorInitBridgeTest(unittest.TestCase):
         self.assertNotEqual(parallel_status.get("status"), "retired",
                             f"parallel agent {parallel_id} should remain active: {parallel_status}")
 
+    def test_bridge_reports_ghost_cleanup_failure(self) -> None:
+        """When ghost cleanup fails, bridge reports status=failed + error."""
+        orig_list_agents = getattr(db, "list_agents", None)
+        def _broken_list(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("simulated ghost cleanup failure")
+        db.list_agents = _broken_list  # type: ignore
+        try:
+            result = call_tool(
+                "tenor_init_bridge",
+                agent_session_id=AGENT_SESSION_ID,
+                host_tool=HOST_TOOL,
+                proof_token="valid-token",
+            )
+            self.assertTrue(result.get("ok"), f"bridge should still succeed, got {result}")
+            self.assertEqual(result.get("ghost_cleanup_status"), "failed",
+                             f"expected ghost_cleanup_status=failed, got {result.get('ghost_cleanup_status')}")
+            steps = result.get("steps", [])
+            ghost_step = next((s for s in steps if s["step"] == "retire_ghosts"), None)
+            self.assertIsNotNone(ghost_step, "no retire_ghosts step found")
+            self.assertEqual(ghost_step.get("status"), "failed")
+            self.assertIn("simulated", ghost_step.get("error", ""),
+                          f"expected error message in step, got {ghost_step}")
+        finally:
+            db.list_agents = orig_list_agents  # type: ignore
+
+    def test_tenor_init_bridge_does_not_create_user_task(self) -> None:
+        """Bridge must NOT create any user task context."""
+        from runtime import task_context
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="valid-token",
+        )
+        self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
+        tasks = task_context.list_tasks(agent_id=AGENT_SESSION_ID, status="active")
+        self.assertEqual(tasks.get("count", 0), 0,
+                         f"bridge should not create user tasks, found {tasks}")
+
     def test_bridge_proof_signer_unavailable(self) -> None:
         """Bridge with proof_token but PROOF_SIGNER_UNAVAILABLE returns UNVERIFIABLE."""
         mcp._PROOF_SIGNER_AVAILABLE = False
