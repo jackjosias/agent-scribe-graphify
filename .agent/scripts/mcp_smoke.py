@@ -105,8 +105,22 @@ def establish_context(agent_id: str, request: str, intent: str, resource: str) -
     return ctx
 
 
+def _ensure_graphify_stubs() -> None:
+    """Create minimal graphify-out stubs so the Graphify Mandatory Guard
+    does not block write operations during the smoke test."""
+    gdir = ROOT / "graphify-out"
+    gdir.mkdir(parents=True, exist_ok=True)
+    for fname, content in [
+        ("graph.json", '{"nodes":[],"edges":[]}'),
+        ("GRAPH_REPORT.md", "# Smoke stub Graph Report\n"),
+        ("graph.html", "<html><body></body></html>\n"),
+    ]:
+        (gdir / fname).write_text(content, encoding="utf-8")
+
+
 def smoke_nominal_workflow() -> None:
     clean_runtime()
+    _ensure_graphify_stubs()
     work = ROOT / "tmp-smoke-workflow"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -381,6 +395,7 @@ def smoke_tool_listing() -> None:
 def main() -> int:
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
+    _ensure_graphify_stubs()
     smoke_nominal_workflow()
     smoke_bad_paths()
     smoke_unregistered_patch()
