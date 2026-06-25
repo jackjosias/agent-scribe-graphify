@@ -9,8 +9,14 @@ from pathlib import Path
 
 
 _HERE = Path(__file__).resolve().parent
-_PROJECT_ROOT = _HERE.parent
+_PROJECT_ROOT = _HERE.parent.parent
 _ENTRY = _PROJECT_ROOT / ".agent" / "mcp" / "server_entry.py"
+
+if not _ENTRY.exists():
+    # Fallback: try relative to .agent/scripts
+    _FALLBACK = _HERE.parent / "mcp" / "server_entry.py"
+    if _FALLBACK.exists():
+        _ENTRY = _FALLBACK
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -37,6 +43,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model name (optional).",
     )
     parser.add_argument(
+        "--proof-token", "-p",
+        type=str,
+        default="",
+        help="Proof token from TENOR INIT SCRIBE-CHECK output.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
@@ -57,6 +69,7 @@ def main() -> int:
         "agent_session_id": args.agent_session_id,
         "host_tool": args.host_tool,
         "model_name": args.model_name,
+        "proof_token": args.proof_token,
     })
 
     try:

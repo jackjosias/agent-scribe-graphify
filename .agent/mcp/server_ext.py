@@ -1281,8 +1281,9 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "agent_session_id": {"type": "string"},
                 "host_tool": {"type": "string"},
                 "model_name": {"type": "string"},
+                "proof_token": {"type": "string"},
             },
-            "required": ["agent_session_id"],
+            "required": ["agent_session_id", "proof_token"],
             "additionalProperties": False,
         }
     return _BASE_TOOL_SCHEMA(name)
@@ -1605,7 +1606,7 @@ def verify_proof(
     except Exception:  # noqa: BLE001
         pass
     try:
-        result = _verify_proof(root, token, agent_id)
+        result = _verify_proof(root, token, agent_id, mark_consumed=False)
     except Exception as exc:  # noqa: BLE001
         return server.ok({"ok": False, "verdict": "PROOF_INTERNAL_ERROR", "detail": str(exc)})
     return server.ok(result)
@@ -1712,7 +1713,7 @@ def tenor_init_bridge(
             "state": "HARD_STOP",
             "reason": (
                 "proof_token is required. "
-                "The host must call verify_proof first, then pass the same token to tenor_init_bridge."
+                "Pass the proof_token directly to tenor_init_bridge (standalone verify_proof is diagnostic-only)."
             ),
             "steps": steps,
         })
@@ -1970,53 +1971,58 @@ def graphify_required_check(
 # Wire all tools into the server
 # ─────────────────────────────────────────────────────────────
 
-server.workflow_next = workflow_next
-server.workflow_snapshot = workflow_snapshot
-server.before_task = before_task
-server.resume_task_context = resume_task_context
-server.claim_resource = claim_resource
-server.scribe_query = scribe_query
-server.graphify_query = graphify_query
-server.propose_patch = propose_patch
-server.delete_resource = delete_resource
-server.finish_task = finish_task
-server.scribe_record = scribe_record
-server.list_tasks = list_tasks
-server.task_status = task_status
-server.wait_for_tasks = wait_for_tasks
-server.tool_schema = tool_schema
-server.TOOLS["workflow_next"] = workflow_next
-server.TOOLS["workflow_snapshot"] = workflow_snapshot
-server.TOOLS["before_task"] = before_task
-server.TOOLS["resume_task_context"] = resume_task_context
-server.TOOLS["claim_resource"] = claim_resource
-server.TOOLS["scribe_query"] = scribe_query
-server.TOOLS["graphify_query"] = graphify_query
-server.TOOLS["propose_patch"] = propose_patch
-server.TOOLS["apply_patch"] = apply_patch
-server.TOOLS["delete_resource"] = delete_resource
-server.TOOLS["finish_task"] = finish_task
-server.TOOLS["scribe_record"] = scribe_record
-server.TOOLS["list_tasks"] = list_tasks
-server.TOOLS["task_status"] = task_status
-server.TOOLS["wait_for_tasks"] = wait_for_tasks
-server.TOOLS["discipline_ping"] = discipline_ping
-server.TOOLS["pre_action_guard"] = pre_action_guard
-server.TOOLS["workspace_audit"] = workspace_audit
-# V2.14 new tools
-server.TOOLS["lease_extend"] = lease_extend
-server.TOOLS["resource_lock_claim"] = resource_lock_claim
-server.TOOLS["resource_lock_release"] = resource_lock_release
-server.TOOLS["resource_lock_status"] = resource_lock_status
-server.TOOLS["portability_check"] = portability_check
-server.TOOLS["graphify_scribe_bridge"] = graphify_scribe_bridge
-# V2.15 new tools
-server.TOOLS["verify_proof"] = verify_proof
-server.TOOLS["graphify_required_check"] = graphify_required_check
-# V2.15.4 new tool
-server.TOOLS["tenor_task_prompt"] = tenor_task_prompt
-# V2.15.5 new tool
-server.TOOLS["tenor_init_bridge"] = tenor_init_bridge
+# Guard: only register once (prevents module reload from overwriting
+# server.TOOLS with functions from a different module instance).
+if not getattr(server, "_EXT_REGISTERED", False):
+    server._EXT_REGISTERED = True
+
+    server.workflow_next = workflow_next
+    server.workflow_snapshot = workflow_snapshot
+    server.before_task = before_task
+    server.resume_task_context = resume_task_context
+    server.claim_resource = claim_resource
+    server.scribe_query = scribe_query
+    server.graphify_query = graphify_query
+    server.propose_patch = propose_patch
+    server.delete_resource = delete_resource
+    server.finish_task = finish_task
+    server.scribe_record = scribe_record
+    server.list_tasks = list_tasks
+    server.task_status = task_status
+    server.wait_for_tasks = wait_for_tasks
+    server.tool_schema = tool_schema
+    server.TOOLS["workflow_next"] = workflow_next
+    server.TOOLS["workflow_snapshot"] = workflow_snapshot
+    server.TOOLS["before_task"] = before_task
+    server.TOOLS["resume_task_context"] = resume_task_context
+    server.TOOLS["claim_resource"] = claim_resource
+    server.TOOLS["scribe_query"] = scribe_query
+    server.TOOLS["graphify_query"] = graphify_query
+    server.TOOLS["propose_patch"] = propose_patch
+    server.TOOLS["apply_patch"] = apply_patch
+    server.TOOLS["delete_resource"] = delete_resource
+    server.TOOLS["finish_task"] = finish_task
+    server.TOOLS["scribe_record"] = scribe_record
+    server.TOOLS["list_tasks"] = list_tasks
+    server.TOOLS["task_status"] = task_status
+    server.TOOLS["wait_for_tasks"] = wait_for_tasks
+    server.TOOLS["discipline_ping"] = discipline_ping
+    server.TOOLS["pre_action_guard"] = pre_action_guard
+    server.TOOLS["workspace_audit"] = workspace_audit
+    # V2.14 new tools
+    server.TOOLS["lease_extend"] = lease_extend
+    server.TOOLS["resource_lock_claim"] = resource_lock_claim
+    server.TOOLS["resource_lock_release"] = resource_lock_release
+    server.TOOLS["resource_lock_status"] = resource_lock_status
+    server.TOOLS["portability_check"] = portability_check
+    server.TOOLS["graphify_scribe_bridge"] = graphify_scribe_bridge
+    # V2.15 new tools
+    server.TOOLS["verify_proof"] = verify_proof
+    server.TOOLS["graphify_required_check"] = graphify_required_check
+    # V2.15.4 new tool
+    server.TOOLS["tenor_task_prompt"] = tenor_task_prompt
+    # V2.15.5 new tool
+    server.TOOLS["tenor_init_bridge"] = tenor_init_bridge
 
 handle = server.handle
 list_tools = server.list_tools

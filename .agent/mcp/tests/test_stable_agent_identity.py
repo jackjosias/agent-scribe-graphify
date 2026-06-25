@@ -25,9 +25,13 @@ class StableAgentIdentityTest(unittest.TestCase):
         (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("test project\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
-        subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True)
+        # Build subprocess env: inherit parent but pin the workspace root so
+        # server_entry.py does NOT pick up a leaked AGENT_SCRIBE_GRAPHIFY_ROOT
+        # from other test modules (e.g. test_lease_extend.py line 57).
+        self._sub_env = {**os.environ, "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)}
+        subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True, env=self._sub_env)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True, env=self._sub_env)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True, env=self._sub_env)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -36,6 +40,7 @@ class StableAgentIdentityTest(unittest.TestCase):
         proc = subprocess.run(
             ["python3", str(self.entry), "--call", tool, "--args", json.dumps(args)],
             cwd=str(self.root),
+            env=self._sub_env,
             text=True,
             capture_output=True,
             timeout=20,

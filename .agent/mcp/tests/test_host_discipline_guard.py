@@ -55,6 +55,7 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="host-discipline-e2e-"))
         self.old_cwd = Path.cwd()
         os.chdir(self.root)
+        os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(self.root)
         (self.root / ".agent" / "state").mkdir(parents=True, exist_ok=True)
         (self.root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
         graphify_dir = self.root / "graphify-out"
@@ -78,6 +79,9 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
         mcp.patch_queue = patch_queue
         mcp.task_context = task_context
         mcp.discipline = discipline
+        # Clear the graphify guard global cache so a blocking result from an
+        # earlier test in the suite does not poison this test's guard check.
+        mcp._GRAPHIFY_GUARD_CACHE.clear()
         db.init_db(self.root)
         discipline.ensure_schema()
 

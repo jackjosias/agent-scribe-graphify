@@ -53,8 +53,9 @@ if _MCP_DIR not in sys.path:
 if _RUNTIME_DIR not in sys.path:
     sys.path.insert(0, _RUNTIME_DIR)
 
-# Override env so db.py picks up temp state dir.
-os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = _TMP_ROOT
+# NOTE: do NOT set AGENT_SCRIBE_GRAPHIFY_ROOT at module level — that env var
+# leaks across the entire test suite and breaks subprocess-based tests
+# (stable_agent_identity, workflow_fsm_stability) that inherit it.
 
 import discipline  # noqa: E402 — must come after sys.path + env setup
 import db          # noqa: E402

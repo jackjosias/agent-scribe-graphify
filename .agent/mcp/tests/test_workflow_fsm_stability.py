@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -24,9 +25,12 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("test project\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
-        subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True)
-        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True)
-        subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True)
+        # Pin workspace root so server_entry.py ignores leaked env var from
+        # earlier test modules (e.g. test_lease_extend.py).
+        self._sub_env = {**os.environ, "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)}
+        subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True, env=self._sub_env)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True, env=self._sub_env)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True, env=self._sub_env)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -35,6 +39,7 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         proc = subprocess.run(
             ["python3", str(self.entry), "--call", tool, "--args", json.dumps(args)],
             cwd=str(self.root),
+            env=self._sub_env,
             text=True,
             capture_output=True,
             timeout=20,
