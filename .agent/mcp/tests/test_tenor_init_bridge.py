@@ -97,12 +97,13 @@ class TenorInitBridgeTest(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_bridge_happy_path(self) -> None:
-        """Full bridge: register + status + discipline_ping (no workflow_next)."""
+        """Full bridge: register + status + discipline_ping + ghost cleanup."""
         result = call_tool(
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
             host_tool=HOST_TOOL,
             model_name=MODEL_NAME,
+            proof_token="valid-token",
         )
         self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
@@ -131,6 +132,7 @@ class TenorInitBridgeTest(unittest.TestCase):
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
             host_tool=HOST_TOOL,
+            proof_token="valid-token",
         )
         self.assertTrue(result.get("ok"))
         status = db.agent_status(AGENT_SESSION_ID)
@@ -139,9 +141,9 @@ class TenorInitBridgeTest(unittest.TestCase):
 
     def test_bridge_twice_is_idempotent(self) -> None:
         """Calling bridge twice with same agent_id should succeed (idempotent)."""
-        r1 = call_tool("tenor_init_bridge", agent_session_id=AGENT_SESSION_ID, host_tool=HOST_TOOL)
+        r1 = call_tool("tenor_init_bridge", agent_session_id=AGENT_SESSION_ID, host_tool=HOST_TOOL, proof_token="valid-token")
         self.assertTrue(r1.get("ok"))
-        r2 = call_tool("tenor_init_bridge", agent_session_id=AGENT_SESSION_ID, host_tool=HOST_TOOL)
+        r2 = call_tool("tenor_init_bridge", agent_session_id=AGENT_SESSION_ID, host_tool=HOST_TOOL, proof_token="valid-token")
         self.assertTrue(r2.get("ok"))
         self.assertEqual(r2.get("verdict"), "TENOR_INIT_BRIDGE_OK")
 
@@ -151,6 +153,7 @@ class TenorInitBridgeTest(unittest.TestCase):
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
             host_tool=HOST_TOOL,
+            proof_token="valid-token",
         )
         self.assertTrue(result.get("ok"))
         steps = result.get("steps", [])
@@ -163,6 +166,7 @@ class TenorInitBridgeTest(unittest.TestCase):
         result = call_tool(
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
+            proof_token="valid-token",
         )
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("host_tool"), "unknown")
@@ -209,18 +213,37 @@ class TenorInitBridgeTest(unittest.TestCase):
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_PROOF_FAILED")
         self.assertEqual(result.get("state"), "HARD_STOP")
 
-    def test_bridge_without_proof_token_skips_verification(self) -> None:
-        """Bridge with no proof_token skips proof verification (backward compat)."""
+    def test_bridge_without_proof_token_returns_error(self) -> None:
+        """Bridge with no proof_token returns PROOF_REQUIRED + HARD_STOP."""
         result = call_tool(
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
             host_tool=HOST_TOOL,
         )
-        self.assertTrue(result.get("ok"))
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_PROOF_REQUIRED")
+        self.assertEqual(result.get("state"), "HARD_STOP")
+
+    def test_bridge_retires_ghost_agents(self) -> None:
+        """Bridge should retire other active agents from same host_tool."""
+        ghost_id = "ghost-agent-001"
+        db.register_agent(host_tool=HOST_TOOL, agent_id=ghost_id)
+        db.heartbeat(ghost_id)
+        status = db.agent_status(ghost_id)
+        self.assertEqual(status.get("status"), "active")
+
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="valid-token",
+        )
+        self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
-        steps = result.get("steps", [])
-        proof_steps = [s for s in steps if s["step"] == "verify_proof"]
-        self.assertEqual(len(proof_steps), 0, "unexpected proof step when no token")
+        retired = result.get("retired_ghosts", [])
+        self.assertIn(ghost_id, retired, f"ghost {ghost_id} should be retired, got {retired}")
+        ghost_status = db.agent_status(ghost_id)
+        self.assertEqual(ghost_status.get("status"), "retired", f"ghost should be retired: {ghost_status}")
 
     def test_bridge_proof_signer_unavailable(self) -> None:
         """Bridge with proof_token but PROOF_SIGNER_UNAVAILABLE returns UNVERIFIABLE."""
