@@ -501,13 +501,16 @@ def delete_resource(
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
-def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
-    lease_check = _require_action_lease(
-        action_lease_id, "finish_task", agent_id, "finish_task",
-        task_id=task_id,
-    )
-    if lease_check is not None:
-        return lease_check
+def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "") -> Dict[str, Any]:
+    # Read-only / finish intents do not require an action lease — no patches to guard.
+    normalized_intent = (intent or "").strip().lower()
+    if normalized_intent not in {"read", "finish", "done", "complete", "end", "finalize"}:
+        lease_check = _require_action_lease(
+            action_lease_id, "finish_task", agent_id, "finish_task",
+            task_id=task_id,
+        )
+        if lease_check is not None:
+            return lease_check
     result = _BASE_FINISH_TASK(agent_id=agent_id, summary=summary)
     if task_id or context_token:
         payload = json.loads(result["content"][0]["text"])
@@ -835,6 +838,15 @@ def workflow_next(
 ) -> Dict[str, Any]:
     normalized = (intent or "").strip().lower()
     last = _last(last_verdict)
+
+    # TASK_FINISHED_OK is a terminal verdict — the workflow is done.
+    if last == "TASK_FINISHED_OK":
+        return server.ok({
+            "ok": True,
+            "verdict": "READY_FOR_NEXT_TASK",
+            "state": "READY_FOR_NEXT_TASK",
+            "reason": "Previous task finished. No pending actions. Awaiting next user task.",
+        })
 
     stop = _track_loop(agent_id, resource, last)
     if stop is not None:
@@ -1730,25 +1742,8 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 4 — workflow_next (read-only, lightweight)
-    try:
-        wf_raw = workflow_next(agent_id=aid, intent="read", resource=".")
-        wf_payload_str = wf_raw.get("content", [{}])[0].get("text", "{}") if isinstance(wf_raw, dict) else "{}"
-        wf_payload = json.loads(wf_payload_str) if isinstance(wf_payload_str, str) else {}
-        wf_verdict = wf_payload.get("verdict", "UNKNOWN")
-        steps.append({
-            "step": "workflow_next",
-            "ok": True,
-            "verdict": wf_verdict,
-        })
-    except Exception as exc:
-        return server.ok({
-            "ok": False,
-            "verdict": "TENOR_INIT_BRIDGE_WORKFLOW_NEXT_FAILED",
-            "state": "INIT_MCP_BRIDGE_WORKFLOW_FAILED",
-            "reason": f"workflow_next failed for {aid}: {exc}",
-            "steps": steps,
-        })
+    # TENOR INIT does NOT create a user task — no workflow_next here.
+    # The host calls workflow_next on its own during the first TENOR TASK.
 
     return server.ok({
         "ok": True,

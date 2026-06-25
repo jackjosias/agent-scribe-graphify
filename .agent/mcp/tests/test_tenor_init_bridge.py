@@ -60,9 +60,6 @@ class TenorInitBridgeTest(unittest.TestCase):
             return {"ok": False, "verdict": "PROOF_EXPIRED", "detail": "mock expired"}
         return {"ok": True, "verdict": "PROOF_VALID", "detail": "mock valid"}
 
-    def _mock_workflow_next_fail(self, **kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("mock workflow_next failure")
-
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="tenor-init-bridge-"))
         self.old_cwd = Path.cwd()
@@ -100,7 +97,7 @@ class TenorInitBridgeTest(unittest.TestCase):
         shutil.rmtree(self.root, ignore_errors=True)
 
     def test_bridge_happy_path(self) -> None:
-        """Full bridge: register + status + discipline_ping + workflow_next."""
+        """Full bridge: register + status + discipline_ping (no workflow_next)."""
         result = call_tool(
             "tenor_init_bridge",
             agent_session_id=AGENT_SESSION_ID,
@@ -111,7 +108,7 @@ class TenorInitBridgeTest(unittest.TestCase):
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
         self.assertEqual(result.get("agent_session_id"), AGENT_SESSION_ID)
         steps = result.get("steps", [])
-        self.assertGreaterEqual(len(steps), 4)
+        self.assertGreaterEqual(len(steps), 3)
         for step in steps:
             self.assertTrue(step.get("ok"), f"step {step.get('step')} failed: {step}")
 
@@ -160,21 +157,6 @@ class TenorInitBridgeTest(unittest.TestCase):
         ping_step = next((s for s in steps if s["step"] == "discipline_ping"), None)
         self.assertIsNotNone(ping_step)
         self.assertEqual(ping_step.get("phase"), "post-init")
-
-    def test_bridge_workflow_next_returns_verdict(self) -> None:
-        """Bridge should call workflow_next and capture its verdict."""
-        result = call_tool(
-            "tenor_init_bridge",
-            agent_session_id=AGENT_SESSION_ID,
-            host_tool=HOST_TOOL,
-        )
-        self.assertTrue(result.get("ok"))
-        steps = result.get("steps", [])
-        wf_step = next((s for s in steps if s["step"] == "workflow_next"), None)
-        self.assertIsNotNone(wf_step)
-        self.assertTrue(wf_step.get("ok"))
-        self.assertIsInstance(wf_step.get("verdict"), str)
-        self.assertGreater(len(wf_step.get("verdict", "")), 0)
 
     def test_bridge_without_host_tool_defaults_unknown(self) -> None:
         """Bridge with no host_tool should default to 'unknown'."""
@@ -255,26 +237,6 @@ class TenorInitBridgeTest(unittest.TestCase):
             self.assertEqual(result.get("state"), "HARD_STOP")
         finally:
             mcp._PROOF_SIGNER_AVAILABLE = True
-
-    def test_bridge_workflow_next_failure(self) -> None:
-        """When workflow_next fails, bridge returns FAIL with step info."""
-        orig_wf = getattr(mcp, "workflow_next", None)
-        mcp.workflow_next = self._mock_workflow_next_fail
-        try:
-            result = call_tool(
-                "tenor_init_bridge",
-                agent_session_id=AGENT_SESSION_ID,
-                host_tool=HOST_TOOL,
-            )
-            self.assertFalse(result.get("ok"), f"should fail: {result}")
-            self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_WORKFLOW_NEXT_FAILED")
-            self.assertEqual(result.get("state"), "INIT_MCP_BRIDGE_WORKFLOW_FAILED")
-            steps = result.get("steps", [])
-            wf_step = next((s for s in steps if s["step"] == "workflow_next"), None)
-            self.assertIsNone(wf_step, "workflow_next should not be in successful steps")
-        finally:
-            mcp.workflow_next = orig_wf
-
 
 class TestTenorInitBridgeLauncher(unittest.TestCase):
     def test_launcher_empty_session_id(self) -> None:
