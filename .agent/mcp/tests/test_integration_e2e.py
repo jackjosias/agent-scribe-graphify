@@ -410,6 +410,22 @@ class EdgeCasesAndRecoveryTest(unittest.TestCase):
         # (not ACTION_LEASE_INVALID — the DB-backed intent check runs before lease validation).
         self.assertEqual(result["verdict"], "TASK_CONTEXT_UNKNOWN_TASK", result)
 
+    # ── V2.15.17: read-only FSM purity ─────────────────────────
+
+    def test_15b_read_only_field_sequence(self) -> None:
+        """finish_task on read task returns terminal=True and next_state_hint."""
+        call_tool("register_agent", agent_id=AGENT_A, host_tool="test")
+        bt = call_tool("before_task", agent_id=AGENT_A, request="inspect file", intent="read", resource=RESOURCE)
+        self.assertEqual(bt["verdict"], "BEFORE_TASK_OK", bt)
+        ctx = {"task_id": bt["task_id"], "context_token": bt["context_token"]}
+
+        ft = call_tool("finish_task", agent_id=AGENT_A, **ctx, intent="read", summary="read-only done")
+        self.assertEqual(ft["verdict"], "TASK_FINISHED_OK", ft)
+        self.assertTrue(ft.get("terminal", False),
+                        "finish_task on read should include terminal=True hint")
+        self.assertEqual(ft.get("next_state_hint"), "READY_FOR_NEXT_TASK",
+                         "finish_task on read should include next_state_hint")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 5 — Workspace Audit

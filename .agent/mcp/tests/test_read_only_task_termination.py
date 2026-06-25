@@ -189,3 +189,126 @@ class ReadOnlyTaskTerminationTest(unittest.TestCase):
         self.assertEqual(ft.get("verdict"), "TASK_AGENT_MISMATCH",
                          f"expected TASK_AGENT_MISMATCH, got {ft.get('verdict')}")
         self.assertEqual(ft.get("state"), "HARD_STOP")
+
+    # ── V2.15.17: read-only FSM purity ─────────────────────────
+
+    def test_read_workflow_next_never_requires_claim(self) -> None:
+        """workflow_next across the read lifecycle never returns CLAIM_REQUIRED."""
+        agent_id = "fsm-purity-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="check project", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        wn0 = self.call("workflow_next", agent_id=agent_id, request="check project", intent="read",
+                         task_id=task_id, context_token=ctx, last_verdict="BEFORE_TASK_OK")
+        v0 = wn0.get("verdict", "")
+        self.assertNotIn(v0, ("CLAIM_REQUIRED", "ACTION_LEASE_REQUIRED", "PATCH_QUEUE_REQUIRED",
+                               "PRE_ACTION_GUARD_REQUIRED", "APPLY_PATCH_REQUIRED"),
+                         f"workflow_next after before_task returned write verdict: {wn0}")
+
+    def test_read_task_forbids_patch_queue_claim(self) -> None:
+        """claim_resource(mode=patch_queue) on a read task returns READ_ONLY_CLAIM_FORBIDDEN."""
+        agent_id = "no-patch-claim-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="read only", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        claim = self.call("claim_resource", agent_id=agent_id, resource="README.md",
+                          mode="patch_queue", ttl_seconds=600,
+                          task_id=task_id, context_token=ctx)
+        self.assertFalse(claim.get("ok"), f"claim should be forbidden, got {claim}")
+        self.assertEqual(claim.get("verdict"), "READ_ONLY_CLAIM_FORBIDDEN",
+                         f"expected READ_ONLY_CLAIM_FORBIDDEN, got {claim.get('verdict')}")
+        self.assertEqual(claim.get("state"), "HARD_STOP")
+
+    def test_read_task_allows_no_claim_finish(self) -> None:
+        """Read task finishes cleanly without needing any claim."""
+        agent_id = "no-claim-finish-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="read project", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        sq = self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ctx,
+                        query="project status", limit=1)
+        self.assertIn(sq.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"})
+
+        ft = self.call("finish_task", agent_id=agent_id, task_id=task_id, context_token=ctx,
+                        intent="read", summary="read-only check")
+        self.assertEqual(ft.get("verdict"), "TASK_FINISHED_OK",
+                         f"finish should succeed without claim, got {ft}")
+        self.assertTrue(ft.get("terminal", False),
+                        "finish_task should include terminal=True hint")
+        self.assertEqual(ft.get("next_state_hint"), "READY_FOR_NEXT_TASK",
+                         "finish_task should include next_state_hint")
+
+    def test_read_task_does_not_reenter_after_finish(self) -> None:
+        """Multiple workflow_next calls after read finish stay terminal."""
+        agent_id = "terminal-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="read", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        ft = self.call("finish_task", agent_id=agent_id, task_id=task_id, context_token=ctx, intent="read")
+        self.assertEqual(ft.get("verdict"), "TASK_FINISHED_OK")
+
+        for i in range(3):
+            wn = self.call("workflow_next", agent_id=agent_id, last_verdict="TASK_FINISHED_OK")
+            self.assertEqual(wn.get("verdict"), "READY_FOR_NEXT_TASK",
+                             f"iteration {i}: expected READY_FOR_NEXT_TASK, got {wn.get('verdict')}: {wn}")
+            self.assertNotEqual(wn.get("verdict"), "CLAIM_REQUIRED",
+                                f"iteration {i}: unexpected CLAIM_REQUIRED")
+            self.assertNotEqual(wn.get("must_call", {}).get("tool"), "resume_task_context",
+                                f"iteration {i}: unexpected resume_task_context after finish")
+
+    def test_read_task_patch_queue_claim_field_regression(self) -> None:
+        """workflow_next during read task never recommends claim_resource/propose_patch."""
+        agent_id = "regression-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="read project", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        sq = self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ctx,
+                        query="status", limit=1)
+        self.assertIn(sq.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"})
+
+        wn = self.call("workflow_next", agent_id=agent_id, request="read project", intent="read",
+                        task_id=task_id, context_token=ctx, last_verdict="SCRIBE_QUERY_DONE")
+        must_tool = wn.get("must_call", {}).get("tool", "")
+        self.assertNotIn(must_tool, ("claim_resource", "propose_patch", "apply_patch", "delete_resource"),
+                         f"workflow_next after scribe on read task returned write tool: {wn}")
+
+    def test_read_only_claim_mode_read_is_not_required(self) -> None:
+        """claim_resource(mode=read) on read task is allowed but never required by workflow_next."""
+        agent_id = "mode-read-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="read", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        for _ in range(5):
+            wn = self.call("workflow_next", agent_id=agent_id, request="read", intent="read",
+                            task_id=task_id, context_token=ctx, last_verdict="BEFORE_TASK_OK")
+            must_tool = wn.get("must_call", {}).get("tool", "")
+            self.assertNotEqual(must_tool, "claim_resource",
+                                f"workflow_next should not require claim_resource on read task: {wn}")
+
+
+if __name__ == "__main__":
+    unittest.main()

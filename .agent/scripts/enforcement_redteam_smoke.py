@@ -205,7 +205,7 @@ def test_fake_token_and_read_intent_refused_at_claim() -> None:
     agent = bootstrap("redteam-read-intent")
     read_ctx = ready_context(agent, target, "redteam read intent", intent="read")
     result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **read_ctx})
-    assert_refused(result, "READ_INTENT_CANNOT_WRITE", "claim_resource with read intent")
+    assert_refused(result, "READ_ONLY_CLAIM_FORBIDDEN", "claim_resource with read intent")
 
 
 def test_propose_apply_and_delete_guards() -> None:

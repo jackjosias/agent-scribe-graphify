@@ -121,6 +121,63 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "STOP_WORKFLOW_LOOP_DIRECT_WRITE_FORBIDDEN")
         self.assertIn("direct_file_edit", result["forbidden"])
 
+    # ── V2.15.17: read-only FSM purity ─────────────────────────
+
+    def test_resume_agent_not_recommended_during_active_read_task(self) -> None:
+        """workflow_next never returns resume_agent during an active read task."""
+        agent_id = "no-resume-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="inspect", intent="read", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        for i in range(5):
+            wn = self.call("workflow_next", agent_id=agent_id, request="inspect", intent="read",
+                            task_id=task_id, context_token=ctx, last_verdict="BEFORE_TASK_OK")
+            must_tool = wn.get("must_call", {}).get("tool", "")
+            self.assertNotEqual(must_tool, "resume_agent",
+                                f"iteration {i}: unexpected resume_agent during read task: {wn}")
+
+    def test_write_task_still_requires_claim_and_lease(self) -> None:
+        """Write task still requires claim + pre_action_guard for finish."""
+        agent_id = "write-lease-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="edit tracked", intent="write", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ctx, query="edit", limit=1)
+        self.call("graphify_query", agent_id=agent_id, task_id=task_id, context_token=ctx, query="impact", resource="README.md")
+
+        wn = self.call("workflow_next", agent_id=agent_id, request="edit tracked", intent="write",
+                        resource="README.md",
+                        task_id=task_id, context_token=ctx, last_verdict="GRAPHIFY_QUERY_DONE")
+        self.assertEqual(wn.get("must_call", {}).get("tool"), "claim_resource",
+                         f"write workflow_next should require claim_resource, got {wn}")
+
+    def test_fake_read_cannot_downgrade_write_task(self) -> None:
+        """Stored write intent wins over declared read — claim still required."""
+        agent_id = "fake-read-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="edit tracked", intent="write", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ctx, query="edit", limit=1)
+        self.call("graphify_query", agent_id=agent_id, task_id=task_id, context_token=ctx, query="impact", resource="README.md")
+
+        wn = self.call("workflow_next", agent_id=agent_id, request="inspect", intent="read",
+                        resource="README.md",
+                        task_id=task_id, context_token=ctx, last_verdict="GRAPHIFY_QUERY_DONE")
+        self.assertEqual(wn.get("must_call", {}).get("tool"), "claim_resource",
+                         f"stored write intent should win over declared read, got {wn}")
+
 
 if __name__ == "__main__":
     unittest.main()

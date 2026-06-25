@@ -382,6 +382,24 @@ def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_second
         db.require_agent_active(agent_id)
     except db.CoordinationError as exc:
         return _claim_context_not_ready(agent_id, resource, str(exc), ["agent_id"])
+
+    # V2.15.17: Block write/patch_queue claims on read-only tasks
+    if task_id:
+        _ci = _resolve_stored_task_intent(agent_id, task_id)
+        if _ci.get("ok") and (_ci.get("intent") or "") in _READ_ONLY_INTENTS:
+            requested_mode = "patch_queue" if mode in server.WRITE_MODES else mode
+            if requested_mode in server.WRITE_MODES:
+                return server.ok({
+                    "ok": False,
+                    "verdict": "READ_ONLY_CLAIM_FORBIDDEN",
+                    "state": "HARD_STOP",
+                    "reason": (
+                        f"Task '{task_id}' has intent "
+                        f"'{_ci.get('intent') or ''}' which is read-only. "
+                        "Write/patch_queue claims are forbidden on read tasks."
+                    ),
+                })
+
     requested_mode = "patch_queue" if mode in server.WRITE_MODES else mode
     if requested_mode in server.WRITE_MODES:
         missing = [name for name, value in {"task_id": task_id, "context_token": context_token}.items() if not value]
@@ -563,6 +581,9 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
                 payload["task_context"] = task_context.finish_task_context(agent_id, task_id, context_token)
             except task_context.TaskContextError as exc:
                 raise _context_error(exc) from exc
+            # V2.15.17: terminal hint for host guidance
+            payload["next_state_hint"] = "READY_FOR_NEXT_TASK"
+            payload["terminal"] = True
             return server.ok(payload)
     return result
 
@@ -865,6 +886,93 @@ def _claims_for(agent_id: str, resource: str) -> Dict[str, Any]:
     return server._active_claims_for(agent_id, resource)
 
 
+# ── V2.15.17: Read-only FSM — isolated from write reflexes ──────────
+_READ_ONLY_FORBIDDEN = [
+    "claim_resource", "file_hash", "propose_patch", "apply_patch",
+    "delete_resource", "direct_file_edit",
+]
+
+
+def _read_only_workflow_next(
+    agent_id: str,
+    request: str,
+    intent: str,
+    resource: str,
+    task_id: str,
+    context_token: str,
+    last: str,
+    task_data: dict[str, Any],
+) -> dict[str, Any]:
+    if last == "TASK_FINISHED_OK":
+        return server.ok({
+            "ok": True,
+            "verdict": "READY_FOR_NEXT_TASK",
+            "state": "READY_FOR_NEXT_TASK",
+            "reason": "Read task finished. Awaiting next user task.",
+        })
+    if not task_data or task_data.get("status") != "active":
+        return server._next_payload(
+            state="BEFORE_TASK_REQUIRED",
+            tool="before_task",
+            args={"agent_id": agent_id, "request": request or "", "intent": intent or "", "resource": resource or ""},
+            reason="No active task context. Start a before_task first.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    # AFTER before_task — guide through scribe → graphify → record → finish
+    if not task_data.get("scribe_done") and last not in _SCRIBE_VERDICTS:
+        return server._next_payload(
+            state="SCRIBE_CONTEXT_REQUIRED",
+            tool="scribe_query",
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token,
+                  "query": _targeted_scribe_query(request, intent, resource), "limit": 5},
+            reason="Targeted SCRIBE RAG query is recommended for read task context.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    if task_data.get("requires_graphify") and not task_data.get("graphify_done") \
+            and last not in _GRAPHIFY_VERDICTS:
+        return server._next_payload(
+            state="GRAPHIFY_CONTEXT_REQUIRED",
+            tool="graphify_query",
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token,
+                  "query": _targeted_graphify_query(request, intent, resource),
+                  "resource": resource or ""},
+            reason="Targeted Graphify impact query is recommended for read task context.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    # Scribe or graphify done → scribe_record recommended
+    if last in _SCRIBE_VERDICTS | _GRAPHIFY_VERDICTS or last == "BEFORE_TASK_OK" \
+            or (task_data.get("scribe_done") and last not in ("SCRIBE_RECORD_WRITTEN", "TASK_FINISHED_OK")):
+        if last == "SCRIBE_RECORD_WRITTEN":
+            return server._next_payload(
+                state="FINISH_TASK_RECOMMENDED",
+                tool="finish_task",
+                args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "intent": "read"},
+                reason="Read task complete. Call finish_task to close.",
+                forbidden=_READ_ONLY_FORBIDDEN,
+            )
+        return server._next_payload(
+            state="SCRIBE_RECORD_RECOMMENDED",
+            tool="scribe_record",
+            args={"agent_id": agent_id, "request": request or "task completed",
+                  "summary": "record useful task outcome before finish",
+                  "touched_resources": [resource] if resource else [],
+                  "resources": [resource] if resource else [],
+                  "verdict": last or "READY_TO_FINISH",
+                  "record_type": "task_summary", "severity": "medium",
+                  "tags": ["workflow_next"]},
+            reason="Typed memory recording is recommended before finishing the read task.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    # Safety fallback — guide toward scribe_record
+    return server._next_payload(
+        state="FINISH_TASK_RECOMMENDED",
+        tool="finish_task",
+        args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "intent": "read"},
+        reason="Read task ready for finish.",
+        forbidden=_READ_ONLY_FORBIDDEN,
+    )
+
+
 def workflow_next(
     agent_id: str = "",
     request: str = "",
@@ -925,6 +1033,15 @@ def workflow_next(
             else:
                 last_verdict = "GRAPHIFY_QUERY_DONE" if task_data.get("requires_graphify") else "SCRIBE_QUERY_DONE"
             last = _last(last_verdict)
+
+    # V2.15.17: Read-only FSM — stored intent isolates read path from write reflexes
+    if task_data and task_data.get("status") == "active":
+        _ri = _resolve_stored_task_intent(agent_id, task_id)
+        if _ri.get("ok") and (_ri.get("intent") or "") in _READ_ONLY_INTENTS:
+            return _read_only_workflow_next(
+                agent_id, request, _ri["intent"], resource,
+                task_id, context_token, last, task_data,
+            )
 
     if not agent_id or agent_id not in server._active_agent_ids():
         return _BASE_WORKFLOW_NEXT(
