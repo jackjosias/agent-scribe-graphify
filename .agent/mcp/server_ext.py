@@ -888,7 +888,7 @@ def _claims_for(agent_id: str, resource: str) -> Dict[str, Any]:
 
 # ── V2.15.17: Read-only FSM — isolated from write reflexes ──────────
 _READ_ONLY_FORBIDDEN = [
-    "claim_resource", "file_hash", "propose_patch", "apply_patch",
+    "claim_resource", "propose_patch", "apply_patch",
     "delete_resource", "direct_file_edit",
 ]
 
@@ -973,6 +973,42 @@ def _read_only_workflow_next(
     )
 
 
+# ── V2.15.18: Strict task context resolver for workflow_next ──────────
+# Must not fall through to legacy when task_id is provided but invalid.
+
+
+def _resolve_task_context_for_workflow_next(
+    agent_id: str,
+    task_id: str,
+) -> dict[str, Any]:
+    if not task_id:
+        return {"ok": True, "state": "NO_TASK_ID", "task_data": None}
+    try:
+        task_data = task_context.task_status(task_id)
+    except task_context.TaskContextError as exc:
+        return {
+            "ok": False,
+            "verdict": "TASK_CONTEXT_UNKNOWN_TASK",
+            "state": "HARD_STOP",
+            "reason": f"task_id was provided but no active task context exists: {exc}",
+        }
+    if task_data.get("agent_id") != agent_id:
+        return {
+            "ok": False,
+            "verdict": "TASK_AGENT_MISMATCH",
+            "state": "HARD_STOP",
+            "reason": (
+                f"task_id belongs to agent '{task_data.get('agent_id')}' "
+                f"but caller is '{agent_id}'."
+            ),
+        }
+    return {
+        "ok": True,
+        "state": "TASK_CONTEXT_FOUND",
+        "task_data": task_data,
+    }
+
+
 def workflow_next(
     agent_id: str = "",
     request: str = "",
@@ -1006,17 +1042,20 @@ def workflow_next(
 
     task_data: Dict[str, Any] | None = None
     if task_id:
-        try:
-            task_data = task_context.task_status(task_id)
-        except task_context.TaskContextError as exc:
-            stop = _track_loop(agent_id, resource, exc.code)
-            if stop is not None:
-                return stop
-            # Unknown task: clear task_id so base workflow_next handles it
-            task_id = ""
-            task_data = None
-        if task_data and task_data.get("agent_id") != agent_id:
-            raise server.ToolError("TASK_CONTEXT_AGENT_MISMATCH")
+        ctx = _resolve_task_context_for_workflow_next(agent_id, task_id)
+        if not ctx["ok"]:
+            return server.ok({
+                "ok": False,
+                "verdict": ctx["verdict"],
+                "state": "HARD_STOP",
+                "reason": ctx["reason"],
+                "forbidden": [
+                    "before_task", "claim_resource", "scribe_query", "graphify_query",
+                    "propose_patch", "apply_patch", "delete_resource",
+                    "finish_task", "direct_file_edit",
+                ],
+            })
+        task_data = ctx.get("task_data")
         if task_data and task_data.get("status") == "active" and not context_token:
             return server.ok({
                 "verdict": "NEXT_ACTION_REQUIRED",

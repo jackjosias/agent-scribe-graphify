@@ -178,6 +178,91 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         self.assertEqual(wn.get("must_call", {}).get("tool"), "claim_resource",
                          f"stored write intent should win over declared read, got {wn}")
 
+    # ── V2.15.18: strict workflow_next task context + file_hash cleanup ──
+
+    def test_workflow_next_unknown_task_id_hard_stops(self) -> None:
+        """Unknown task_id returns TASK_CONTEXT_UNKNOWN_TASK / HARD_STOP."""
+        agent_id = "strict-ctx-agent"
+        self.register(agent_id)
+
+        wn = self.call("workflow_next", agent_id=agent_id,
+                        task_id="missing-task-42", context_token="fake",
+                        intent="read")
+        self.assertFalse(wn.get("ok"), f"should fail, got {wn}")
+        self.assertEqual(wn.get("verdict"), "TASK_CONTEXT_UNKNOWN_TASK",
+                         f"expected TASK_CONTEXT_UNKNOWN_TASK, got {wn.get('verdict')}")
+        self.assertEqual(wn.get("state"), "HARD_STOP")
+        self.assertNotIn("must_call", wn,
+                         "must_call should be absent on unknown task_id")
+        forbidden = wn.get("forbidden", [])
+        self.assertIn("before_task", forbidden)
+        self.assertIn("claim_resource", forbidden)
+        self.assertIn("finish_task", forbidden)
+
+    def test_workflow_next_agent_mismatch_hard_stops(self) -> None:
+        """Agent B calling workflow_next with Agent A's task_id returns TASK_AGENT_MISMATCH."""
+        agent_a = "mismatch-a"
+        agent_b = "mismatch-b"
+        self.register(agent_a)
+        self.register(agent_b)
+
+        bt = self.call("before_task", agent_id=agent_a, request="edit", intent="write", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+
+        wn = self.call("workflow_next", agent_id=agent_b,
+                        task_id=task_id, context_token="irrelevant",
+                        intent="read")
+        self.assertFalse(wn.get("ok"), f"should fail, got {wn}")
+        self.assertEqual(wn.get("verdict"), "TASK_AGENT_MISMATCH",
+                         f"expected TASK_AGENT_MISMATCH, got {wn.get('verdict')}")
+        self.assertEqual(wn.get("state"), "HARD_STOP")
+
+    def test_workflow_next_unknown_task_does_not_clear_task_id_to_legacy(self) -> None:
+        """Unknown task_id with valid request/intent/resource still hard-stops."""
+        agent_id = "no-legacy-agent"
+        self.register(agent_id)
+
+        wn = self.call("workflow_next", agent_id=agent_id,
+                        task_id="ghost-task", context_token="irrelevant",
+                        request="inspect", intent="read", resource=".")
+        self.assertFalse(wn.get("ok"), f"should hard-stop, got {wn}")
+        self.assertEqual(wn.get("verdict"), "TASK_CONTEXT_UNKNOWN_TASK",
+                         f"expected TASK_CONTEXT_UNKNOWN_TASK, got {wn.get('verdict')}")
+        self.assertNotEqual(wn.get("verdict"), "INPUT_REQUIRED",
+                            "must not fall back to INPUT_REQUIRED")
+        self.assertNotEqual(wn.get("verdict"), "BEFORE_TASK_REQUIRED",
+                            "must not fall back to BEFORE_TASK_REQUIRED")
+
+    def test_read_only_forbidden_does_not_include_file_hash(self) -> None:
+        """file_hash is not in the forbidden list during read task workflow_next."""
+        agent_id = "no-fh-forbid-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="inspect", intent="read", resource=".")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+        task_id = bt["task_id"]
+        ctx = bt["context_token"]
+
+        wn = self.call("workflow_next", agent_id=agent_id, request="inspect", intent="read",
+                        task_id=task_id, context_token=ctx, last_verdict="BEFORE_TASK_OK")
+        forbidden = wn.get("forbidden", [])
+        self.assertNotIn("file_hash", forbidden,
+                         f"file_hash should be allowed in read-only, got forbidden={forbidden}")
+
+    def test_file_hash_allowed_during_read_task(self) -> None:
+        """file_hash call succeeds during a read task."""
+        agent_id = "fh-allowed-agent"
+        self.register(agent_id)
+
+        bt = self.call("before_task", agent_id=agent_id, request="hash check", intent="read", resource="README.md")
+        self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK")
+
+        fh = self.call("file_hash", resource="README.md")
+        self.assertTrue(fh.get("ok", True), f"file_hash should work, got {fh}")
+        self.assertIn("hash", fh, f"file_hash response should include hash, got {fh}")
+        self.assertIn("verdict", fh, f"file_hash response should include verdict, got {fh}")
+
 
 if __name__ == "__main__":
     unittest.main()

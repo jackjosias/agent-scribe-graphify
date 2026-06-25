@@ -426,6 +426,18 @@ class EdgeCasesAndRecoveryTest(unittest.TestCase):
         self.assertEqual(ft.get("next_state_hint"), "READY_FOR_NEXT_TASK",
                          "finish_task on read should include next_state_hint")
 
+    # ── V2.15.18: strict workflow_next task context ──────────────
+
+    def test_15c_workflow_next_unknown_task_hard_stops(self) -> None:
+        """workflow_next with invalid task_id returns TASK_CONTEXT_UNKNOWN_TASK."""
+        call_tool("register_agent", agent_id=AGENT_A, host_tool="test")
+        result = call_tool("workflow_next", agent_id=AGENT_A,
+                           task_id="task-nonexistent-42", context_token="fake",
+                           intent="read")
+        self.assertFalse(result.get("ok"), f"should fail, got {result}")
+        self.assertEqual(result["verdict"], "TASK_CONTEXT_UNKNOWN_TASK", result)
+        self.assertEqual(result["state"], "HARD_STOP", result)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 5 — Workspace Audit
