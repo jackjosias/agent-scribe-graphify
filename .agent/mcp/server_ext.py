@@ -27,6 +27,12 @@ try:
 except Exception:
     _gg = None  # type: ignore
 
+# TENOR task prompt generator (V2.15.4)
+try:
+    from host_adapter import tenor_task_prompt as _ttp  # type: ignore
+except Exception:
+    _ttp = None  # type: ignore
+
 # Proof signer — non-circular TENOR proof verification (v0.2.15+)
 try:
     import sys as _sys
@@ -1193,6 +1199,19 @@ def tool_schema(name: str) -> Dict[str, Any]:
             },
             "additionalProperties": False,
         }
+    if name == "tenor_task_prompt":
+        return {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string"},
+                "mode": {"type": "string"},
+                "intent": {"type": "string"},
+                "resource": {"type": "string"},
+                "model_tier": {"type": "string"},
+            },
+            "required": ["task"],
+            "additionalProperties": False,
+        }
     return _BASE_TOOL_SCHEMA(name)
 
 
@@ -1520,6 +1539,49 @@ def verify_proof(
 
 
 # ─────────────────────────────────────────────────────────────
+# tenor_task_prompt (V2.15.4) — generate disciplined TENOR task prompt
+# ─────────────────────────────────────────────────────────────
+
+def tenor_task_prompt(
+    task: str = "",
+    mode: str = "STANDARD",
+    intent: str = "write",
+    resource: str = "",
+    model_tier: str = "large",
+) -> dict[str, Any]:
+    if _ttp is None:
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_TASK_PROMPT_MODULE_UNAVAILABLE",
+            "reason": "tenor_task_prompt.py module not loaded.",
+            "prompt": "",
+        })
+    if not task or not task.strip():
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_TASK_PROMPT_INVALID",
+            "reason": "task is required and must not be empty.",
+            "prompt": "",
+        })
+    try:
+        result = _ttp.generate_task_prompt(
+            task=task,
+            mode=mode,
+            intent=intent,
+            resource=resource,
+            model_tier=model_tier,
+        )
+    except Exception as exc:
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_TASK_PROMPT_ERROR",
+            "reason": str(exc),
+            "prompt": "",
+        })
+    return server.ok(result)
+
+
+# ─────────────────────────────────────────────────────────────
 # Graphify Mandatory Guard (V2.15) — enforce Graphify presence
 # ─────────────────────────────────────────────────────────────
 
@@ -1686,6 +1748,8 @@ server.TOOLS["graphify_scribe_bridge"] = graphify_scribe_bridge
 # V2.15 new tools
 server.TOOLS["verify_proof"] = verify_proof
 server.TOOLS["graphify_required_check"] = graphify_required_check
+# V2.15.4 new tool
+server.TOOLS["tenor_task_prompt"] = tenor_task_prompt
 
 handle = server.handle
 list_tools = server.list_tools

@@ -20,6 +20,42 @@ cela équivaut à :
 TENOR INIT V2
 ```
 
+## 🔵 TENOR TASK:: — RACCOURCI DE TÂCHE DISCIPLINÉE (V2.15.4)
+
+Après `TENOR INIT` conforme, l'utilisateur peut écrire :
+
+```text
+TENOR TASK:: corrige le bug auth dans src/auth/login.ts
+```
+
+Cela équivaut à :
+
+1. L'agent hôte appelle le tool MCP `tenor_task_prompt` avec les arguments extraits.
+2. Le tool retourne un prompt discipliné complet avec `required_first_actions`, `required_finish_actions` et `forbidden`.
+3. L'agent hôte affiche `TENOR_TASK_PROMPT_READY`, puis exécute `discipline_ping` → `workflow_next` → suit le workflow.
+4. Aucune écriture directe avant `TENOR_TASK_PROMPT_READY` confirmé.
+
+Si le MCP n'est pas visible au LLM : l'agent doit afficher `HOST_MCP_UNBOUND` et ne pas modifier de fichier. L'utilisateur peut alors utiliser le CLI directement :
+
+```bash
+python3 .agent/scripts/tenor_task.py --task "corrige le bug auth" --mode STANDARD --intent write --resource src/auth/login.ts
+```
+
+Et coller la sortie comme prompt de tâche.
+
+**Règles :**
+- `TENOR TASK::` ne remplace PAS `before_task`, `discipline_ping`, `workflow_next`, `pre_action_guard`, SCRIBE, Graphify, `workspace_audit`, `scribe_record` ni `finish_task`.
+- `TENOR TASK::` ne modifie AUCUN fichier.
+- `TENOR TASK::` est un générateur de prompt standardisé, pas un outil d'exécution.
+- Tout LLM qui modifie un fichier après `TENOR TASK::` sans avoir confirmé `TENOR_TASK_PROMPT_READY` ET appelé `discipline_ping` + `workflow_next` est NON CONFORME.
+
+Arguments implicites (extraits de la phrase) :
+- `task` : tout le texte après `TENOR TASK::`
+- `mode` : STANDARD (défaut, ajustable)
+- `intent` : write (défaut, ajustable selon le verbe)
+- `resource` : le chemin de fichier si présent
+- `model_tier` : large (défaut)
+
 Après avoir lu ce fichier depuis la ligne 1, l'agent doit immédiatement lire et appliquer le protocole machine :
 
 ```text
