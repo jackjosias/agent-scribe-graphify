@@ -107,7 +107,9 @@ def establish_context(agent_id: str, request: str, intent: str, resource: str) -
 
 def _ensure_graphify_stubs() -> None:
     """Create minimal graphify-out stubs so the Graphify Mandatory Guard
-    does not block write operations during the smoke test."""
+    does not block write operations during the smoke test.
+
+    Never overwrites existing files — real graphify outputs are preserved."""
     gdir = ROOT / "graphify-out"
     gdir.mkdir(parents=True, exist_ok=True)
     for fname, content in [
@@ -115,7 +117,9 @@ def _ensure_graphify_stubs() -> None:
         ("GRAPH_REPORT.md", "# Smoke stub Graph Report\n"),
         ("graph.html", "<html><body></body></html>\n"),
     ]:
-        (gdir / fname).write_text(content, encoding="utf-8")
+        path = gdir / fname
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
 
 
 def smoke_nominal_workflow() -> None:
