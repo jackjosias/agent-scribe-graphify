@@ -501,10 +501,27 @@ def delete_resource(
     return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
 
 
+def _resolve_stored_task_intent(agent_id: str, task_id: str) -> str | None:
+    if not task_id:
+        return None
+    try:
+        status = task_context.task_status(task_id)
+        stored = (status.get("intent") or "").strip().lower()
+        return stored if stored else None
+    except task_context.TaskContextError:
+        return None
+
+
 def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "") -> Dict[str, Any]:
-    # Read-only / finish intents do not require an action lease — no patches to guard.
+    stored_intent = _resolve_stored_task_intent(agent_id, task_id)
     normalized_intent = (intent or "").strip().lower()
-    if normalized_intent not in {"read", "finish", "done", "complete", "end", "finalize"}:
+    _READ_ONLY_INTENTS = {"read", "query", "ask", "explain", "list", "show", "status"}
+    _SAFE_FINISH_INTENTS = {"read", "finish", "done", "complete", "end", "finalize"}
+    if stored_intent is not None:
+        is_read_only = stored_intent in _READ_ONLY_INTENTS
+    else:
+        is_read_only = normalized_intent in _SAFE_FINISH_INTENTS
+    if not is_read_only:
         lease_check = _require_action_lease(
             action_lease_id, "finish_task", agent_id, "finish_task",
             task_id=task_id,
@@ -1076,7 +1093,7 @@ def tool_schema(name: str) -> Dict[str, Any]:
             }, "additionalProperties": False,
         }, {})
     if name == "finish_task":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string"})
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string"})
     if name == "scribe_record":
         return {
             "type": "object",
