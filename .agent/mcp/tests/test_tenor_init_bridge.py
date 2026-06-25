@@ -51,6 +51,18 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 class TenorInitBridgeTest(unittest.TestCase):
+    _orig_verify_proof: Any = None
+
+    def _mock_verify_proof(self, root: Path, token: str, agent_id: str) -> dict[str, Any]:
+        if token == "invalid-token":
+            return {"ok": False, "verdict": "PROOF_INVALID_SIGNATURE", "detail": "mock bad signature"}
+        if token == "expired-token":
+            return {"ok": False, "verdict": "PROOF_EXPIRED", "detail": "mock expired"}
+        return {"ok": True, "verdict": "PROOF_VALID", "detail": "mock valid"}
+
+    def _mock_workflow_next_fail(self, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("mock workflow_next failure")
+
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="tenor-init-bridge-"))
         self.old_cwd = Path.cwd()
@@ -76,8 +88,13 @@ class TenorInitBridgeTest(unittest.TestCase):
         mcp._GRAPHIFY_GUARD_CACHE.clear()
         db.init_db(self.root)
         discipline.ensure_schema()
+        # Enable proof signer with mock by default
+        self._orig_verify_proof = getattr(mcp, "_verify_proof", None)
+        mcp._PROOF_SIGNER_AVAILABLE = True
+        mcp._verify_proof = self._mock_verify_proof
 
     def tearDown(self) -> None:
+        mcp._verify_proof = self._orig_verify_proof
         os.chdir(self.old_cwd)
         shutil.rmtree(self.root, ignore_errors=True)
 
@@ -166,6 +183,96 @@ class TenorInitBridgeTest(unittest.TestCase):
         )
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("host_tool"), "unknown")
+
+    # ── V2.15.6: proof_token verification ────────────────────
+
+    def test_bridge_with_valid_proof(self) -> None:
+        """Bridge with valid proof_token succeeds and records proof step."""
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="valid-token",
+        )
+        self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        steps = result.get("steps", [])
+        proof_step = next((s for s in steps if s["step"] == "verify_proof"), None)
+        self.assertIsNotNone(proof_step, f"no verify_proof step in {steps}")
+        self.assertTrue(proof_step.get("ok"))
+        self.assertEqual(proof_step.get("verdict"), "PROOF_VALID")
+
+    def test_bridge_with_invalid_proof(self) -> None:
+        """Bridge with invalid proof_token returns PROOF_FAILED + HARD_STOP."""
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="invalid-token",
+        )
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_PROOF_FAILED")
+        self.assertEqual(result.get("state"), "HARD_STOP")
+
+    def test_bridge_with_expired_proof(self) -> None:
+        """Bridge with expired proof_token returns PROOF_FAILED + HARD_STOP."""
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="expired-token",
+        )
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_PROOF_FAILED")
+        self.assertEqual(result.get("state"), "HARD_STOP")
+
+    def test_bridge_without_proof_token_skips_verification(self) -> None:
+        """Bridge with no proof_token skips proof verification (backward compat)."""
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+        )
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        steps = result.get("steps", [])
+        proof_steps = [s for s in steps if s["step"] == "verify_proof"]
+        self.assertEqual(len(proof_steps), 0, "unexpected proof step when no token")
+
+    def test_bridge_proof_signer_unavailable(self) -> None:
+        """Bridge with proof_token but PROOF_SIGNER_UNAVAILABLE returns UNVERIFIABLE."""
+        mcp._PROOF_SIGNER_AVAILABLE = False
+        try:
+            result = call_tool(
+                "tenor_init_bridge",
+                agent_session_id=AGENT_SESSION_ID,
+                host_tool=HOST_TOOL,
+                proof_token="any-token",
+            )
+            self.assertFalse(result.get("ok"))
+            self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_PROOF_UNVERIFIABLE")
+            self.assertEqual(result.get("state"), "HARD_STOP")
+        finally:
+            mcp._PROOF_SIGNER_AVAILABLE = True
+
+    def test_bridge_workflow_next_failure(self) -> None:
+        """When workflow_next fails, bridge returns FAIL with step info."""
+        orig_wf = getattr(mcp, "workflow_next", None)
+        mcp.workflow_next = self._mock_workflow_next_fail
+        try:
+            result = call_tool(
+                "tenor_init_bridge",
+                agent_session_id=AGENT_SESSION_ID,
+                host_tool=HOST_TOOL,
+            )
+            self.assertFalse(result.get("ok"), f"should fail: {result}")
+            self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_WORKFLOW_NEXT_FAILED")
+            self.assertEqual(result.get("state"), "INIT_MCP_BRIDGE_WORKFLOW_FAILED")
+            steps = result.get("steps", [])
+            wf_step = next((s for s in steps if s["step"] == "workflow_next"), None)
+            self.assertIsNone(wf_step, "workflow_next should not be in successful steps")
+        finally:
+            mcp.workflow_next = orig_wf
 
 
 class TestTenorInitBridgeLauncher(unittest.TestCase):

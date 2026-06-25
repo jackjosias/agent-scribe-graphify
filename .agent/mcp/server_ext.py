@@ -1612,6 +1612,7 @@ def tenor_init_bridge(
     agent_session_id: str = "",
     host_tool: str = "unknown",
     model_name: str = "",
+    proof_token: str = "",
 ) -> dict[str, Any]:
     if not agent_session_id or not agent_session_id.strip():
         return server.ok({
@@ -1623,6 +1624,46 @@ def tenor_init_bridge(
 
     steps: list[dict[str, Any]] = []
     aid = agent_session_id.strip()
+
+    # Step 0 — proof_token verification (V2.15.6)
+    if proof_token:
+        if not _PROOF_SIGNER_AVAILABLE:
+            return server.ok({
+                "ok": False,
+                "verdict": "TENOR_INIT_BRIDGE_PROOF_UNVERIFIABLE",
+                "state": "HARD_STOP",
+                "reason": (
+                    "proof_token provided but proof_signer.py is not loaded. "
+                    "Cannot verify TENOR proof. Host must NOT continue."
+                ),
+                "steps": steps,
+            })
+        try:
+            proof_result = _verify_proof(server.ROOT.resolve(), proof_token, aid)
+            if not proof_result.get("ok"):
+                return server.ok({
+                    "ok": False,
+                    "verdict": "TENOR_INIT_BRIDGE_PROOF_FAILED",
+                    "state": "HARD_STOP",
+                    "reason": (
+                        f"Proof verification failed: {proof_result.get('verdict', 'UNKNOWN')} "
+                        f"— {proof_result.get('detail', '')}"
+                    ),
+                    "steps": steps,
+                })
+            steps.append({
+                "step": "verify_proof",
+                "ok": True,
+                "verdict": proof_result.get("verdict", "PROOF_VALID"),
+            })
+        except Exception as exc:
+            return server.ok({
+                "ok": False,
+                "verdict": "TENOR_INIT_BRIDGE_PROOF_ERROR",
+                "state": "HARD_STOP",
+                "reason": f"Proof verification raised exception: {exc}",
+                "steps": steps,
+            })
 
     # Step 1 — register_agent
     try:
@@ -1674,7 +1715,7 @@ def tenor_init_bridge(
 
     # Step 3 — discipline_ping
     try:
-        ping_data = discipline.record_guard_ping(aid, phase="post-init", resource="")
+        discipline.record_guard_ping(aid, phase="post-init", resource="")
         steps.append({
             "step": "discipline_ping",
             "ok": True,
@@ -1701,10 +1742,12 @@ def tenor_init_bridge(
             "verdict": wf_verdict,
         })
     except Exception as exc:
-        steps.append({
-            "step": "workflow_next",
+        return server.ok({
             "ok": False,
-            "error": str(exc),
+            "verdict": "TENOR_INIT_BRIDGE_WORKFLOW_NEXT_FAILED",
+            "state": "INIT_MCP_BRIDGE_WORKFLOW_FAILED",
+            "reason": f"workflow_next failed for {aid}: {exc}",
+            "steps": steps,
         })
 
     return server.ok({

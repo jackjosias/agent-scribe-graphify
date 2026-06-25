@@ -632,6 +632,7 @@ def run_tenor_init_bridge(
     agent_session_id: str,
     host_tool: str = "",
     model_name: str = "",
+    proof_token: str = "",
 ) -> dict[str, Any]:
     if not agent_session_id:
         return {
@@ -640,13 +641,17 @@ def run_tenor_init_bridge(
             "reason": "agent_session_id from TENOR INIT is required.",
         }
 
+    params: dict[str, Any] = {
+        "agent_session_id": agent_session_id,
+        "host_tool": host_tool or config.host_type or "unknown",
+        "model_name": model_name or "",
+    }
+    if proof_token:
+        params["proof_token"] = proof_token
+
     result = call_mcp_tool(
         "tenor_init_bridge",
-        {
-            "agent_session_id": agent_session_id,
-            "host_tool": host_tool or config.host_type or "unknown",
-            "model_name": model_name or "",
-        },
+        params,
         config.workspace_root,
         timeout=30.0,
     )
