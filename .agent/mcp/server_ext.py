@@ -1212,6 +1212,17 @@ def tool_schema(name: str) -> Dict[str, Any]:
             "required": ["task"],
             "additionalProperties": False,
         }
+    if name == "tenor_init_bridge":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_session_id": {"type": "string"},
+                "host_tool": {"type": "string"},
+                "model_name": {"type": "string"},
+            },
+            "required": ["agent_session_id"],
+            "additionalProperties": False,
+        }
     return _BASE_TOOL_SCHEMA(name)
 
 
@@ -1582,6 +1593,120 @@ def tenor_task_prompt(
 
 
 # ─────────────────────────────────────────────────────────────
+# tenor_init_bridge (V2.15.5) — bridge TENOR session to MCP agent registry
+# ─────────────────────────────────────────────────────────────
+
+def tenor_init_bridge(
+    agent_session_id: str = "",
+    host_tool: str = "unknown",
+    model_name: str = "",
+) -> dict[str, Any]:
+    if not agent_session_id or not agent_session_id.strip():
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_INVALID",
+            "state": "AGENT_SESSION_ID_REQUIRED",
+            "reason": "agent_session_id from TENOR INIT SCRIBE-CHECK output is required.",
+        })
+
+    steps: list[dict[str, Any]] = []
+    aid = agent_session_id.strip()
+
+    # Step 1 — register_agent
+    try:
+        agent_data = db.register_agent(
+            host_tool=host_tool or "unknown",
+            model_name=model_name or "",
+            agent_id=aid,
+        )
+        steps.append({
+            "step": "register_agent",
+            "ok": True,
+            "agent_id": agent_data.get("agent_id", aid),
+            "status": agent_data.get("status", ""),
+        })
+    except Exception as exc:
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_REGISTER_FAILED",
+            "state": "INIT_BLOCKED_MCP_AGENT_UNREGISTERED",
+            "reason": f"register_agent failed for agent_session_id={aid}: {exc}",
+            "steps": steps,
+        })
+
+    # Step 2 — agent_status
+    try:
+        status_data = db.agent_status(aid)
+        status_val = str(status_data.get("status", "") or "")
+        steps.append({
+            "step": "agent_status",
+            "ok": status_val == "active",
+            "status": status_val,
+        })
+        if status_val != "active":
+            return server.ok({
+                "ok": False,
+                "verdict": "TENOR_INIT_BRIDGE_AGENT_NOT_ACTIVE",
+                "state": "MCP_AGENT_NOT_ACTIVE",
+                "reason": f"Agent {aid} status is '{status_val}', expected 'active'.",
+                "steps": steps,
+            })
+    except Exception as exc:
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_STATUS_FAILED",
+            "state": "MCP_AGENT_STATUS_FAILED",
+            "reason": f"agent_status failed for {aid}: {exc}",
+            "steps": steps,
+        })
+
+    # Step 3 — discipline_ping
+    try:
+        ping_data = discipline.record_guard_ping(aid, phase="post-init", resource="")
+        steps.append({
+            "step": "discipline_ping",
+            "ok": True,
+            "phase": "post-init",
+        })
+    except Exception as exc:
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_DISCIPLINE_PING_FAILED",
+            "state": "DISCIPLINE_PING_FAILED",
+            "reason": f"discipline_ping failed for {aid}: {exc}",
+            "steps": steps,
+        })
+
+    # Step 4 — workflow_next (read-only, lightweight)
+    try:
+        wf_raw = workflow_next(agent_id=aid, intent="read", resource=".")
+        wf_payload_str = wf_raw.get("content", [{}])[0].get("text", "{}") if isinstance(wf_raw, dict) else "{}"
+        wf_payload = json.loads(wf_payload_str) if isinstance(wf_payload_str, str) else {}
+        wf_verdict = wf_payload.get("verdict", "UNKNOWN")
+        steps.append({
+            "step": "workflow_next",
+            "ok": True,
+            "verdict": wf_verdict,
+        })
+    except Exception as exc:
+        steps.append({
+            "step": "workflow_next",
+            "ok": False,
+            "error": str(exc),
+        })
+
+    return server.ok({
+        "ok": True,
+        "verdict": "TENOR_INIT_BRIDGE_OK",
+        "state": "INIT_MCP_BRIDGE_COMPLETE",
+        "agent_session_id": aid,
+        "host_tool": host_tool or "unknown",
+        "model_name": model_name or "",
+        "steps": steps,
+    })
+
+
+# ─────────────────────────────────────────────────────────────
 # Graphify Mandatory Guard (V2.15) — enforce Graphify presence
 # ─────────────────────────────────────────────────────────────
 
@@ -1750,6 +1875,8 @@ server.TOOLS["verify_proof"] = verify_proof
 server.TOOLS["graphify_required_check"] = graphify_required_check
 # V2.15.4 new tool
 server.TOOLS["tenor_task_prompt"] = tenor_task_prompt
+# V2.15.5 new tool
+server.TOOLS["tenor_init_bridge"] = tenor_init_bridge
 
 handle = server.handle
 list_tools = server.list_tools

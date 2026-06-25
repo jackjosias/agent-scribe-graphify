@@ -100,6 +100,85 @@ réparation portable. Elle initialise ou vérifie le SCRIBE projet, `scribe-out/
 `.agent/rules/scribe.md`, le bloc `AGENTS.md`, `.graphifyignore` et les
 surfaces portables attendues.
 
+## 🔴 TENOR INIT MCP BRIDGE (V2.15.5) — OBLIGATOIRE APRÈS INIT CONFORME
+
+Après avoir affiché `INIT_CONFORME` ou `FILESYSTEM_INIT_OK_MCP_UNBOUND`,
+l'agent DOIT exécuter le bridge MCP pour enregistrer la session SCRIBE côté runtime.
+
+### 1. Si MCP visible (MCP_BOUND_TO_CURRENT_PROJECT)
+
+```bash
+python3 .agent/scripts/tenor_init_bridge.py \
+  --agent-session-id "<Agent session du SCRIBE-CHECK>" \
+  --host-tool "<host détecté>" \
+  --model-name "<modèle si connu>"
+```
+
+Ou appeler le tool MCP directement :
+
+```text
+tenor_init_bridge(
+  agent_session_id="<Agent session>",
+  host_tool="<host>",
+  model_name="<modèle>"
+)
+```
+
+### 2. Résultat attendu
+
+```text
+Verdict : TENOR_INIT_BRIDGE_OK
+Agent   : cli-20260625-a3f9c1
+Etapes  : 4
+  [OK] register_agent : active
+  [OK] agent_status : active
+  [OK] discipline_ping : post-init
+  [OK] workflow_next : BEFORE_TASK_OK
+```
+
+### 3. Champs finaux ajoutés au rapport TENOR INIT
+
+```
+MCP agent registered: YES / NO
+MCP agent status    : active / unknown / idle
+MCP discipline ping : OK / FAIL
+```
+
+### 4. Échec du bridge
+
+Si `register_agent` échoue → afficher `INIT_BLOCKED_MCP_AGENT_UNREGISTERED`.
+Si `discipline_ping` retourne agent inconnu → STOP.
+Ne pas continuer vers `scribe_query`.
+
+### 5. Si MCP non visible (FILESYSTEM_INIT_OK_MCP_UNBOUND)
+
+Le bridge est impossible car les tools MCP ne sont pas exposés.
+Afficher :
+
+```text
+MCP bridge: SKIPPED (MCP not visible to LLM)
+MCP agent registered: N/A
+```
+
+L'utilisateur devra lancer manuellement après configuration MCP :
+
+```bash
+python3 .agent/scripts/tenor_init_bridge.py \
+  --agent-session-id "<Agent session>" \
+  --host-tool "<host>"
+```
+
+### 6. Règles
+
+- `tenor_init_bridge` ne modifie PAS `workflow_next` : `workflow_next` reste strict,
+  agent inconnu = `AGENT_UNKNOWN_OR_UNREGISTERED`.
+- `tenor_init_bridge` est idempotent : appeler deux fois le même agent_session_id
+  ne crée pas de duplicata.
+- Si `register_agent` échoue, le TENOR INIT est considéré incomplet.
+  L'utilisateur doit voir l'erreur et les steps partielles.
+
+---
+
 ## 🔴 HOST MCP PREFLIGHT — AVANT TENOR-INIT
 
 Avant de lancer `tenor-init`, l'agent doit vérifier le host courant. Une init

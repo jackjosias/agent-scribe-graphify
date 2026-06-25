@@ -624,6 +624,36 @@ def run_resource_lock_status(
 
 
 # ─────────────────────────────────────────────────────────────
+# TENOR init bridge — register SCRIBE agent session in MCP (V2.15.5)
+# ─────────────────────────────────────────────────────────────
+
+def run_tenor_init_bridge(
+    config: HostLaunchConfig,
+    agent_session_id: str,
+    host_tool: str = "",
+    model_name: str = "",
+) -> dict[str, Any]:
+    if not agent_session_id:
+        return {
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_INVALID",
+            "reason": "agent_session_id from TENOR INIT is required.",
+        }
+
+    result = call_mcp_tool(
+        "tenor_init_bridge",
+        {
+            "agent_session_id": agent_session_id,
+            "host_tool": host_tool or config.host_type or "unknown",
+            "model_name": model_name or "",
+        },
+        config.workspace_root,
+        timeout=30.0,
+    )
+    return result
+
+
+# ─────────────────────────────────────────────────────────────
 # Workspace audit
 # ─────────────────────────────────────────────────────────────
 
