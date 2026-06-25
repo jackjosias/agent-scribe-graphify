@@ -506,6 +506,8 @@ def _resolve_stored_task_intent(agent_id: str, task_id: str) -> str | None:
         return None
     try:
         status = task_context.task_status(task_id)
+        if status.get("agent_id") != agent_id:
+            return None
         stored = (status.get("intent") or "").strip().lower()
         return stored if stored else None
     except task_context.TaskContextError:
@@ -1637,10 +1639,12 @@ def tenor_task_prompt(
 # tenor_init_bridge (V2.15.5) — bridge TENOR session to MCP agent registry
 # ─────────────────────────────────────────────────────────────
 
-def _retire_ghost_agents(aid: str, host_tool: str) -> list[dict[str, str]]:
+def _retire_ghost_agents(aid: str, host_tool: str) -> dict[str, Any]:
     retired: list[dict[str, str]] = []
+    status = "ok"
+    error_msg = ""
     if not host_tool or host_tool == "unknown":
-        return retired
+        return {"retired": retired, "status": "skipped", "error": "no host_tool"}
     try:
         all_agents = db.list_agents().get("agents", [])
         for agent in all_agents:
@@ -1652,9 +1656,10 @@ def _retire_ghost_agents(aid: str, host_tool: str) -> list[dict[str, str]]:
                 if tasks.get("count", 0) == 0:
                     db.retire_agent(gid, reason=f"ghost replaced by {aid}")
                     retired.append({"agent_id": gid, "host_tool": host_tool})
-    except Exception:
-        pass
-    return retired
+    except Exception as exc:
+        status = "failed"
+        error_msg = str(exc)
+    return {"retired": retired, "status": status, "error": error_msg}
 
 
 def tenor_init_bridge(
@@ -1790,14 +1795,15 @@ def tenor_init_bridge(
         })
 
     # Step 4 — retire ghost agents from same host_tool (V2.15.12)
-    ghost_retired = _retire_ghost_agents(aid, host_tool or "unknown")
-    if ghost_retired:
-        steps.append({
-            "step": "retire_ghosts",
-            "ok": True,
-            "count": len(ghost_retired),
-            "ghosts": ghost_retired,
-        })
+    ghost_result = _retire_ghost_agents(aid, host_tool or "unknown")
+    steps.append({
+        "step": "retire_ghosts",
+        "ok": ghost_result["status"] == "ok",
+        "count": len(ghost_result["retired"]),
+        "ghosts": ghost_result["retired"],
+        "status": ghost_result["status"],
+        "error": ghost_result.get("error", ""),
+    })
 
     # TENOR INIT does NOT create a user task — no workflow_next here.
     # The host calls workflow_next on its own during the first TENOR TASK.
@@ -1810,7 +1816,8 @@ def tenor_init_bridge(
         "host_tool": host_tool or "unknown",
         "model_name": model_name or "",
         "steps": steps,
-        "retired_ghosts": [g["agent_id"] for g in ghost_retired] if ghost_retired else [],
+        "retired_ghosts": [g["agent_id"] for g in ghost_result["retired"]] if ghost_result["retired"] else [],
+        "ghost_cleanup_status": ghost_result["status"],
     })
 
 
