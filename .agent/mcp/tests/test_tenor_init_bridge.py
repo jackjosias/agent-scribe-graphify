@@ -245,6 +245,34 @@ class TenorInitBridgeTest(unittest.TestCase):
         ghost_status = db.agent_status(ghost_id)
         self.assertEqual(ghost_status.get("status"), "retired", f"ghost should be retired: {ghost_status}")
 
+    def test_bridge_does_not_retire_active_parallel_agent(self) -> None:
+        """Bridge must NOT retire a parallel agent with an active task context."""
+        parallel_id = "parallel-agent-42"
+        db.register_agent(host_tool=HOST_TOOL, agent_id=parallel_id)
+        db.heartbeat(parallel_id)
+        from runtime import task_context
+        task_context.ensure_schema()
+        task_context.create_task_context(
+            agent_id=parallel_id, request="test", intent="read",
+            resource=".", requires_graphify=False,
+        )
+        status = db.agent_status(parallel_id)
+        self.assertEqual(status.get("status"), "active")
+
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token="valid-token",
+        )
+        self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
+        retired = result.get("retired_ghosts", [])
+        self.assertNotIn(parallel_id, retired,
+                         f"parallel agent {parallel_id} with active task should NOT be retired, got {retired}")
+        parallel_status = db.agent_status(parallel_id)
+        self.assertNotEqual(parallel_status.get("status"), "retired",
+                            f"parallel agent {parallel_id} should remain active: {parallel_status}")
+
     def test_bridge_proof_signer_unavailable(self) -> None:
         """Bridge with proof_token but PROOF_SIGNER_UNAVAILABLE returns UNVERIFIABLE."""
         mcp._PROOF_SIGNER_AVAILABLE = False

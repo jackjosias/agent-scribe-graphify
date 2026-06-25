@@ -1648,8 +1648,10 @@ def _retire_ghost_agents(aid: str, host_tool: str) -> list[dict[str, str]]:
             gstatus = agent.get("status", "")
             ghost = agent.get("host_tool", "")
             if gid != aid and gstatus == "active" and ghost == host_tool:
-                db.retire_agent(gid, reason=f"ghost replaced by {aid}")
-                retired.append({"agent_id": gid, "host_tool": host_tool})
+                tasks = task_context.list_tasks(agent_id=gid, status="active")
+                if tasks.get("count", 0) == 0:
+                    db.retire_agent(gid, reason=f"ghost replaced by {aid}")
+                    retired.append({"agent_id": gid, "host_tool": host_tool})
     except Exception:
         pass
     return retired
