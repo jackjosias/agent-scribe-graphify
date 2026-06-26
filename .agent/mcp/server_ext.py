@@ -1366,9 +1366,10 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "agent_id": {"type": "string"},
                 "resource": {"type": "string"},
                 "task_id": {"type": "string"},
+                "context_token": {"type": "string"},
                 "ttl_seconds": {"type": "integer"},
             },
-            "required": ["agent_id", "resource"],
+            "required": ["agent_id", "resource", "task_id", "context_token"],
             "additionalProperties": False,
         }
     if name == "resource_lock_release":

@@ -101,6 +101,44 @@ class SmokeTestImport(unittest.TestCase):
         self.assertIn("finish_task", strict)
 
 
+    def test_resource_lock_claim_schema_requires_task_id_and_context_token(self) -> None:
+        schema = self._mod.tool_schema("resource_lock_claim")
+        props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        self.assertIn("task_id", props)
+        self.assertIn("context_token", props)
+        self.assertIn("task_id", required)
+        self.assertIn("context_token", required)
+        self.assertFalse(schema.get("additionalProperties"))
+
+    def test_apply_patch_schema_exposes_task_context_and_action_lease(self) -> None:
+        schema = self._mod.tool_schema("apply_patch")
+        props = schema.get("properties", {})
+        for field in ("agent_id", "patch_id", "task_id", "context_token", "action_lease_id"):
+            self.assertIn(field, props)
+        self.assertFalse(schema.get("additionalProperties"))
+
+    def test_propose_patch_schema_exposes_task_context_and_action_lease(self) -> None:
+        schema = self._mod.tool_schema("propose_patch")
+        props = schema.get("properties", {})
+        for field in ("agent_id", "target", "base_hash", "diff_text", "task_id", "context_token", "action_lease_id"):
+            self.assertIn(field, props)
+        self.assertFalse(schema.get("additionalProperties"))
+
+    def test_resource_lock_schema_contracts_are_aligned_with_runtime(self) -> None:
+        release = self._mod.tool_schema("resource_lock_release")
+        heartbeat = self._mod.tool_schema("resource_lock_heartbeat")
+        status = self._mod.tool_schema("resource_lock_status")
+        self.assertEqual(set(release.get("required", [])), {"agent_id", "resource"})
+        self.assertNotIn("task_id", release.get("properties", {}))
+        self.assertNotIn("context_token", release.get("properties", {}))
+        self.assertEqual(set(heartbeat.get("required", [])), {"agent_id", "resource"})
+        self.assertNotIn("task_id", heartbeat.get("properties", {}))
+        self.assertNotIn("context_token", heartbeat.get("properties", {}))
+        self.assertEqual(set(status.get("required", [])), {"resource"})
+        self.assertEqual(set(status.get("properties", {}).keys()), {"resource"})
+
+
 class SmokeTestServer(unittest.TestCase):
     """Level 1 — server starts, accepts initialize, handles basic calls."""
 

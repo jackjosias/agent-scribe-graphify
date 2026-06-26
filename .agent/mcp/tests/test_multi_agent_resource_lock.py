@@ -492,39 +492,37 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         """Race 10 times to validate atomicity under repeated contention."""
         for i in range(10):
             with self.subTest(round=i):
-                self.setUp()
-                try:
-                    results: list[dict[str, Any]] = []
-                    errors: list[str] = []
-                    barrier = threading.Barrier(2)
+                agent_a = f"race-a-{i}"
+                agent_b = f"race-b-{i}"
+                ctx_a = self.ready_write(agent_a)
+                ctx_b = self.ready_write(agent_b)
+                results: list[dict[str, Any]] = []
+                errors: list[str] = []
+                barrier = threading.Barrier(2)
 
-                    def race(agent_id: str) -> None:
-                        try:
-                            self.register(agent_id)
-                            bt = self.call("before_task", agent_id=agent_id, request="edit README",
-                                            intent="write", resource="README.md")
-                            self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK", bt)
-                            task_id = bt["task_id"]
-                            ct = bt["context_token"]
-                            self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ct, query="e", limit=1)
-                            self.call("graphify_query", agent_id=agent_id, task_id=task_id, context_token=ct, query="i", resource="README.md")
-                            barrier.wait(timeout=10)
-                            lock = self.call("resource_lock_claim", agent_id=agent_id, resource="README.md",
-                                              task_id=task_id, context_token=ct, ttl_seconds=30)
-                            results.append(lock)
-                        except Exception as e:
-                            errors.append(f"{agent_id}: {e}")
+                def race(agent_id: str, ctx: dict[str, Any]) -> None:
+                    try:
+                        barrier.wait(timeout=10)
+                        lock = self.call("resource_lock_claim", agent_id=agent_id, resource="README.md",
+                                         task_id=ctx["task_id"], context_token=ctx["context_token"],
+                                         ttl_seconds=30)
+                        results.append(lock)
+                    except Exception as e:
+                        errors.append(f"{agent_id}: {e}")
 
-                    threads = [
-                        threading.Thread(target=race, args=("race-a",)),
-                        threading.Thread(target=race, args=("race-b",)),
-                    ]
-                    for t in threads:
-                        t.start()
-                    for t in threads:
-                        t.join()
-                    self.assertEqual(len(errors), 0, f"round {i}: {errors}")
-                    ok_count = sum(1 for r in results if r.get("ok"))
-                    self.assertEqual(ok_count, 1, f"round {i}: exactly one should win: {results}")
-                finally:
-                    self.tearDown()
+                threads = [
+                    threading.Thread(target=race, args=(agent_a, ctx_a)),
+                    threading.Thread(target=race, args=(agent_b, ctx_b)),
+                ]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+                self.assertEqual(len(errors), 0, f"round {i}: {errors}")
+                self.assertEqual(len(results), 2, f"round {i}: expected 2 results, got {results}")
+                winners = [r for r in results if r.get("ok")]
+                self.assertEqual(len(winners), 1, f"round {i}: exactly one should win: {results}")
+                winner = winners[0]
+                released = self.call("resource_lock_release", agent_id=winner["agent_id"],
+                                     resource="README.md", lock_id=winner.get("lock_id", ""))
+                self.assertEqual(released.get("verdict"), "RESOURCE_LOCK_RELEASED", released)
