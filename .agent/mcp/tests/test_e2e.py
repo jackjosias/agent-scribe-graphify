@@ -305,12 +305,21 @@ class E2ETestBase(unittest.TestCase):
         return p["patch_id"]
 
     def _apply(self, ctx: dict[str, str], lease_id: str,
-               patch_id: str, agent_id: str = AGENT_A) -> dict[str, Any]:
+               patch_id: str, agent_id: str = AGENT_A,
+               resource: str = RESOURCE) -> dict[str, Any]:
+        lock = self.client.call(
+            "resource_lock_claim", agent_id=agent_id, resource=resource,
+            task_id=ctx.get("task_id", ""), context_token=ctx.get("context_token", ""),
+            ttl_seconds=600,
+        )
+        self.assertEqual(lock["verdict"], "RESOURCE_LOCK_ACQUIRED", lock)
         p = self.client.call(
             "apply_patch", agent_id=agent_id, patch_id=patch_id,
             action_lease_id=lease_id, **ctx,
         )
         self.assertEqual(p["verdict"], "PATCH_APPLIED", p)
+        self.client.call("resource_lock_release", agent_id=agent_id,
+                         resource=resource, lock_id=lock.get("lock_id", ""))
         return p
 
     def _release_claim(self, claim_id: str,
@@ -491,9 +500,9 @@ class TestE2ETwoIndependentAgents(E2ETestBase):
         pb = self._propose(ctx_b, lb_p, base_b, AGENT_B, RESOURCE_B)
 
         la_a = self._lease(ctx_a, "apply_patch", AGENT_A, RESOURCE)
-        self._apply(ctx_a, la_a, pa, AGENT_A)
+        self._apply(ctx_a, la_a, pa, AGENT_A, RESOURCE)
         lb_a = self._lease(ctx_b, "apply_patch", AGENT_B, RESOURCE_B)
-        self._apply(ctx_b, lb_a, pb, AGENT_B)
+        self._apply(ctx_b, lb_a, pb, AGENT_B, RESOURCE_B)
 
         self._release_claim(ca, AGENT_A)
         self._release_claim(cb, AGENT_B)
@@ -542,14 +551,21 @@ class TestE2EResourceLock(E2ETestBase):
         self._register(AGENT_A)
         self._register(AGENT_B)
 
+        ctx_a = self._ready_context(AGENT_A)
+        ctx_b = self._ready_context(AGENT_B)
+
         claim_a = self.client.call("resource_lock_claim", agent_id=AGENT_A,
-                                   resource=RESOURCE, task_id="t-1")
-        self.assertEqual(claim_a["verdict"], "RESOURCE_LOCK_CLAIMED", claim_a)
+                                   resource=RESOURCE,
+                                   task_id=ctx_a["task_id"],
+                                   context_token=ctx_a["context_token"])
+        self.assertEqual(claim_a["verdict"], "RESOURCE_LOCK_ACQUIRED", claim_a)
         lock_id = claim_a.get("lock_id", "")
 
         claim_b = self.client.call_raw("resource_lock_claim", agent_id=AGENT_B,
-                                       resource=RESOURCE, task_id="t-2")
-        self.assertEqual(claim_b["verdict"], "RESOURCE_ALREADY_LOCKED",
+                                       resource=RESOURCE,
+                                       task_id=ctx_b["task_id"],
+                                       context_token=ctx_b["context_token"])
+        self.assertEqual(claim_b["verdict"], "RESOURCE_BUSY",
                          claim_b)
 
         release_a = self.client.call("resource_lock_release", agent_id=AGENT_A,
@@ -558,8 +574,10 @@ class TestE2EResourceLock(E2ETestBase):
                          release_a)
 
         claim_b2 = self.client.call("resource_lock_claim", agent_id=AGENT_B,
-                                    resource=RESOURCE, task_id="t-3")
-        self.assertEqual(claim_b2["verdict"], "RESOURCE_LOCK_CLAIMED",
+                                    resource=RESOURCE,
+                                    task_id=ctx_b["task_id"],
+                                    context_token=ctx_b["context_token"])
+        self.assertEqual(claim_b2["verdict"], "RESOURCE_LOCK_ACQUIRED",
                          claim_b2)
 
 
@@ -647,7 +665,8 @@ class TestE2EToolsList(E2ETestBase):
             "workspace_audit", "list_patches", "resume_task_context",
             "file_hash", "release_claim", "lease_extend",
             "resource_lock_claim", "resource_lock_release",
-            "resource_lock_status", "heartbeat", "session_status",
+            "resource_lock_status", "resource_lock_heartbeat",
+            "heartbeat", "session_status",
         }
         missing = required - set(names)
         self.assertSetEqual(missing, set(),

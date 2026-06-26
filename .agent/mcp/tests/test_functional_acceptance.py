@@ -133,9 +133,14 @@ def propose(a: str, c: dict, r: str, diff: str) -> str:
 
 
 def apply_(a: str, c: dict, r: str, pid: str) -> None:
+    lock = ct("resource_lock_claim", agent_id=a, resource=r,
+              task_id=c.get("task_id", ""), context_token=c.get("context_token", ""),
+              ttl_seconds=600)
+    assert lock["verdict"] == "RESOURCE_LOCK_ACQUIRED", lock
     l = lease(a, c, r, "apply_patch")
     ap = ct("apply_patch", agent_id=a, patch_id=pid, action_lease_id=l, **c)
     assert ap["verdict"] == "PATCH_APPLIED", ap
+    ct("resource_lock_release", agent_id=a, resource=r, lock_id=lock.get("lock_id", ""))
 
 
 def finish(a: str, c: dict, r: str) -> None:
@@ -257,7 +262,7 @@ class FunctionalAcceptanceTest(unittest.TestCase):
 
         ct("graphify_query", agent_id=A1, **c, query="x", resource=R)
         step = ct("workflow_next", agent_id=A1, request="edit tracked", intent="write", resource=R, **c, last_verdict="GRAPHIFY_QUERY_DONE")
-        self.assertEqual(step["must_call"]["tool"], "claim_resource")
+        self.assertEqual(step["must_call"]["tool"], "resource_lock_claim")
 
     # ── BR7: Skipping steps is blocked ────────────────────────────────────
     # Given a registered agent with a task but no Scribe/Graphify,
@@ -431,15 +436,17 @@ class FunctionalAcceptanceTest(unittest.TestCase):
     # when it releases, the lock is free.
 
     def test_b17_resource_lock_claim_release(self) -> None:
-        register(A1)
-        cl = ct("resource_lock_claim", agent_id=A1, resource=R, task_id="t-1")
-        self.assertEqual(cl["verdict"], "RESOURCE_LOCK_CLAIMED")
+        ctx = ready(A1, R)
+        cl = ct("resource_lock_claim", agent_id=A1, resource=R,
+                task_id=ctx["task_id"], context_token=ctx["context_token"])
+        self.assertEqual(cl["verdict"], "RESOURCE_LOCK_ACQUIRED")
+        lock_id = cl.get("lock_id", "")
 
         st = ct("resource_lock_status", resource=R)
         self.assertTrue(st["locked"])
         self.assertEqual(st["owner_agent_id"], A1)
 
-        rl = ct("resource_lock_release", agent_id=A1, resource=R)
+        rl = ct("resource_lock_release", agent_id=A1, resource=R, lock_id=lock_id)
         self.assertEqual(rl["verdict"], "RESOURCE_LOCK_RELEASED")
 
         st2 = ct("resource_lock_status", resource=R)
@@ -457,6 +464,7 @@ class FunctionalAcceptanceTest(unittest.TestCase):
                      "pre_action_guard", "workspace_audit", "list_agents", "list_tasks",
                      "file_hash", "lease_extend", "resource_lock_claim",
                      "resource_lock_release", "resource_lock_status",
+                     "resource_lock_heartbeat",
                      "workflow_next", "resume_task_context", "discipline_ping"}
         missing = required - names
         self.assertFalse(missing, f"Missing tools: {missing}")

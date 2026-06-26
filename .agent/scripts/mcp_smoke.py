@@ -191,7 +191,12 @@ def smoke_nominal_workflow() -> None:
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": graphify["verdict"],
         **ctx,
-    }, "claim_resource")
+    }, "resource_lock_claim")
+
+    hard_lock = call_tool("resource_lock_claim", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "ttl_seconds": 600, **ctx})
+    if hard_lock.get("verdict") != "RESOURCE_LOCK_ACQUIRED":
+        fail(f"resource_lock_claim should acquire hard write lock: {hard_lock}")
+    lock_id = hard_lock["lock_id"]
 
     claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600, **ctx, "action_lease_id": acquire_lease(agent_id, "claim_resource", ctx, resource="tmp-smoke-workflow/file.txt")})
     if claim.get("verdict") != "CLAIM_GRANTED" or claim.get("mode") != "patch_queue":
@@ -256,6 +261,10 @@ def smoke_nominal_workflow() -> None:
         fail(f"apply_patch failed: {applied}")
     if target.read_text(encoding="utf-8") != "line2\n":
         fail("apply_patch did not modify the target file through MCP")
+
+    released_lock = call_tool("resource_lock_release", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "lock_id": lock_id})
+    if released_lock.get("verdict") != "RESOURCE_LOCK_RELEASED":
+        fail(f"resource_lock_release failed: {released_lock}")
 
     applied_list = call_tool("list_patches", {"target": "tmp-smoke-workflow/file.txt", "status": "applied"})
     if applied_list.get("status") != "PATCHES_LISTED" or applied_list.get("count") != 1:

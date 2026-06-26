@@ -344,6 +344,19 @@ def main() -> None:
 
         patch_id = res_propose["patch_id"]
 
+        res_hard_lock = call_mcp(
+            temp_dir, "resource_lock_claim",
+            {
+                "agent_id": agent_id,
+                "resource": "tracked.txt",
+                "task_id": task_id,
+                "context_token": context_token,
+                "ttl_seconds": 600,
+            },
+        )
+        if res_hard_lock.get("verdict") != "RESOURCE_LOCK_ACQUIRED":
+            fail(f"resource_lock_claim failed: {res_hard_lock}")
+
         # --- guard & apply_patch ---
         res_guard_apply = run_cli(
             temp_dir, "guard",

@@ -132,9 +132,14 @@ def _propose(ctx: dict[str, str], agent_id: str, resource: str, diff: str) -> st
 
 
 def _apply(ctx: dict[str, str], agent_id: str, resource: str, patch_id: str) -> None:
+    lock = call_tool("resource_lock_claim", agent_id=agent_id, resource=resource,
+                     task_id=ctx.get("task_id", ""), context_token=ctx.get("context_token", ""),
+                     ttl_seconds=600)
+    assert lock["verdict"] == "RESOURCE_LOCK_ACQUIRED", lock
     lease_id = _lease(ctx, agent_id, resource, "apply_patch")
     apply_ = call_tool("apply_patch", agent_id=agent_id, patch_id=patch_id, action_lease_id=lease_id, **ctx)
     assert apply_["verdict"] == "PATCH_APPLIED", apply_
+    call_tool("resource_lock_release", agent_id=agent_id, resource=resource, lock_id=lock.get("lock_id", ""))
 
 
 def _release_claim(claim_id: str, agent_id: str) -> None:
@@ -212,7 +217,7 @@ class FullWorkflowLifecycleTest(unittest.TestCase):
 
         call_tool("graphify_query", agent_id=AGENT_A, task_id=task_id, context_token=ctx_tok, query="impact", resource=RESOURCE)
         step = call_tool("workflow_next", agent_id=AGENT_A, request="edit tracked", intent="write", resource=RESOURCE, task_id=task_id, context_token=ctx_tok, last_verdict="GRAPHIFY_QUERY_DONE")
-        self.assertEqual(step["must_call"]["tool"], "claim_resource")
+        self.assertEqual(step["must_call"]["tool"], "resource_lock_claim")
 
     def test_04_loop_breaker_stops_after_repeated_same_verdict(self) -> None:
         call_tool("register_agent", agent_id=AGENT_A, host_tool="test")
@@ -330,16 +335,19 @@ class LeaseResourceLockLifecycleTest(unittest.TestCase):
         self.assertEqual(claim2["verdict"], "ACTION_LEASE_CONSUMED", claim2)
 
     def test_09_resource_lock_lifecycle(self) -> None:
-        call_tool("register_agent", agent_id=AGENT_A, host_tool="test")
+        ctx = _ready_context(AGENT_A)
 
-        rlc = call_tool("resource_lock_claim", agent_id=AGENT_A, resource=RESOURCE, task_id="t-1")
-        self.assertEqual(rlc["verdict"], "RESOURCE_LOCK_CLAIMED", rlc)
+        rlc = call_tool("resource_lock_claim", agent_id=AGENT_A, resource=RESOURCE,
+                        task_id=ctx["task_id"], context_token=ctx["context_token"],
+                        ttl_seconds=600)
+        self.assertEqual(rlc["verdict"], "RESOURCE_LOCK_ACQUIRED", rlc)
 
         rls = call_tool("resource_lock_status", resource=RESOURCE)
         self.assertEqual(rls["verdict"], "RESOURCE_LOCK_HELD", rls)
         self.assertEqual(rls["owner_agent_id"], AGENT_A)
 
-        rlr = call_tool("resource_lock_release", agent_id=AGENT_A, resource=RESOURCE)
+        rlr = call_tool("resource_lock_release", agent_id=AGENT_A, resource=RESOURCE,
+                        lock_id=rlc.get("lock_id", ""))
         self.assertEqual(rlr["verdict"], "RESOURCE_LOCK_RELEASED", rlr)
 
         rls2 = call_tool("resource_lock_status", resource=RESOURCE)
@@ -400,7 +408,8 @@ class EdgeCasesAndRecoveryTest(unittest.TestCase):
         tools = call_list_tools()
         names = [t["name"] for t in tools]
         core = {"register_agent", "before_task", "scribe_query", "graphify_query", "claim_resource",
-                "propose_patch", "apply_patch", "finish_task", "workspace_audit", "pre_action_guard"}
+                "propose_patch", "apply_patch", "finish_task", "workspace_audit", "pre_action_guard",
+                "resource_lock_claim", "resource_lock_release", "resource_lock_heartbeat", "resource_lock_status"}
         self.assertTrue(core.issubset(names), f"Missing: {core - set(names)}")
 
     def test_15_finish_task_without_active_task_returns_error(self) -> None:

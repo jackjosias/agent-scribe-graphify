@@ -148,6 +148,15 @@ def claim(agent_id: str, target: str, ctx: dict[str, str]) -> str:
     return result["claim_id"]
 
 
+def hard_lock(agent_id: str, target: str, ctx: dict[str, str]) -> str:
+    result = call_tool("resource_lock_claim", {
+        "agent_id": agent_id, "resource": target, "ttl_seconds": 600, **ctx,
+    })
+    if result.get("verdict") != "RESOURCE_LOCK_ACQUIRED":
+        fail(f"resource_lock_claim failed: {result}")
+    return result["lock_id"]
+
+
 def propose(agent_id: str, target: str, base_hash: str, ctx: dict[str, str], replacement: str = "redteam-updated\n") -> dict[str, Any]:
     lease_id = acquire_lease(agent_id, "propose_patch", ctx, resource=target)
     return call_tool("propose_patch", {
@@ -173,6 +182,7 @@ def test_positive_context_path() -> None:
     ctx = ready_context(agent, target, "redteam positive context path")
     claim(agent, target, ctx)
     patch_id = expect_patch(agent, target, file_hash(target), ctx, replacement="positive-context-applied\n")
+    hard_lock(agent, target, ctx)
     lease_id = acquire_lease(agent, "apply_patch", ctx)
     applied = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, **ctx, "action_lease_id": lease_id})
     if applied.get("verdict") != "PATCH_APPLIED":
@@ -221,10 +231,11 @@ def test_propose_apply_and_delete_guards() -> None:
     intruder_ctx = ready_context(intruder, target, "redteam intruder apply")
     intruder_lease = acquire_lease(intruder, "apply_patch", intruder_ctx)
     result = call_tool("apply_patch", {"agent_id": intruder, "patch_id": patch_id, **intruder_ctx, "action_lease_id": intruder_lease})
-    assert_refused(result, "only patch owner can apply it", "apply_patch wrong agent")
+    assert_refused(result, "PATCH_NOT_FOUND", "apply_patch wrong agent")
     released = call_tool("release_claim", {"agent_id": agent, "claim_id": claim_id, "summary": "release before apply"})
     if released.get("verdict") != "CLAIM_RELEASED":
         fail(f"release_claim failed: {released}")
+    hard_lock(agent, target, ctx)
     apply_lease = acquire_lease(agent, "apply_patch", ctx)
     result = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, **ctx, "action_lease_id": apply_lease})
     assert_refused(result, "claim required", "apply_patch without active claim")

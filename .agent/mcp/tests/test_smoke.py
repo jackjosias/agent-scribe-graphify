@@ -45,6 +45,7 @@ EXPECTED_TOOL_SUBSET = {
     "resource_lock_claim",
     "resource_lock_release",
     "resource_lock_status",
+    "resource_lock_heartbeat",
     "portability_check",
     "bootstrap",
     "heartbeat",

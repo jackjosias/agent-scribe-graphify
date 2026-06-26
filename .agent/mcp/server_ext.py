@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 
 import server  # type: ignore
 from runtime import db, delete_ops, discipline, patch_queue, task_context  # type: ignore
+from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
     from runtime import portability  # type: ignore
@@ -470,6 +471,9 @@ def propose_patch(agent_id: str, target: str, base_hash: str, diff_text: str, ta
 
 
 def apply_patch(agent_id: str, patch_id: str, task_id: str = "", context_token: str = "", action_lease_id: str = "") -> Dict[str, Any]:
+    preflight = _preflight_lock(agent_id, patch_id, task_id, context_token, action_lease_id)
+    if preflight is not None:
+        return server.ok(preflight)
     _require_context_ready(
         agent_id, task_id, context_token, "",
         strict_resource=False,
@@ -890,6 +894,7 @@ def _claims_for(agent_id: str, resource: str) -> Dict[str, Any]:
 _READ_ONLY_FORBIDDEN = [
     "claim_resource", "propose_patch", "apply_patch",
     "delete_resource", "direct_file_edit",
+    "resource_lock_claim", "resource_lock_release", "resource_lock_heartbeat",
 ]
 
 
@@ -1150,6 +1155,9 @@ def workflow_next(
         must_tool = (payload.get("must_call") or {}).get("tool")
         if must_tool in {"claim_resource", "propose_patch"}:
             payload["must_call"]["args"].update({"task_id": task_id, "context_token": context_token})
+            if must_tool == "claim_resource":
+                payload["must_call"]["tool"] = "resource_lock_claim"
+                payload["reason"] = "Exclusive resource lock is recommended before apply_patch."
             return server.ok(payload)
         if must_tool == "before_task" and task_id:
             return server.ok({
@@ -1381,6 +1389,17 @@ def tool_schema(name: str) -> Dict[str, Any]:
             "required": ["resource"],
             "additionalProperties": False,
         }
+    if name == "resource_lock_heartbeat":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "resource": {"type": "string"},
+                "ttl_seconds": {"type": "integer"},
+            },
+            "required": ["agent_id", "resource"],
+            "additionalProperties": False,
+        }
     if name == "portability_check":
         return {
             "type": "object",
@@ -1561,39 +1580,14 @@ def resource_lock_claim(
     agent_id: str = "",
     resource: str = "",
     task_id: str = "",
-    ttl_seconds: int | None = None,
+    context_token: str = "",
+    ttl_seconds: int = 300,
 ) -> Dict[str, Any]:
-    """Claim an exclusive write lock on a resource.
-
-    Prevents N agents (including orchestrator sub-agents) from writing
-    to the same resource concurrently. Use before long multi-file operations.
-
-    Returns lock_id on success. Raises RESOURCE_ALREADY_LOCKED with owner
-    details if another agent holds the lock. Same agent calling again is
-    idempotent (returns existing lock).
-    """
-    if not agent_id:
-        return server.ok({"verdict": "AGENT_ID_REQUIRED", "state": "AGENT_ID_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
-    if not resource:
-        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED",
-                          "reason": "resource_lock_claim requires a resource path.", "forbidden": _LEASE_FORBIDDEN})
-    try:
-        result = discipline.resource_lock_claim(
-            agent_id=agent_id, resource=resource, task_id=task_id or "",
-            ttl_seconds=ttl_seconds,
-        )
-    except discipline.DisciplineError as exc:
-        return server.ok({
-            "verdict": exc.code,
-            "state": exc.code,
-            "reason": f"Resource is locked by another agent. Details: {exc.details}",
-            "details": exc.details,
-            "next_step": "Wait for the lock to expire or ask the owning agent to call resource_lock_release.",
-            "forbidden": _LEASE_FORBIDDEN,
-        })
-    except db.CoordinationError as exc:
-        return server.ok({"verdict": str(exc), "state": str(exc), "forbidden": _LEASE_FORBIDDEN})
-    return server.ok(result)
+    from runtime.resource_locks import resource_lock_claim as _rl_claim  # type: ignore
+    return server.ok(_rl_claim(
+        agent_id=agent_id, resource=resource, task_id=task_id,
+        context_token=context_token, ttl_seconds=ttl_seconds,
+    ))
 
 
 def resource_lock_release(
@@ -1601,37 +1595,23 @@ def resource_lock_release(
     resource: str = "",
     lock_id: str = "",
 ) -> Dict[str, Any]:
-    """Release an active resource lock held by this agent.
+    from runtime.resource_locks import resource_lock_release as _rl_release  # type: ignore
+    return server.ok(_rl_release(agent_id=agent_id, resource=resource, lock_id=lock_id))
 
-    Only the owning agent can release its own lock.
-    Releasing an already-released lock is idempotent (no error).
-    """
-    if not agent_id:
-        return server.ok({"verdict": "AGENT_ID_REQUIRED", "state": "AGENT_ID_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
-    if not resource:
-        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
-    try:
-        result = discipline.resource_lock_release(agent_id=agent_id, resource=resource, lock_id=lock_id or "")
-    except discipline.DisciplineError as exc:
-        return server.ok({"verdict": exc.code, "state": exc.code, "details": exc.details, "forbidden": _LEASE_FORBIDDEN})
-    except db.CoordinationError as exc:
-        return server.ok({"verdict": str(exc), "state": str(exc), "forbidden": _LEASE_FORBIDDEN})
-    return server.ok(result)
+
+def resource_lock_heartbeat(
+    agent_id: str = "",
+    resource: str = "",
+    ttl_seconds: int = 300,
+) -> Dict[str, Any]:
+    from runtime.resource_locks import resource_lock_heartbeat as _rl_hb  # type: ignore
+    return server.ok(_rl_hb(agent_id=agent_id, resource=resource, ttl_seconds=ttl_seconds))
 
 
 def resource_lock_status(resource: str = "") -> Dict[str, Any]:
-    """Check who holds the lock on a resource.
-
-    Safe to call from any agent. Does not mutate state.
-    Use before long operations to confirm the resource is free.
-    """
-    if not resource:
-        return server.ok({"verdict": "RESOURCE_REQUIRED", "state": "RESOURCE_REQUIRED", "forbidden": _LEASE_FORBIDDEN})
-    try:
-        result = discipline.resource_lock_status(resource=resource)
-    except discipline.DisciplineError as exc:
-        return server.ok({"verdict": exc.code, "state": exc.code, "forbidden": _LEASE_FORBIDDEN})
-    return server.ok(result)
+    from runtime.resource_locks import resource_lock_status as _rl_status  # type: ignore
+    result = _rl_status(resource=resource)
+    return server.ok(result) if result.get("ok") else server.ok(result)
 
 
 def portability_check(workspace_root: str = "") -> Dict[str, Any]:
@@ -2179,6 +2159,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["tenor_task_prompt"] = tenor_task_prompt
     # V2.15.5 new tool
     server.TOOLS["tenor_init_bridge"] = tenor_init_bridge
+    # V2.15.19 new tools
+    server.TOOLS["resource_lock_heartbeat"] = resource_lock_heartbeat
 
 handle = server.handle
 list_tools = server.list_tools

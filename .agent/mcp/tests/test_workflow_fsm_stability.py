@@ -156,8 +156,8 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         wn = self.call("workflow_next", agent_id=agent_id, request="edit tracked", intent="write",
                         resource="README.md",
                         task_id=task_id, context_token=ctx, last_verdict="GRAPHIFY_QUERY_DONE")
-        self.assertEqual(wn.get("must_call", {}).get("tool"), "claim_resource",
-                         f"write workflow_next should require claim_resource, got {wn}")
+        self.assertEqual(wn.get("must_call", {}).get("tool"), "resource_lock_claim",
+                         f"write workflow_next should require resource_lock_claim, got {wn}")
 
     def test_fake_read_cannot_downgrade_write_task(self) -> None:
         """Stored write intent wins over declared read — claim still required."""
@@ -175,7 +175,7 @@ class WorkflowFsmStabilityTest(unittest.TestCase):
         wn = self.call("workflow_next", agent_id=agent_id, request="inspect", intent="read",
                         resource="README.md",
                         task_id=task_id, context_token=ctx, last_verdict="GRAPHIFY_QUERY_DONE")
-        self.assertEqual(wn.get("must_call", {}).get("tool"), "claim_resource",
+        self.assertEqual(wn.get("must_call", {}).get("tool"), "resource_lock_claim",
                          f"stored write intent should win over declared read, got {wn}")
 
     # ── V2.15.18: strict workflow_next task context + file_hash cleanup ──
