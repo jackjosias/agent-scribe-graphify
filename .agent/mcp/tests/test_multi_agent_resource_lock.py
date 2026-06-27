@@ -452,24 +452,36 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         self.assertEqual(ap.get("verdict"), "PATCH_BASE_STALE", ap)
 
     def test_22_concurrent_claim_atomicity(self) -> None:
-        """Two agents race on same file — exactly one wins."""
+        """Two already-ready agents race on the same file — exactly one wins.
+
+        This test isolates resource_lock_claim atomicity. Agent registration,
+        before_task, scribe_query, and graphify_query are intentionally performed
+        before the barrier; otherwise a setup race can mask the lock invariant with
+        AGENT_UNKNOWN_OR_UNREGISTERED / task-context failures.
+        """
+        ctx_a = self.ready_write("race-agent-a")
+        ctx_b = self.ready_write("race-agent-b")
+        contexts = {
+            "race-agent-a": ctx_a,
+            "race-agent-b": ctx_b,
+        }
+
         results: list[dict[str, Any]] = []
         errors: list[str] = []
         barrier = threading.Barrier(2)
 
         def race(agent_id: str) -> None:
             try:
-                self.register(agent_id)
-                bt = self.call("before_task", agent_id=agent_id, request=f"edit README",
-                                intent="write", resource="README.md")
-                self.assertEqual(bt.get("verdict"), "BEFORE_TASK_OK", bt)
-                task_id = bt["task_id"]
-                ct = bt["context_token"]
-                self.call("scribe_query", agent_id=agent_id, task_id=task_id, context_token=ct, query="e", limit=1)
-                self.call("graphify_query", agent_id=agent_id, task_id=task_id, context_token=ct, query="i", resource="README.md")
+                ctx = contexts[agent_id]
                 barrier.wait(timeout=10)
-                lock = self.call("resource_lock_claim", agent_id=agent_id, resource="README.md",
-                                  task_id=task_id, context_token=ct, ttl_seconds=30)
+                lock = self.call(
+                    "resource_lock_claim",
+                    agent_id=agent_id,
+                    resource="README.md",
+                    task_id=ctx["task_id"],
+                    context_token=ctx["context_token"],
+                    ttl_seconds=30,
+                )
                 results.append(lock)
             except Exception as e:
                 errors.append(f"{agent_id}: {e}")
@@ -483,10 +495,14 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         for t in threads:
             t.join()
 
-        self.assertEqual(len(errors), 0, f"errors during race: {errors}")
-        self.assertEqual(len(results), 2, f"expected 2 results, got {results}")
+        self.assertEqual(len(errors), 0, f"errors during lock race: {errors}")
+        self.assertEqual(len(results), 2, f"expected 2 lock results, got {results}")
+
         ok_count = sum(1 for r in results if r.get("ok"))
-        self.assertEqual(ok_count, 1, f"exactly one should win: {results}")
+        busy_count = sum(1 for r in results if r.get("verdict") == "RESOURCE_BUSY")
+
+        self.assertEqual(ok_count, 1, f"exactly one lock claimant should win: {results}")
+        self.assertEqual(busy_count, 1, f"exactly one lock claimant should be busy: {results}")
 
     def test_23_concurrent_claim_atomicity_repeated(self) -> None:
         """Race 10 times to validate atomicity under repeated contention."""
