@@ -10,6 +10,16 @@ build/
 scribe-out/
 graphify-out/
 
+.agent/state/runtime/
+.agent/state/redteam/
+.agent/state/**/*.sqlite
+.agent/state/**/*.sqlite-wal
+.agent/state/**/*.sqlite-shm
+.agent/state/**/*.lock
+.agent/state/**/*.backup-*
+.pytest_cache/
+
+
 # OS
 .DS_Store
 Thumbs.db
