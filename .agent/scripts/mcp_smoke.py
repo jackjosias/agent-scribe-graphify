@@ -305,6 +305,11 @@ def smoke_nominal_workflow() -> None:
     }, "finish_task")
 
     finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
+    if finished.get("verdict") == "SCRIBE_COMMIT_GATE_REQUIRED":
+        resolved = call_tool("scribe_commit_gate_resolve", {"agent_id": agent_id, **ctx, "decision": "commit"})
+        if resolved.get("verdict") != "SCRIBE_COMMIT_GATE_RESOLVED":
+            fail(f"scribe commit gate resolve failed: {resolved}")
+        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
     if finished.get("verdict") != "TASK_FINISHED_OK":
         fail(f"finish failed: {finished}")
 
@@ -400,7 +405,7 @@ def smoke_tool_listing() -> None:
     proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), env=_smoke_env(), text=True, capture_output=True, timeout=30)
     if proc.returncode != 0:
         fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
-    for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "apply_patch", "delete_resource"):
+    for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "scribe_commit_gate_status", "scribe_commit_gate_resolve", "apply_patch", "delete_resource"):
         if tool not in proc.stdout:
             fail(f"missing tool from server_entry --list-tools: {tool}")
 

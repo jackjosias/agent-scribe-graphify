@@ -46,6 +46,8 @@ EXPECTED_TOOL_SUBSET = {
     "resource_lock_release",
     "resource_lock_status",
     "resource_lock_heartbeat",
+    "scribe_commit_gate_status",
+    "scribe_commit_gate_resolve",
     "portability_check",
     "bootstrap",
     "heartbeat",

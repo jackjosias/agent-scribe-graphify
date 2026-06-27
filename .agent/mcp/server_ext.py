@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, task_context  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, scribe_commit_gate, task_context  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -552,6 +552,42 @@ def _resolve_stored_task_intent(agent_id: str, task_id: str) -> dict[str, Any]:
     }
 
 
+def _scribe_gate_error(exc: scribe_commit_gate.ScribeCommitGateError) -> server.ToolError:
+    return server.ToolError(exc.code)
+
+
+def _write_gate_record(record: dict[str, Any]) -> dict[str, Any]:
+    result = scribe_record(
+        agent_id=str(record.get("agent_id") or ""),
+        request=str(record.get("summary") or "task completed"),
+        summary=str(record.get("summary") or ""),
+        touched_resources=list(record.get("touched_resources") or []),
+        verdict=str(record.get("verdict") or ""),
+        tags=list(record.get("tags") or []),
+        record_type=str(record.get("type") or "TASK_SUMMARY").lower(),
+        severity="medium",
+        resources=list(record.get("touched_resources") or []),
+    )
+    payload = json.loads(result["content"][0]["text"])
+    if payload.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+        raise server.ToolError("SCRIBE_COMMIT_GATE_RECORD_WRITE_FAILED")
+    return payload
+
+
+def _finish_ok_after_gate(agent_id: str, summary: str, task_id: str, context_token: str) -> Dict[str, Any]:
+    result = _BASE_FINISH_TASK(agent_id=agent_id, summary=summary)
+    payload = json.loads(result["content"][0]["text"])
+    if payload.get("verdict") == "TASK_FINISHED_OK" and (task_id or context_token):
+        try:
+            payload["task_context"] = task_context.finish_task_context(agent_id, task_id, context_token)
+        except task_context.TaskContextError as exc:
+            raise _context_error(exc) from exc
+        payload["next_state_hint"] = "READY_FOR_NEXT_TASK"
+        payload["terminal"] = True
+        return server.ok(payload)
+    return result
+
+
 def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "") -> Dict[str, Any]:
     ctx = _resolve_stored_task_intent(agent_id, task_id)
     normalized_intent = (intent or "").strip().lower()
@@ -570,26 +606,88 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
     else:
         is_read_only = normalized_intent in _SAFE_FINISH_INTENTS
 
-    if not is_read_only:
-        lease_check = _require_action_lease(
-            action_lease_id, "finish_task", agent_id, "finish_task",
-            task_id=task_id,
+    if is_read_only:
+        return _finish_ok_after_gate(agent_id, summary, task_id, context_token)
+
+    lease_check = _require_action_lease(
+        action_lease_id, "finish_task", agent_id, "finish_task",
+        task_id=task_id,
+    )
+    if lease_check is not None:
+        return lease_check
+
+    try:
+        task_context.require_context_ready(agent_id, task_id, context_token, allowed_intents=_MUTATING_CONTEXT_INTENTS)
+    except task_context.TaskContextError as exc:
+        raise _context_error(exc) from exc
+
+    pending = server._agent_pending_patches(agent_id)
+    if pending:
+        return server.ok({"verdict": "FINISH_REFUSED_PENDING_PATCHES", "pending_patches": pending})
+
+    claims = server._active_claims_for(agent_id)
+    if claims["owned"]:
+        return server.ok({
+            "ok": False,
+            "verdict": "FINISH_REFUSED_ACTIVE_CLAIMS",
+            "state": "ACTIVE_CLAIM_BEFORE_FINISH",
+            "active_claims": claims["owned"],
+            "forbidden": ["finish_task", "direct_file_edit"],
+        })
+
+    try:
+        gate = scribe_commit_gate.require_or_create(agent_id, task_id, context_token, summary=summary)
+    except scribe_commit_gate.ScribeCommitGateError as exc:
+        raise _scribe_gate_error(exc) from exc
+    if gate["status"] == scribe_commit_gate.PENDING:
+        return server.ok({
+            "ok": True,
+            "verdict": "SCRIBE_COMMIT_GATE_REQUIRED",
+            "state": "SCRIBE_COMMIT_GATE_REQUIRED",
+            "gate_id": gate["gate_id"],
+            "task_id": task_id,
+            "proposed_record": gate["proposed_record"],
+            "allowed_decisions": gate["allowed_decisions"],
+            "terminal": False,
+            "must_call": {
+                "tool": "scribe_commit_gate_resolve",
+                "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "decision": "commit"},
+            },
+            "forbidden": ["direct_file_edit"],
+        })
+    return _finish_ok_after_gate(agent_id, summary, task_id, context_token)
+
+
+def scribe_commit_gate_status(agent_id: str, task_id: str, context_token: str) -> Dict[str, Any]:
+    try:
+        return server.ok(scribe_commit_gate.get_status(agent_id, task_id, context_token))
+    except scribe_commit_gate.ScribeCommitGateError as exc:
+        raise _scribe_gate_error(exc) from exc
+
+
+def scribe_commit_gate_resolve(
+    agent_id: str,
+    task_id: str,
+    context_token: str,
+    decision: str,
+    edited_record: Dict[str, Any] | None = None,
+    proposed_record: Dict[str, Any] | None = None,
+    skip_reason: str = "",
+) -> Dict[str, Any]:
+    record = edited_record if edited_record is not None else proposed_record
+    try:
+        resolved = scribe_commit_gate.resolve(
+            agent_id,
+            task_id,
+            context_token,
+            decision,
+            _write_gate_record,
+            edited_record=record,
+            skip_reason=skip_reason,
         )
-        if lease_check is not None:
-            return lease_check
-    result = _BASE_FINISH_TASK(agent_id=agent_id, summary=summary)
-    if task_id or context_token:
-        payload = json.loads(result["content"][0]["text"])
-        if payload.get("verdict") == "TASK_FINISHED_OK":
-            try:
-                payload["task_context"] = task_context.finish_task_context(agent_id, task_id, context_token)
-            except task_context.TaskContextError as exc:
-                raise _context_error(exc) from exc
-            # V2.15.17: terminal hint for host guidance
-            payload["next_state_hint"] = "READY_FOR_NEXT_TASK"
-            payload["terminal"] = True
-            return server.ok(payload)
-    return result
+    except scribe_commit_gate.ScribeCommitGateError as exc:
+        raise _scribe_gate_error(exc) from exc
+    return server.ok(resolved)
 
 
 def scribe_record(
@@ -1040,6 +1138,14 @@ def workflow_next(
             "state": "READY_FOR_NEXT_TASK",
             "reason": "Previous task finished. No pending actions. Awaiting next user task.",
         })
+    if last == "SCRIBE_COMMIT_GATE_REQUIRED":
+        return server._next_payload(
+            state="SCRIBE_COMMIT_GATE_REQUIRED",
+            tool="scribe_commit_gate_resolve",
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "decision": "commit"},
+            reason="Mutating finish_task is blocked until an explicit SCRIBE memory decision is resolved.",
+            forbidden=["finish_task", "direct_file_edit"],
+        )
 
     stop = _track_loop(agent_id, resource, last)
     if stop is not None:
@@ -1285,6 +1391,10 @@ def tool_schema(name: str) -> Dict[str, Any]:
         }, {})
     if name == "finish_task":
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string"})
+    if name == "scribe_commit_gate_status":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}}, "required": ["agent_id", "task_id", "context_token"], "additionalProperties": False}
+    if name == "scribe_commit_gate_resolve":
+        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}, "decision": {"type": "string"}, "edited_record": {"type": "object"}, "proposed_record": {"type": "object"}, "skip_reason": {"type": "string"}}, "required": ["agent_id", "task_id", "context_token", "decision"], "additionalProperties": False}
     if name == "scribe_record":
         return {
             "type": "object",
@@ -2123,6 +2233,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.propose_patch = propose_patch
     server.delete_resource = delete_resource
     server.finish_task = finish_task
+    server.scribe_commit_gate_status = scribe_commit_gate_status
+    server.scribe_commit_gate_resolve = scribe_commit_gate_resolve
     server.scribe_record = scribe_record
     server.list_tasks = list_tasks
     server.task_status = task_status
@@ -2139,6 +2251,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["apply_patch"] = apply_patch
     server.TOOLS["delete_resource"] = delete_resource
     server.TOOLS["finish_task"] = finish_task
+    server.TOOLS["scribe_commit_gate_status"] = scribe_commit_gate_status
+    server.TOOLS["scribe_commit_gate_resolve"] = scribe_commit_gate_resolve
     server.TOOLS["scribe_record"] = scribe_record
     server.TOOLS["list_tasks"] = list_tasks
     server.TOOLS["task_status"] = task_status

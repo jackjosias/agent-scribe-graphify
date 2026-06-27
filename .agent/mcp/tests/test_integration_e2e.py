@@ -153,6 +153,11 @@ def _finish(ctx: dict[str, str], agent_id: str, resource: str = "", claim_id: st
     _release_claim(claim_id, agent_id)
     lease_id = _lease(ctx, agent_id, resource, "finish_task")
     ft = call_tool("finish_task", agent_id=agent_id, action_lease_id=lease_id, **ctx)
+    if ft["verdict"] == "SCRIBE_COMMIT_GATE_REQUIRED":
+        resolved = call_tool("scribe_commit_gate_resolve", agent_id=agent_id, decision="commit", **ctx)
+        assert resolved["verdict"] == "SCRIBE_COMMIT_GATE_RESOLVED", resolved
+        lease_id = _lease(ctx, agent_id, resource, "finish_task")
+        ft = call_tool("finish_task", agent_id=agent_id, action_lease_id=lease_id, **ctx)
     assert ft["verdict"] in ("TASK_FINISHED", "TASK_FINISHED_OK"), ft
 
 
