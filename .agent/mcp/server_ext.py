@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, scribe_commit_gate, task_context  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, scribe_commit_gate, task_context  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -1332,6 +1332,18 @@ def task_status(task_id: str) -> Dict[str, Any]:
         raise _context_error(exc) from exc
 
 
+def root_hygiene_status(max_parent_depth: int = 4, strict: bool = False) -> Dict[str, Any]:
+    try:
+        report = root_hygiene.assert_safe_project_root(server.ROOT, strict=bool(strict))
+    except RuntimeError as exc:
+        report = root_hygiene.inspect_root_hygiene(server.ROOT, max_parent_depth=max_parent_depth)
+        report["strict_error"] = str(exc)
+    if max_parent_depth != 4:
+        report = root_hygiene.inspect_root_hygiene(server.ROOT, max_parent_depth=max_parent_depth)
+    report["formatted"] = root_hygiene.format_root_hygiene_report(report)
+    return server.ok(report)
+
+
 def wait_for_tasks(
     task_ids: List[str] | None = None,
     agent_id: str = "",
@@ -1372,6 +1384,8 @@ def tool_schema(name: str) -> Dict[str, Any]:
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
     if name == "resume_task_context":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}}, "additionalProperties": False}
+    if name == "root_hygiene_status":
+        return {"type": "object", "properties": {"max_parent_depth": {"type": "integer"}, "strict": {"type": "boolean"}}, "additionalProperties": False}
     if name in {"scribe_query", "graphify_query"}:
         return _schema_props(_BASE_TOOL_SCHEMA(name), {"agent_id": "string", "task_id": "string", "context_token": "string"})
     if name == "claim_resource":
@@ -2239,6 +2253,7 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.list_tasks = list_tasks
     server.task_status = task_status
     server.wait_for_tasks = wait_for_tasks
+    server.root_hygiene_status = root_hygiene_status
     server.tool_schema = tool_schema
     server.TOOLS["workflow_next"] = workflow_next
     server.TOOLS["workflow_snapshot"] = workflow_snapshot
@@ -2257,6 +2272,7 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["list_tasks"] = list_tasks
     server.TOOLS["task_status"] = task_status
     server.TOOLS["wait_for_tasks"] = wait_for_tasks
+    server.TOOLS["root_hygiene_status"] = root_hygiene_status
     server.TOOLS["discipline_ping"] = discipline_ping
     server.TOOLS["pre_action_guard"] = pre_action_guard
     server.TOOLS["workspace_audit"] = workspace_audit

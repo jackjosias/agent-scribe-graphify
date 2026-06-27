@@ -9,6 +9,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+MCP_DIR_FOR_LOCK = Path(__file__).resolve().parents[1] / "mcp"
+if str(MCP_DIR_FOR_LOCK) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR_FOR_LOCK))
+from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_lock
+
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
 REDTEAM_DIR = ROOT / ".agent" / "state" / "redteam"
@@ -326,4 +331,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        with validation_runtime_lock(ROOT, timeout_seconds=300):
+            print("VALIDATION_RUNTIME_LOCK_ACQUIRED")
+            exit_code = main()
+            print("VALIDATION_RUNTIME_LOCK_RELEASED")
+            raise SystemExit(exit_code)
+    except ValidationRuntimeBusy as exc:
+        raise SystemExit(f"VALIDATION_RUNTIME_BUSY: {exc.lock_path}")
