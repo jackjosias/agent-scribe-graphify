@@ -169,8 +169,56 @@ journal:
     multi_agent_context:
       surface: ""
       other_agents_active: []
+  - id: "JOURNAL-001"
+    date: "2026-06-26"
+    mode: "STANDARD"
+    agent_type: "cli"
+    surface: "field-test"
+    hot_entries_consulted: ["INV-F002", "INV-F003", "PAT-GIT-001", "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001"]
+    l0_abstract: "V2.15.19.1 field test passed for same-file hard resource lock conflict, with an important correction: the valid proof is resource_lock_claim/RESOURCE_BUSY, not legacy claim_resource."
+    pourquoi: "Two OpenCode agents were used as weak-host field testers on branch v2 commit 1ad68e4. A first attempt was ambiguous because the agent confused legacy claim_resource/CLAIM_GRANTED with the new hard resource_lock_claim. The valid second attempt proved the intended invariant: Terminal A acquired a hard resource_lock_claim on README.md with RESOURCE_LOCK_ACQUIRED, Terminal B attempted resource_lock_claim on the same file and received RESOURCE_BUSY with the owner_agent_id of Terminal A, no apply_patch was executed by Terminal B, no direct write was used, and README.md remained unchanged."
+    scribe_delta: "JOURNAL-001"
+    decision_rationale:
+      scope:
+        kind: "file"
+        ref: "README.md"
+      why: "The same-file hard lock mechanism must be validated against weak LLM hosts that may skip or confuse workflow steps."
+      alternatives_rejected:
+        - "Treating CLAIM_GRANTED from legacy claim_resource as proof of hard resource_lock success."
+        - "Calling the system production-ready after one same-file conflict test."
+        - "Ignoring the memory pollution risk caused by direct manual edits to AGENT-MEMOIRE_PROJECT_STATUS.scribe."
+      constraint: "DIRECT_FS_OUTSIDE_SANDBOX remains OPEN, so global write safety is not proven."
+      do_not_repropose:
+        - "Do not describe claim_resource/CLAIM_GRANTED as RESOURCE_LOCK_ACQUIRED."
+        - "Do not claim MULTI_AGENT_SAFE_GLOBAL from this test."
+        - "Do not claim PRODUCTION_READY from this test."
+        - "Do not treat OpenCode field pass as proof that the host understands the protocol."
+    evidence:
+      type: "OBSERVED"
+      source: "OpenCode field logs, local run"
+      observable: "Terminal A hard resource_lock_claim returned RESOURCE_LOCK_ACQUIRED; Terminal B hard resource_lock_claim returned RESOURCE_BUSY; README.md hash remained unchanged."
+    confirmed_result:
+      milestone: "V2.15.19.1_2_AGENT_WRITE_CONFLICT_FIELD_PASS"
+      validated_scope:
+        - "same-file hard resource_lock_claim conflict blocking"
+        - "Terminal B blocked by RESOURCE_BUSY"
+        - "no README.md mutation from blocked agent"
+      not_validated:
+        - "production autonomous safety"
+        - "DIRECT_FS_OUTSIDE_SANDBOX closure"
+        - "wait queue"
+        - "Graphify semantic locks"
+        - "worktree per agent"
+        - "global multi-agent safety"
+        - "propose_patch parallelization without legacy claim_resource"
+    multi_agent_context:
+      surface: "OpenCode + OpenCode"
+      other_agents_active:
+        - "Terminal A lock holder"
+        - "Terminal B conflict tester"
+
 metrics:
-  sessions_total: 1
+  sessions_total: 2
   scars_total: 0
   vaccins_actifs: 0
   taux_recidive: 0.0
