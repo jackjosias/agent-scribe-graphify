@@ -3,8 +3,10 @@ state/runtime/coordination.sqlite
 state/runtime/coordination.sqlite-wal
 state/runtime/coordination.sqlite-shm
 state/runtime/coordination.backup-*.sqlite
+state/runtime/backups/
 state/runtime/events.log
 state/runtime/events.log.*
+state/install/
 state/proof/
 state/proof/*.json
 
