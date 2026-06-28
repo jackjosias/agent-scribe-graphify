@@ -7,6 +7,8 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+
+from scribe_output_paths import scribe_out_dir
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,7 +38,7 @@ class QuickIndex:
 
 
 def index_path_for_scribe(scribe_path: Path) -> Path:
-    return scribe_path.resolve().parent / "scribe-out" / DEFAULT_INDEX_NAME
+    return scribe_out_dir(scribe_path.resolve().parent) / DEFAULT_INDEX_NAME
 
 
 def ensure_quick_index(scribe_path: Path, index_path: Path | None = None) -> QuickIndex:

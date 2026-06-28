@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 from scribe_workflow_ack import check_workflow_ack
+from scribe_output_paths import scribe_out_dir
 
 
-DEFAULT_LOCK_PATH = Path("scribe-out") / "locks" / "scribe.lock"
+DEFAULT_LOCK_PATH = scribe_out_dir(Path.cwd()) / "locks" / "scribe.lock"
 DEFAULT_SURFACE = "scribe-memory"
 DEFAULT_TTL_MINUTES = 30
 LOCK_PATH_ENV = "SCRIBE_LOCK_PATH"

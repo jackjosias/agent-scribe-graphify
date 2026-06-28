@@ -50,6 +50,8 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from scribe_output_paths import scribe_out_dir
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,7 @@ def _load_key(project_root: Path) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _store_path(project_root: Path) -> Path:
-    return project_root / "scribe-out" / _PROOF_STORE_FILENAME
+    return scribe_out_dir(project_root) / _PROOF_STORE_FILENAME
 
 
 def _load_store(project_root: Path) -> dict[str, Any]:

@@ -41,7 +41,7 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertTrue((root / ".agent" / "workflow" / "scribe" / "scribe").exists())
             self.assertTrue((root / ".agent" / "workflow" / "scribe" / "scribe-rag").exists())
             self.assertTrue((root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").exists())
-            self.assertTrue((root / "scribe-out" / "state.json").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "scribe-out" / "state.json").exists())
             self.assertTrue((root / "AGENTS.md").exists())
             self.assertTrue((root / ".agent" / "rules" / "scribe.md").exists())
             self.assertTrue((root / ".agent" / ".gitignore").exists())
@@ -101,7 +101,7 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertIn("Graphify: placeholder initialisé", infos[0])
             self.assertEqual(warnings, [])
             self.assertEqual(errors, [])
-            self.assertTrue((root / "graphify-out" / "GRAPH_REPORT.md").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "graphify-out" / "GRAPH_REPORT.md").exists())
 
     def test_graphify_missing_is_error_when_app_code_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

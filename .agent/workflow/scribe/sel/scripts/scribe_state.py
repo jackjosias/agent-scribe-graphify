@@ -14,6 +14,7 @@ from typing import Any
 from scribe_doctor_model import parse_yaml
 from scribe_lock import DEFAULT_SURFACE, active_lock
 from scribe_clean import print_scribe_noise_warning
+from scribe_output_paths import scribe_out_dir
 from scribe_workflow_ack import (
     check_workflow_ack,
     parse_agent_list,
@@ -23,7 +24,7 @@ from scribe_workflow_ack import (
 
 
 DEFAULT_SCRIBE_PATH = Path("AGENT-MEMOIRE_PROJECT_STATUS.scribe")
-DEFAULT_STATE_PATH = Path("scribe-out") / "state.json"
+DEFAULT_STATE_PATH = scribe_out_dir(Path.cwd()) / "state.json"
 STATE_PATH_ENV = "SCRIBE_STATE_PATH"
 WRITE_KINDS = {
     "memory_append",
@@ -63,8 +64,8 @@ def state_path_for_scribe(scribe_path: Path) -> Path:
     if override:
         return Path(override)
     if scribe_path.is_absolute():
-        return scribe_path.parent / "scribe-out" / "state.json"
-    return DEFAULT_STATE_PATH
+        return scribe_out_dir(scribe_path.parent) / "state.json"
+    return scribe_out_dir(Path.cwd()) / "state.json"
 
 
 def utc_now_iso() -> str:

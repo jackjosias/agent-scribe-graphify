@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scribe_output_paths import scribe_out_dir
 
-DEFAULT_WORKFLOW_ACK_PATH = Path("scribe-out") / "workflow-acks.json"
+
+DEFAULT_WORKFLOW_ACK_PATH = scribe_out_dir(Path.cwd()) / "workflow-acks.json"
 WORKFLOW_ACK_PATH_ENV = "SCRIBE_WORKFLOW_ACK_PATH"
 DEFAULT_REQUIRED_AGENTS: tuple[str, ...] = ()
 DEFAULT_WORKFLOW_FILES = (

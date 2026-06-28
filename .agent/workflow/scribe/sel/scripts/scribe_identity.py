@@ -14,9 +14,10 @@ from typing import Any
 
 from scribe_lock import configured_lock_path, read_lock, remove_lock, stale_reason
 from scribe_state import DEFAULT_SCRIBE_PATH, check_sync, print_state_summary
+from scribe_output_paths import scribe_out_dir
 
 
-DEFAULT_PRESENCE_DIR = Path("scribe-out") / "presence"
+DEFAULT_PRESENCE_DIR = scribe_out_dir(Path.cwd()) / "presence"
 PRESENCE_DIR_ENV = "SCRIBE_PRESENCE_DIR"
 AGENT_ID_ENV = "SCRIBE_AGENT_ID"
 DEFAULT_TTL_SECONDS = 120

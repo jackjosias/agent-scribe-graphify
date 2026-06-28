@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from scribe_output_paths import scribe_out_dir
+
 
 SEL_ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_ROOT = SEL_ROOT.parent
@@ -21,7 +23,7 @@ def find_project_root(path: Path) -> Path:
 
 
 PROJECT_ROOT = find_project_root(BUNDLE_ROOT)
-BUNDLE_GRAPH_DIR = PROJECT_ROOT / "scribe-out" / "bundle-graph" / BUNDLE_ROOT.name
+BUNDLE_GRAPH_DIR = scribe_out_dir(PROJECT_ROOT) / "bundle-graph" / BUNDLE_ROOT.name
 DEFAULT_BUDGET = 1200
 GRAPH_SKIP_DIRS = {"adapters", "graphify-out", "__pycache__", ".pytest_cache", ".mypy_cache", "vendor"}
 GRAPH_SKIP_PATTERNS = {"*.pyc", "*.pyo", "*.min.js", "*.min.css", "*.map"}

@@ -21,7 +21,7 @@ Rules:
 - Root `./scribe` and root `scripts/` are not required for normal operation.
 - Generate root adapters only for a legacy project that explicitly needs them.
 - Do not store generated root adapters inside the bundle; the installer templates are the source of truth.
-- Generated doctor reports and bundle graphs belong under `scribe-out/`, never at repository root and never inside the bundle.
+- Generated doctor reports and bundle graphs belong under `.agent/state/outputs/scribe-out/`, never at repository root and never inside the bundle.
 - Structural app facts belong to Graphify; causal decisions belong to `AGENT-MEMOIRE_PROJECT_STATUS.scribe`.
 
 ## Rootless Install
@@ -37,9 +37,9 @@ $SCRIBE_RAG context
 
 Expected result:
 - `AGENTS.md` has a managed SCRIBE block pointing to the bundle-local command.
-- `.graphifyignore` excludes `.agent/`, `scribe-out/`, and SCRIBE memory from the app graph.
+- `.graphifyignore` excludes `.agent/`, legacy `scribe-out/`, and SCRIBE memory from the app graph.
 - `AGENT-MEMOIRE_PROJECT_STATUS.scribe` exists; if missing, it is created from the master template.
-- `scribe-out/state.json` exists and records the real bootstrap writer.
+- `.agent/state/outputs/scribe-out/state.json` exists and records the real bootstrap writer.
 - No root `scribe` file is created.
 - No root `scripts/` directory is created.
 - The active command remains `.agent/workflow/scribe/scribe`.

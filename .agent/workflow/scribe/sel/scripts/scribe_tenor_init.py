@@ -16,6 +16,7 @@ from scribe_coordination import active_claims_with_cleanup
 from scribe_identity import DEFAULT_TTL_SECONDS, write_presence
 from scribe_lock import DEFAULT_SURFACE, active_lock, remove_lock, stale_reason
 from scribe_state import AGENT_TYPES, check_sync
+from scribe_output_paths import graphify_out_dir, migrate_all_legacy_outputs
 
 # Proof signer — graceful fallback if module not yet installed
 try:
@@ -33,7 +34,7 @@ except Exception:  # noqa: BLE001
 
 PROJECT_SCRIBE = Path("AGENT-MEMOIRE_PROJECT_STATUS.scribe")
 SKILL_PATH = Path(".agent") / "skills" / "init-tenor" / "SKILL.md"
-GRAPH_REPORT_PATH = Path("graphify-out") / "GRAPH_REPORT.md"
+GRAPH_REPORT_PATH = graphify_out_dir(Path.cwd()) / "GRAPH_REPORT.md"
 RAG_COMMAND = Path(".agent") / "workflow" / "scribe" / "scribe-rag"
 
 

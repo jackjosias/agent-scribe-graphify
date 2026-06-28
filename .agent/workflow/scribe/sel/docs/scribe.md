@@ -27,8 +27,8 @@
 # ════════════════════════════════════════════════════════════════════════════════
 #
 # COUCHE 1 — GRAPHIFY
-#   graphify-out/              → graphe applicatif hôte.
-#   scribe-out/bundle-graph/   → graphe du bundle SEL pour maintenance tooling.
+#   .agent/state/outputs/graphify-out/ → graphe applicatif hôte.
+#   .agent/state/outputs/scribe-out/bundle-graph/   → graphe du bundle SEL pour maintenance tooling.
 #   Rôle                       → structure du code: imports, call graph, god-nodes,
 #                                communautés, blast radius, relations EXTRACTED/INFERRED.
 #   Commandes app              → graphify query "..." | graphify path "A" "B" |
@@ -120,8 +120,8 @@
 #   Le scope de commit/push par défaut est le produit applicatif hôte.
 #   `AGENT-MEMOIRE_PROJECT_STATUS.scribe` peut être versionné quand l'équipe veut
 #   partager la mémoire causale entre agents/humains.
-#   `graphify-out/` ne se versionne pas par défaut : c'est un graphe généré.
-#   `scribe-out/` ne se versionne pas par défaut : c'est de l'état runtime local.
+#   `.agent/state/outputs/graphify-out/` ne se versionne pas par défaut : c'est un graphe généré.
+#   `.agent/state/outputs/scribe-out/` ne se versionne pas par défaut : c'est de l'état runtime local.
 #   `.agent/` ne se versionne que si l'équipe maintient volontairement l'outillage.
 #
 # RÈGLE ABSOLUE D'ÉCRITURE SCRIBE
@@ -178,7 +178,7 @@
 #
 # 3.0 CYCLE OPÉRATIONNEL PAR TÂCHE RÉELLE — NON-NÉGOCIABLE
 #   Pour chaque tâche concrète sur le projet hote :
-#   1. Lire graphify-out/GRAPH_REPORT.md avant de comprendre le code
+#   1. Lire .agent/state/outputs/graphify-out/GRAPH_REPORT.md avant de comprendre le code
 #   2. Lancer `scribe whoami --type <type> --surface idle`, puis `scribe workflow read/check` et `scribe coordination status`
 #   3. Quand une tache arrive, prendre un `scribe coordination claim` semantique avant les fichiers partages
 #   4. Choisir le plus petit tier sûr : NANO = `scribe-rag context`, STANDARD = build/context/challenge, CRITICAL = preflight strict.
@@ -193,7 +193,7 @@
 #          Bug > 2 tentatives, régression, rollback coûteux ou smoke visuel cassé → SCAR immédiat avec cause_racine, resolution, test_binding.
 #          Avant une tâche proche d une cicatrice connue → scribe-rag query/explain/challenge obligatoire pour exploiter la mémoire.
 #   9. Relancer scribe doctor pour vérifier la mémoire après écriture
-#      └── Les rapports Markdown doctor vont toujours dans `scribe-out/`.
+#      └── Les rapports Markdown doctor vont toujours dans `.agent/state/outputs/scribe-out/`.
 #
 # RÈGLE SIMPLE :
 #   Graphify avant de comprendre le code.
@@ -204,25 +204,25 @@
 #   SEL doctor AVANT d'écrire la mémoire.
 #   SEL doctor APRÈS avoir écrit la mémoire.
 #   scribe doctor ne complète rien : il vérifie seulement.
-#   scribe doctor écrit ses rapports Markdown dans `scribe-out/`, jamais à la racine.
+#   scribe doctor écrit ses rapports Markdown dans `.agent/state/outputs/scribe-out/`, jamais à la racine.
 #
 # GARDE DOCTOR — OBLIGATOIRE POUR TOUTE ÉVOLUTION SCRIBE :
 #   Toute modification de AGENT-MEMOIRE_PROJECT_STATUS.scribe suit ce protocole :
 #   0. AVANT LOCK : `<SCRIBE> workflow check --agent <name>`
 #      └── `lock acquire` refuse automatiquement ACK_REQUIRED ou ACK_STALE.
 #   1. AVANT : `<SCRIBE> doctor --suggest-fix`
-#      └── Rapport par défaut : `scribe-out/scribe-doctor-report.md`
+#      └── Rapport par défaut : `.agent/state/outputs/scribe-out/scribe-doctor-report.md`
 #      └── Si ERRORS > 0 : STOP, corriger la mémoire existante avant d'ajouter quoi que ce soit.
 #   2. ÉCRITURE : append/update incrémental uniquement, jamais overwrite global.
 #   3. APRÈS : `<SCRIBE> doctor --suggest-fix`
-#      └── Rapport par défaut : `scribe-out/scribe-doctor-report.md`
+#      └── Rapport par défaut : `.agent/state/outputs/scribe-out/scribe-doctor-report.md`
 #      └── Si ERRORS > 0 : corriger immédiatement ou restaurer le patch mémoire fautif.
 #   4. SI ÉCRITURE PAR COMMANDE : préférer `<SCRIBE> guard -- <command>`
 #      └── Ce wrapper exécute doctor avant, lance la commande, puis exécute doctor après.
-#      └── Rapports par défaut : `scribe-out/scribe-doctor-before-report.md` et `scribe-out/scribe-doctor-after-report.md`.
+#      └── Rapports par défaut : `.agent/state/outputs/scribe-out/scribe-doctor-before-report.md` et `.agent/state/outputs/scribe-out/scribe-doctor-after-report.md`.
 #
 # 3.1 PHASE 1 : ORIENTATION (Début de session) — OBLIGATOIRE
-#   ├── LIS graphify-out/GRAPH_REPORT.md          (carte structurelle)
+#   ├── LIS .agent/state/outputs/graphify-out/GRAPH_REPORT.md          (carte structurelle)
 #   ├── LIS [AXIAL_NEXUS_CORE] du .scribe         (invariants)
 #   ├── LIS les l0_abstract Tier HOT du .scribe   (mémoire causale)
 #   ├── LIS [EPISODIC_SCAFFOLDING] du .scribe     (contexte immédiat)
@@ -295,7 +295,7 @@
 # ; Scribe_Version  ; 3.2 (Axial-Hybrid + Graphify + Doctor-ready)
 # ; Session_Count   ; 0
 # ; Last_Update     ; YYYY-MM-DDTHH:mm:ssZ
-# ; Graphify_Graph  ; graphify-out/graph.json
+# ; Graphify_Graph  ; .agent/state/outputs/graphify-out/graph.json
 # ; Schema_Patches  ; 2026-05-23:V3.2(scope/evidence/logs/doctor)
 #
 # ;; INVARIANTS
@@ -594,8 +594,8 @@
 #   W009 — schema_patch_date absent sur entrée pré-V3.2 (warning agrégé)
 #
 # OUTPUT :
-#   `scribe-out/scribe-doctor-report.md` avec ERRORS(n), WARNINGS(n), SUGGESTIONS.
-#   `<SCRIBE> guard` écrit aussi ses rapports pré/post dans `scribe-out/`.
+#   `.agent/state/outputs/scribe-out/scribe-doctor-report.md` avec ERRORS(n), WARNINGS(n), SUGGESTIONS.
+#   `<SCRIBE> guard` écrit aussi ses rapports pré/post dans `.agent/state/outputs/scribe-out/`.
 # ════════════════════════════════════════════════════════════════════════════════
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -616,7 +616,7 @@ template_axial_scribe: |
   ; Scribe_Version  ; 3.2 (Axial-Hybrid + Graphify + Doctor-ready)
   ; Session_Count   ; 0
   ; Last_Update     ; YYYY-MM-DDTHH:mm:ssZ
-  ; Graphify_Graph  ; graphify-out/graph.json
+  ; Graphify_Graph  ; .agent/state/outputs/graphify-out/graph.json
   ; Schema_Patches  ; 2026-05-23:V3.2(scope/evidence/logs/doctor)
 
   ;; INVARIANTS
@@ -650,7 +650,7 @@ template_axial_scribe: |
       l0_abstract: "Graphify avant grep — lire GRAPH_REPORT.md, utiliser graphify query/path/explain."
       l2_details: >
         Toujours utiliser graphify query/path/explain avant de lire des fichiers bruts.
-        Les god-nodes et communautés sont dans graphify-out/GRAPH_REPORT.md.
+        Les god-nodes et communautés sont dans .agent/state/outputs/graphify-out/GRAPH_REPORT.md.
         Watch actif : ~/.local/share/pipx/venvs/graphifyy/bin/python -m graphify watch .
       liens_causaux:
         source: "SETUP-INIT"
@@ -681,7 +681,7 @@ template_axial_scribe: |
   > **PERSONA & DIRECTIVE IMMÉDIATE**
   > Tu es l'Agent SRE Principal de ce projet.
   >
-  > **ÉTAPE 0 OBLIGATOIRE** : Lire `graphify-out/GRAPH_REPORT.md` avant toute réponse codebase.
+  > **ÉTAPE 0 OBLIGATOIRE** : Lire `.agent/state/outputs/graphify-out/GRAPH_REPORT.md` avant toute réponse codebase.
   > Pour les questions structure/dépendances → `graphify query "..."` (pas de grep).
   >
   > **SCRIBE = POURQUOI uniquement.** Tout fait structurel déductible du code

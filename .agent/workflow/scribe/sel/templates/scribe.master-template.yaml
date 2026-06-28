@@ -4,7 +4,7 @@ meta_project:
   stack: "{{STACK}}"
   initialized_at: "{{TIMESTAMP}}"
   scribe_version: "3.2-local-causal-retrieval"
-  graphify_graph: "graphify-out/graph.json"
+  graphify_graph: ".agent/state/outputs/graphify-out/graph.json"
 tiers:
   hot: ["PAT-GRAPH-001", "PAT-GIT-001", "PAT-SCRIBE-RAG-001", "PAT-SCRIBE-STRICT-CAUSAL-DENSITY-001", "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001", "GHOST-SCRIBE-RAG-SEL-DIRECT-001", "GHOST-SCRIBE-STRICT-MEMORY-001"]
   warm: []
@@ -14,7 +14,7 @@ invariants:
     status: "ACTIVE"
     tier: "hot"
     titre: "Graphify before codebase work"
-    l0_abstract: "Read graphify-out/GRAPH_REPORT.md before architecture, dependency, or blast-radius work when it exists."
+    l0_abstract: "Read .agent/state/outputs/graphify-out/GRAPH_REPORT.md before architecture, dependency, or blast-radius work when it exists."
   - id: "INV-F002"
     status: "ACTIVE"
     tier: "hot"

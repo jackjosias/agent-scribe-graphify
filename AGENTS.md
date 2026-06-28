@@ -47,9 +47,9 @@ Mode CRITICAL or SCRIBE/shared-surface mutation:
 - Do not claim YAML validity, session counts, SCAR counts, debts, or hot entries without showing real command output.
 - Use `scribe-rag` for retrieval: `preflight`, `context`, `query`, `explain`, `challenge`, `eval`, `gate`, `whoami`.
 - Do not use SEL direct retrieval (`scribe context`, `scribe query`, `scribe explain`) for normal agent work.
-- Read `graphify-out/GRAPH_REPORT.md` before architecture or codebase work when it exists.
+- Read `.agent/state/outputs/graphify-out/GRAPH_REPORT.md` before architecture or codebase work when it exists.
 - If SCRIBE memory or shared surfaces are mutated, run workflow ack/check, doctor, lock acquire, sync, and lock release through `.agent/workflow/scribe/scribe`.
-- Default commit/push scope is the host product source; keep `graphify-out/` and `scribe-out/` out of commits by default; version `.agent/` only when intentionally maintaining agent tooling.
+- Default commit/push scope is the host product source; keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits by default; version `.agent/` only when intentionally maintaining agent tooling.
 - Use `.agent/workflow/scribe/scribe-rag gate` for bundle changes; it must stay green at 8/8.
 - Real pain capture is mandatory: bug >2 attempts, regression, costly rollback, or broken browser/visual smoke => SCAR with `cause_racine`, `resolution`, `test_binding`; retrieve related scars with `.agent/workflow/scribe/scribe-rag query/explain/challenge` before adjacent work.
 <!-- SCRIBE-PORTABLE-WORKFLOW:END -->

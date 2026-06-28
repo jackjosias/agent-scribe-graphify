@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import sys
 from typing import Any
 
-from rag_interface import PROJECT_ROOT, RAG_INDEX_PATH
+from rag_interface import PROJECT_ROOT, RAG_INDEX_PATH, SEL_SCRIPTS_DIR
+if str(SEL_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SEL_SCRIPTS_DIR))
+from scribe_output_paths import scribe_out_dir
 
-STATE_PATH = PROJECT_ROOT / "scribe-out" / "state.json"
-LOCK_PATH = PROJECT_ROOT / "scribe-out" / "locks" / "scribe.lock"
+STATE_PATH = scribe_out_dir(PROJECT_ROOT) / "state.json"
+LOCK_PATH = scribe_out_dir(PROJECT_ROOT) / "locks" / "scribe.lock"
 
 
 def read_json(path: Path) -> dict[str, Any] | None:

@@ -88,7 +88,7 @@ Depuis la racine du projet:
 ```
 
 `bootstrap` est idempotent et initialise seulement ce qui manque:
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe`, `scribe-out/`, `state.json`,
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe`, `.agent/state/outputs/scribe-out/`, `state.json`,
 `.graphifyignore` et le bloc gere de `AGENTS.md`. Il ne lance aucun daemon.
 
 Mode NANO, correction < 30 min, 1 fichier, sans surface partagee:
@@ -115,7 +115,7 @@ Mode CRITICAL ou mutation SCRIBE/surface partagee:
 ```
 
 `workflow read` calcule le SHA du workflow canonique et enregistre l'ack dans
-`scribe-out/workflow-acks.json`. `workflow check` doit etre vert avant toute
+`.agent/state/outputs/scribe-out/workflow-acks.json`. `workflow check` doit etre vert avant toute
 mutation SCRIBE ou surface partagee.
 
 En mode 4 terminaux, ne pas imposer de noms fixes. Chaque terminal demarre en
@@ -143,7 +143,7 @@ maintien BM25.
 {BUNDLE_COMMAND} dashboard --serve --host 127.0.0.1 --port 8765
 ```
 
-`dashboard` genere un HTML statique dans `scribe-out/`. `dashboard --serve`
+`dashboard` genere un HTML statique dans `.agent/state/outputs/scribe-out/`. `dashboard --serve`
 lance a la demande un serveur HTTP local leger (`ThreadingHTTPServer`) pour vue
 live/reload; ce processus s'arrete avec Ctrl+C et n'est jamais demarre par
 `bootstrap`.
@@ -190,9 +190,9 @@ prochain agent.
 - Scope par defaut: le code produit du projet hote.
 - `AGENT-MEMOIRE_PROJECT_STATUS.scribe`: a versionner seulement si l'equipe
   veut partager la memoire causale entre agents et humains.
-- `graphify-out/`: ne pas versionner par defaut; c'est un graphe genere,
+- `.agent/state/outputs/graphify-out/`: ne pas versionner par defaut; c'est un graphe genere,
   reconstructible avec `graphify update .`.
-- `scribe-out/`: ne pas versionner par defaut; c'est de l'etat runtime local
+- `.agent/state/outputs/scribe-out/`: ne pas versionner par defaut; c'est de l'etat runtime local
   (index, locks, rapports, dashboards, exports, sync metadata).
 - `.agent/`: a versionner seulement quand l'equipe maintient volontairement
   l'outillage agentique; sinon le garder hors des commits produit.
@@ -351,9 +351,9 @@ Mode CRITICAL or SCRIBE/shared-surface mutation:
 - Do not claim YAML validity, session counts, SCAR counts, debts, or hot entries without showing real command output.
 - Use `scribe-rag` for retrieval: `preflight`, `context`, `query`, `explain`, `challenge`, `eval`, `gate`, `whoami`.
 - Do not use SEL direct retrieval (`scribe context`, `scribe query`, `scribe explain`) for normal agent work.
-- Read `graphify-out/GRAPH_REPORT.md` before architecture or codebase work when it exists.
+- Read `.agent/state/outputs/graphify-out/GRAPH_REPORT.md` before architecture or codebase work when it exists.
 - If SCRIBE memory or shared surfaces are mutated, run workflow ack/check, doctor, lock acquire, sync, and lock release through `{BUNDLE_COMMAND}`.
-- Default commit/push scope is the host product source; keep `graphify-out/` and `scribe-out/` out of commits by default; version `.agent/` only when intentionally maintaining agent tooling.
+- Default commit/push scope is the host product source; keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits by default; version `.agent/` only when intentionally maintaining agent tooling.
 - Use `{RAG_COMMAND} gate` for bundle changes; it must stay green at 8/8.
 - Real pain capture is mandatory: bug >2 attempts, regression, costly rollback, or broken browser/visual smoke => SCAR with `cause_racine`, `resolution`, `test_binding`; retrieve related scars with `{RAG_COMMAND} query/explain/challenge` before adjacent work.
 {AGENTS_END}

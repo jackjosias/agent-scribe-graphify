@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from scribe_output_paths import scribe_out_dir
 
-DEFAULT_COORDINATION_DIR = Path("scribe-out") / "coordination"
+
+DEFAULT_COORDINATION_DIR = scribe_out_dir(Path.cwd()) / "coordination"
 COORDINATION_DIR_ENV = "SCRIBE_COORDINATION_DIR"
 DEFAULT_CLAIM_TTL_SECONDS = 1800
 

@@ -5,11 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scribe_output_paths import scribe_out_dir
+
 from scribe_doctor_lib import run_doctor
 
 
 DEFAULT_SCRIBE_PATH = Path("AGENT-MEMOIRE_PROJECT_STATUS.scribe")
-REPORT_DIR = Path("scribe-out")
+REPORT_DIR = scribe_out_dir(Path.cwd())
 BEFORE_REPORT_PATH = REPORT_DIR / "scribe-doctor-before-report.md"
 AFTER_REPORT_PATH = REPORT_DIR / "scribe-doctor-after-report.md"
 

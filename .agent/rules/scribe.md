@@ -51,7 +51,7 @@ Depuis la racine du projet:
 ```
 
 `bootstrap` est idempotent et initialise seulement ce qui manque:
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe`, `scribe-out/`, `state.json`,
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe`, `.agent/state/outputs/scribe-out/`, `state.json`,
 `.graphifyignore` et le bloc gere de `AGENTS.md`. Il ne lance aucun daemon.
 
 Mode NANO, correction < 30 min, 1 fichier, sans surface partagee:
@@ -78,7 +78,7 @@ Mode CRITICAL ou mutation SCRIBE/surface partagee:
 ```
 
 `workflow read` calcule le SHA du workflow canonique et enregistre l'ack dans
-`scribe-out/workflow-acks.json`. `workflow check` doit etre vert avant toute
+`.agent/state/outputs/scribe-out/workflow-acks.json`. `workflow check` doit etre vert avant toute
 mutation SCRIBE ou surface partagee.
 
 En mode 4 terminaux, ne pas imposer de noms fixes. Chaque terminal demarre en
@@ -106,7 +106,7 @@ maintien BM25.
 .agent/workflow/scribe/scribe dashboard --serve --host 127.0.0.1 --port 8765
 ```
 
-`dashboard` genere un HTML statique dans `scribe-out/`. `dashboard --serve`
+`dashboard` genere un HTML statique dans `.agent/state/outputs/scribe-out/`. `dashboard --serve`
 lance a la demande un serveur HTTP local leger (`ThreadingHTTPServer`) pour vue
 live/reload; ce processus s'arrete avec Ctrl+C et n'est jamais demarre par
 `bootstrap`.
@@ -153,9 +153,9 @@ prochain agent.
 - Scope par defaut: le code produit du projet hote.
 - `AGENT-MEMOIRE_PROJECT_STATUS.scribe`: a versionner seulement si l'equipe
   veut partager la memoire causale entre agents et humains.
-- `graphify-out/`: ne pas versionner par defaut; c'est un graphe genere,
+- `.agent/state/outputs/graphify-out/`: ne pas versionner par defaut; c'est un graphe genere,
   reconstructible avec `graphify update .`.
-- `scribe-out/`: ne pas versionner par defaut; c'est de l'etat runtime local
+- `.agent/state/outputs/scribe-out/`: ne pas versionner par defaut; c'est de l'etat runtime local
   (index, locks, rapports, dashboards, exports, sync metadata).
 - `.agent/`: a versionner seulement quand l'equipe maintient volontairement
   l'outillage agentique; sinon le garder hors des commits produit.

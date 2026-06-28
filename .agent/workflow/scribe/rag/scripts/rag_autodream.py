@@ -20,7 +20,8 @@ from rag_autodream_io import (
 )
 from rag_context import context as format_context
 from rag_index import read_index
-from rag_interface import source_snapshot
+from rag_interface import PROJECT_ROOT, source_snapshot
+from scribe_output_paths import scribe_out_dir
 from rag_scoring import retrieve
 from rag_text import compact
 
@@ -121,9 +122,10 @@ def retrieve_context(config: AutoDreamConfig, budget: AutoDreamBudget) -> dict[s
 
 def collect_coordination_state(config: AutoDreamConfig, budget: AutoDreamBudget) -> dict[str, Any]:
     root = config.project_root
-    state_text, _ = read_text_limited(root / "scribe-out" / "state.json", budget, limit=80_000)
-    lock_path = root / "scribe-out" / "locks" / "scribe.lock"
-    claims_dir = root / "scribe-out" / "coordination" / "claims"
+    scribe_out = scribe_out_dir(root)
+    state_text, _ = read_text_limited(scribe_out / "state.json", budget, limit=80_000)
+    lock_path = scribe_out / "locks" / "scribe.lock"
+    claims_dir = scribe_out / "coordination" / "claims"
     active_claims = collect_active_claim_names(claims_dir, budget)
     return {"state_available": bool(state_text), "lock_present": lock_path.exists(), "active_claims": active_claims[:20], "active_claim_count": len(active_claims)}
 

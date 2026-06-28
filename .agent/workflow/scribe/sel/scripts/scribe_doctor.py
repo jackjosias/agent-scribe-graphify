@@ -4,10 +4,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from scribe_output_paths import scribe_out_dir
+
 from scribe_doctor_lib import run_doctor
 
 
-DEFAULT_REPORT_PATH = Path("scribe-out") / "scribe-doctor-report.md"
+DEFAULT_REPORT_PATH = scribe_out_dir(Path.cwd()) / "scribe-doctor-report.md"
 
 
 def main() -> int:

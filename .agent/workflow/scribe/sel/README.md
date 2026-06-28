@@ -23,11 +23,11 @@ Layout:
 
 Boundaries:
 - Do not store causal project memory here; use `AGENT-MEMOIRE_PROJECT_STATUS.scribe`.
-- Do not store generated structural graph output inside this bundle; bundle graph output belongs under `scribe-out/bundle-graph/scribe/`.
-- The host application graph remains `graphify-out/`; it must stay focused on application code.
+- Do not store generated structural graph output inside this bundle; bundle graph output belongs under `.agent/state/outputs/scribe-out/bundle-graph/scribe/`.
+- The host application graph lives at `.agent/state/outputs/graphify-out/`; root `graphify-out/` is legacy-only and must be migrated or cleaned after CLI execution.
 - Version only the host application and deliberate project memory by default:
   `AGENT-MEMOIRE_PROJECT_STATUS.scribe` can be shared when the team wants causal
-  memory in Git, while `graphify-out/` and `scribe-out/` are generated local
+  memory in Git, while `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` are generated local
   state and should stay out of commits and pushes. Version `.agent/` only when
   intentionally maintaining the agent tooling itself.
 - Active SCRIBE workflow rules live in `docs/scribe.md`.
@@ -47,21 +47,21 @@ From a host project root, the canonical command path is `.agent/workflow/scribe/
 The examples below use `<SCRIBE>` for that path.
 
 - `<SCRIBE> bootstrap [--root PATH]`
-  - Idempotently prepares a copied `.agent` bundle inside a project: managed `AGENTS.md`, `.graphifyignore`, initial SCRIBE template when absent, `scribe-out/`, doctor, and `state.json`.
+  - Idempotently prepares a copied `.agent` bundle inside a project: managed `AGENTS.md`, `.graphifyignore`, initial SCRIBE template when absent, `.agent/state/outputs/scribe-out/`, doctor, and `state.json`.
 - `<SCRIBE> clean --dry-run|--apply [--graphify] [--agent-cache]`
-  - Removes generated `scribe-out/` noise such as historical doctor reports, validation exports, dashboard screenshots, and commit plans. With `--graphify`, prunes Graphify AST caches with LRU retention; with `--agent-cache`, removes portable `.agent` bytecode caches.
+  - Removes generated `.agent/state/outputs/scribe-out/` noise such as historical doctor reports, validation exports, dashboard screenshots, and commit plans. With `--graphify`, prunes Graphify AST caches with LRU retention; with `--agent-cache`, removes portable `.agent` bytecode caches.
 - `<SCRIBE> doctor [SCRIBE_PATH] [--output REPORT] [--suggest-fix]`
-  - Default report: `scribe-out/scribe-doctor-report.md`
+  - Default report: `.agent/state/outputs/scribe-out/scribe-doctor-report.md`
 - `<SCRIBE> guard [SCRIBE_PATH] -- <command> [args...]`
-  - Default reports: `scribe-out/scribe-doctor-before-report.md` and `scribe-out/scribe-doctor-after-report.md`
+  - Default reports: `.agent/state/outputs/scribe-out/scribe-doctor-before-report.md` and `.agent/state/outputs/scribe-out/scribe-doctor-after-report.md`
 - `<SCRIBE> install [TARGET_PATH] [--force] [--dry-run] [--with-root-adapters]`
   - Installs this bundle into another project rootlessly by default. `AGENTS.md` and `.graphifyignore` managed blocks are updated; root `scribe` and `scripts/` are generated only with `--with-root-adapters`.
 - `<SCRIBE> lock acquire|release|status`
-  - Coordinates SCRIBE mutations with a local JSON lock at `scribe-out/locks/scribe.lock`; mutating commands refuse writes without an active lock. `release` verifies agent/surface before stale cleanup; use `SCRIBE_OWNER_PID` or `--owner-pid` when the lock represents a long-lived owner process.
+  - Coordinates SCRIBE mutations with a local JSON lock at `.agent/state/outputs/scribe-out/locks/scribe.lock`; mutating commands refuse writes without an active lock. `release` verifies agent/surface before stale cleanup; use `SCRIBE_OWNER_PID` or `--owner-pid` when the lock represents a long-lived owner process.
 - `<SCRIBE> sync --agent NAME --type extension|cli|api|unknown [--repair --session JOURNAL-ID]`
-  - Compares `scribe-out/state.json` with the real SCRIBE hash; `--repair` rebuilds the state file atomically after a legitimate write or manual recovery.
+  - Compares `.agent/state/outputs/scribe-out/state.json` with the real SCRIBE hash; `--repair` rebuilds the state file atomically after a legitimate write or manual recovery.
 - `<SCRIBE> whoami`
-  - Shows the last SCRIBE writer recorded in `scribe-out/state.json` without changing writer ownership.
+  - Shows the last SCRIBE writer recorded in `.agent/state/outputs/scribe-out/state.json` without changing writer ownership.
 - `<SCRIBE> hot [--limit N] [--topic TEXT]`
   - Prints a short hot-memory slice for immediate agent grounding; default output is recency-ranked and intentionally capped.
 - `<SCRIBE> context [--mode quick|standard] [--topic TEXT] [--format text|json]`
@@ -88,12 +88,12 @@ The examples below use `<SCRIBE>` for that path.
   - Exports indexed causal memory as deterministic JSON for external tools, dashboards, or future retrieval pipelines.
 - `<SCRIBE> archive [--apply] [--output AGENT-MEMOIRE_ARCHIVE.yaml]`
   - Dry-runs cold-entry archival by default; with `--apply`, writes archive YAML and prunes archived blocks from the active SCRIBE after doctor validation.
-- `<SCRIBE> dashboard [--output scribe-out/scribe-dashboard.html]`
+- `<SCRIBE> dashboard [--output .agent/state/outputs/scribe-out/scribe-dashboard.html]`
   - Generates a static HTML dashboard plus JSON data file from the same indexed payload used by `<SCRIBE> export`, including retrieval-quality data.
 - `<SCRIBE> dashboard --serve [--host 127.0.0.1] [--port 8765] [--poll-interval-ms 2000]`
   - Serves a lightweight local live view that hashes the SCRIBE file, disables HTTP caching, and reloads the dashboard when memory changes without adding external dependencies or a long-running app stack.
 - `<SCRIBE> graph [--build] [--query TEXT] [--budget N]`
-  - Builds or queries a separate Graphify graph under `scribe-out/bundle-graph/` without polluting root application `graphify-out/` or this bundle.
+  - Builds or queries a separate Graphify graph under `.agent/state/outputs/scribe-out/bundle-graph/` without leaving root legacy `graphify-out/` or polluting this bundle.
 - `<SCRIBE> graphify-hooks [--apply] [--template PATH] [--trusted-hooks PATH]`
   - Checks and reapplies the stdin-consuming Graphify hook patch after any Graphify reinstall or upgrade; also simulates Codex and Gemini hook commands.
 - `<SCRIBE> benchmark [--entities 1000,10000] [--queries N] [--json]`

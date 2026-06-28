@@ -13,12 +13,12 @@ from rag_interface import DEFAULT_SCRIBE, PROJECT_ROOT, RAG_INDEX_PATH
 
 PROTECTED_RELATIVE_PATHS = (
     "AGENT-MEMOIRE_PROJECT_STATUS.scribe",
-    "scribe-out/rag-index.json",
-    "scribe-out/scribe-doctor-report.md",
-    "scribe-out/state.json",
-    "scribe-out/workflow-acks.json",
-    "scribe-out/locks/scribe.lock",
-    "scribe-out/coordination/events.jsonl",
+    ".agent/state/outputs/scribe-out/rag-index.json",
+    ".agent/state/outputs/scribe-out/scribe-doctor-report.md",
+    ".agent/state/outputs/scribe-out/state.json",
+    ".agent/state/outputs/scribe-out/workflow-acks.json",
+    ".agent/state/outputs/scribe-out/locks/scribe.lock",
+    ".agent/state/outputs/scribe-out/coordination/events.jsonl",
 )
 
 SURFACE_PREFIXES = (
@@ -28,8 +28,8 @@ SURFACE_PREFIXES = (
     ("agent_skills", ".agent/skills/"),
     ("agent_docs", ".agent/"),
     ("scribe_memory", "AGENT-MEMOIRE_PROJECT_STATUS.scribe"),
-    ("runtime_state", "scribe-out/"),
-    ("graph_state", "graphify-out/"),
+    ("runtime_state", ".agent/state/outputs/scribe-out/"),
+    ("graph_state", ".agent/state/outputs/graphify-out/"),
     ("docs", "docs/"),
     ("tests", "tests/"),
     ("source", "src/"),

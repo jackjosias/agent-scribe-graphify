@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from scribe_output_paths import graphify_out_dir, scribe_out_dir
+
 
 ACTIVE_SCRIBE_OUT_FILES = {
     "state.json",
@@ -44,7 +46,7 @@ def is_scribe_noise_file(path: Path) -> bool:
 
 
 def collect_scribe_noise(project_root: Path) -> list[CleanupCandidate]:
-    scribe_out = project_root / "scribe-out"
+    scribe_out = scribe_out_dir(project_root)
     if not scribe_out.exists():
         return []
     candidates: list[CleanupCandidate] = []
@@ -60,10 +62,10 @@ def collect_scribe_noise(project_root: Path) -> list[CleanupCandidate]:
 
 def ast_cache_dirs(project_root: Path) -> list[Path]:
     dirs: list[Path] = []
-    root_ast = project_root / "graphify-out" / "cache" / "ast"
+    root_ast = graphify_out_dir(project_root) / "cache" / "ast"
     if root_ast.exists():
         dirs.append(root_ast)
-    bundle_graph_root = project_root / "scribe-out" / "bundle-graph"
+    bundle_graph_root = scribe_out_dir(project_root) / "bundle-graph"
     if bundle_graph_root.exists():
         for path in sorted(bundle_graph_root.rglob("ast")):
             if path.is_dir() and path.parent.name == "cache":

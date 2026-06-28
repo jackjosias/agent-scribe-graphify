@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import sys
+
 SCRIPT_PATH = Path(__file__).resolve()
 
 
@@ -28,8 +30,11 @@ SCRIBE_ROOT = find_portable_root(SCRIPT_PATH)
 PROJECT_ROOT = find_project_root(SCRIPT_PATH)
 SEL_CLI = (SCRIBE_ROOT / "scribe").resolve()
 DEFAULT_SCRIBE = PROJECT_ROOT / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
-RAG_INDEX_PATH = PROJECT_ROOT / "scribe-out" / "rag-index.json"
 SEL_SCRIPTS_DIR = SCRIBE_ROOT / "sel" / "scripts"
+if str(SEL_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SEL_SCRIPTS_DIR))
+from scribe_output_paths import scribe_out_dir
+RAG_INDEX_PATH = scribe_out_dir(PROJECT_ROOT) / "rag-index.json"
 
 
 class SELCommandError(RuntimeError):

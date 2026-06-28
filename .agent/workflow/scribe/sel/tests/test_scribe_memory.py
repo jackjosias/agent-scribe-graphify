@@ -190,7 +190,7 @@ class ScribeMemoryCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = write_many_hot_fixture(root)
-            index_path = root / "scribe-out" / "scribe-index.json"
+            index_path = root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-index.json"
             first_code, first_output, first_error = self.run_cli("context", "--mode", "quick", "--scribe", str(path))
             first_mtime = index_path.stat().st_mtime_ns
             second_code, second_output, second_error = self.run_cli("context", "--mode", "quick", "--scribe", str(path))
@@ -208,7 +208,7 @@ class ScribeMemoryCommandTests(unittest.TestCase):
             path = root / "broken.scribe"
             path.write_text("schema_version: [", encoding="utf-8")
             source = path.read_bytes()
-            index_path = root / "scribe-out" / "scribe-index.json"
+            index_path = root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-index.json"
             index_path.parent.mkdir(parents=True)
             index_path.write_text(
                 json.dumps(
@@ -297,7 +297,7 @@ class ScribeMemoryCommandTests(unittest.TestCase):
             path = root / "broken.scribe"
             path.write_text("schema_version: [", encoding="utf-8")
             source = path.read_bytes()
-            index_path = root / "scribe-out" / "scribe-index.json"
+            index_path = root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-index.json"
             index_path.parent.mkdir(parents=True)
             index_path.write_text(
                 json.dumps(
@@ -668,12 +668,13 @@ class ScribeMemoryCommandTests(unittest.TestCase):
         self.assertEqual(str(getattr(install, "BUNDLE_RELATIVE_PATH")), expected_path)
         self.assertIn("multi-agent-installation.md", agents_block)
         self.assertIn("Default commit/push scope is the host product source", agents_block)
-        self.assertIn("keep `graphify-out/` and `scribe-out/` out of commits", agents_block)
+        self.assertIn("keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits", agents_block)
         self.assertIn(".agent/rules/scribe.md", agents_block)
         self.assertIn("docs/scribe.md", getattr(templates, "render_scribe_rule")())
         self.assertIn(expected_name, adapter)
         self.assertIn(expected_name, shim)
         self.assertIn("scribe-out", graph_dir.parts)
+        self.assertIn("outputs", graph_dir.parts)
         self.assertIn("bundle-graph", graph_dir.parts)
         self.assertEqual(graph_dir.name, expected_name)
         self.assertNotIn("scribe-engineering-rag", adapter + shim)

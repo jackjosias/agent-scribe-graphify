@@ -21,45 +21,45 @@ class ScribeCleanTests(unittest.TestCase):
     def test_dry_run_detects_scribe_noise_without_active_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.touch(root / "scribe-out" / "state.json", "{}")
-            self.touch(root / "scribe-out" / "scribe-doctor-report.md")
-            self.touch(root / "scribe-out" / "scribe-dashboard.html")
-            self.touch(root / "scribe-out" / "scribe-doctor-before-report.md")
-            self.touch(root / "scribe-out" / "scribe-export-check.json")
-            self.touch(root / "scribe-out" / "scribe-dashboard-mobile.png")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "state.json", "{}")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-report.md")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-dashboard.html")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-before-report.md")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-export-check.json")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-dashboard-mobile.png")
 
             plan = build_cleanup_plan(root, include_graphify=False, max_ast_files=50)
 
             planned = {candidate.path.name for candidate in plan}
             self.assertEqual(planned, {"scribe-doctor-before-report.md", "scribe-export-check.json", "scribe-dashboard-mobile.png"})
             self.assertEqual(count_scribe_noise(root), 3)
-            self.assertTrue((root / "scribe-out" / "state.json").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "scribe-out" / "state.json").exists())
 
     def test_apply_removes_only_known_scribe_noise(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.touch(root / "scribe-out" / "locks" / "scribe.lock")
-            self.touch(root / "scribe-out" / "archive" / "memory.yaml")
-            self.touch(root / "scribe-out" / "scribe-doctor-after-report.md")
-            self.touch(root / "scribe-out" / "scribe-doctor-shim-report.md")
-            self.touch(root / "scribe-out" / "commit-plan" / "README.md")
-            self.touch(root / "scribe-out" / "notes.txt")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "locks" / "scribe.lock")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "archive" / "memory.yaml")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-after-report.md")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-shim-report.md")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "commit-plan" / "README.md")
+            self.touch(root / ".agent" / "state" / "outputs" / "scribe-out" / "notes.txt")
 
             removed = apply_cleanup(build_cleanup_plan(root, include_graphify=False, max_ast_files=50))
 
             self.assertEqual(removed, 3)
-            self.assertFalse((root / "scribe-out" / "scribe-doctor-after-report.md").exists())
-            self.assertFalse((root / "scribe-out" / "scribe-doctor-shim-report.md").exists())
-            self.assertFalse((root / "scribe-out" / "commit-plan").exists())
-            self.assertTrue((root / "scribe-out" / "locks" / "scribe.lock").exists())
-            self.assertTrue((root / "scribe-out" / "archive" / "memory.yaml").exists())
-            self.assertTrue((root / "scribe-out" / "notes.txt").exists())
+            self.assertFalse((root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-after-report.md").exists())
+            self.assertFalse((root / ".agent" / "state" / "outputs" / "scribe-out" / "scribe-doctor-shim-report.md").exists())
+            self.assertFalse((root / ".agent" / "state" / "outputs" / "scribe-out" / "commit-plan").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "scribe-out" / "locks" / "scribe.lock").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "scribe-out" / "archive" / "memory.yaml").exists())
+            self.assertTrue((root / ".agent" / "state" / "outputs" / "scribe-out" / "notes.txt").exists())
 
     def test_graphify_ast_cache_prunes_to_lru_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            ast_dir = root / "graphify-out" / "cache" / "ast"
-            bundle_ast_dir = root / "scribe-out" / "bundle-graph" / "scribe" / "cache" / "ast"
+            ast_dir = root / ".agent" / "state" / "outputs" / "graphify-out" / "cache" / "ast"
+            bundle_ast_dir = root / ".agent" / "state" / "outputs" / "scribe-out" / "bundle-graph" / "scribe" / "cache" / "ast"
             for index in range(55):
                 self.touch(ast_dir / f"{index:02d}.json")
                 self.touch(bundle_ast_dir / f"{index:02d}.json")

@@ -14,6 +14,7 @@ from typing import Callable, Sequence
 from scribe_doctor_lib import run_doctor
 from scribe_install import Installer
 from scribe_state import AGENT_TYPES, check_sync, update_state_after_write
+from scribe_output_paths import graphify_out_dir, migrate_all_legacy_outputs, migrate_legacy_output, scribe_out_dir
 
 
 SEL_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +68,7 @@ IGNORED_APP_CODE_PARTS = {
     "graphify-out",
     "node_modules",
     "scribe-out",
+    "outputs",
     "target",
     "vendor",
 }
@@ -193,7 +195,7 @@ def has_application_code(project_root: Path) -> bool:
 
 
 def write_graphify_placeholder(project_root: Path) -> None:
-    graphify_out = project_root / "graphify-out"
+    graphify_out = graphify_out_dir(project_root)
     graphify_out.mkdir(parents=True, exist_ok=True)
     (graphify_out / "GRAPH_REPORT.md").write_text(
         "# Graph Report\n\nBootstrap placeholder: no application graph has been built yet.\n",
@@ -203,8 +205,8 @@ def write_graphify_placeholder(project_root: Path) -> None:
 
 
 def ensure_graphify(project_root: Path, runner: Runner, skip_graphify: bool) -> tuple[str, list[str], list[str], list[str]]:
-    graphify_out = project_root / "graphify-out"
-    if graphify_out.exists():
+    graphify_out = graphify_out_dir(project_root)
+    if (graphify_out / "GRAPH_REPORT.md").exists():
         return "existing", [], [], []
     if skip_graphify:
         return "skipped", [], ["Graphify initialization skipped by flag."], []
@@ -223,6 +225,8 @@ def ensure_graphify(project_root: Path, runner: Runner, skip_graphify: bool) -> 
             errors.append(update.stderr.strip().splitlines()[-1])
         return "missing", [], warnings, errors
 
+    migrate_legacy_output(project_root, "graphify-out")
+
     codex = runner(("graphify", "codex", "install"), project_root)
     if codex.returncode != 0:
         warnings.append("`graphify codex install` failed; run it manually after Graphify is available.")
@@ -233,7 +237,7 @@ def ensure_graphify(project_root: Path, runner: Runner, skip_graphify: bool) -> 
 
 
 def ensure_scribe_out(project_root: Path) -> None:
-    scribe_out = project_root / "scribe-out"
+    scribe_out = scribe_out_dir(project_root)
     (scribe_out / "locks").mkdir(parents=True, exist_ok=True)
     (scribe_out / "archive").mkdir(parents=True, exist_ok=True)
 
@@ -293,6 +297,8 @@ def bootstrap_project(
     else:
         report.actions.append("SCRIBE existing")
 
+    migrate_all_legacy_outputs(project_root)
+
     ensure_agent_gitignore(project_root)
     report.actions.append(".agent gitignore ready")
 
@@ -304,7 +310,7 @@ def bootstrap_project(
     report.warnings.extend(graphify_warnings)
     report.errors.extend(graphify_errors)
 
-    report.doctor_code = run_doctor(scribe_path, project_root / "scribe-out" / "scribe-doctor-report.md", suggest_fix=True)
+    report.doctor_code = run_doctor(scribe_path, scribe_out_dir(project_root) / "scribe-doctor-report.md", suggest_fix=True)
     report.sync_repaired = ensure_state(project_root, scribe_path, agent, agent_type, report.new_project)
     return report
 

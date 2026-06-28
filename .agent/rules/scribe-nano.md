@@ -30,7 +30,7 @@ full_protocol: ".agent/rules/scribe.md"
 
 ## Invariants non-négociables
 
-- `graphify-out/` et `scribe-out/` → **racine projet** (jamais dans `.agent/state/`)
+- `.agent/state/outputs/graphify-out/` et `.agent/state/outputs/scribe-out/` → sorties canoniques; les dossiers root sont legacy-only et doivent etre migres
 - Écrire un SCAR si bug > 2 tentatives, régression, rollback coûteux.
 - Ne pas écrire dans SCRIBE ce que Graphify déduit du code.
 - `scribe-rag gate` doit rester `8/8` avant tout push.

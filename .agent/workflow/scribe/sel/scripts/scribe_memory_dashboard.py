@@ -7,6 +7,8 @@ import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from scribe_output_paths import scribe_out_dir
 from typing import Any
 from urllib.parse import urlparse
 
@@ -18,8 +20,8 @@ from scribe_memory_admin import export_payload, json_default
 from scribe_store import load_scribe
 
 
-DEFAULT_DASHBOARD_PATH = Path("scribe-out") / "scribe-dashboard.html"
-DEFAULT_DASHBOARD_DATA_PATH = Path("scribe-out") / "scribe-dashboard-data.json"
+DEFAULT_DASHBOARD_PATH = scribe_out_dir(Path.cwd()) / "scribe-dashboard.html"
+DEFAULT_DASHBOARD_DATA_PATH = scribe_out_dir(Path.cwd()) / "scribe-dashboard-data.json"
 ECHARTS_PATH = Path(__file__).resolve().parents[1] / "vendor" / "echarts" / "echarts.min.js"
 
 
