@@ -32,6 +32,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from .state_paths import prepare_state_dirs
+except Exception:
+    try:
+        from state_paths import prepare_state_dirs  # type: ignore
+    except Exception:
+        prepare_state_dirs = None  # type: ignore
+
 # ─────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────
@@ -88,16 +96,21 @@ class BridgeError(RuntimeError):
 # ─────────────────────────────────────────────────────────────
 
 def load_graph(workspace_root: Path) -> dict[str, Any]:
-    """Load graphify-out/graph.json.
+    """Load the canonical graphify graph, with read-only legacy fallback.
 
     Returns the parsed graph dict, or raises BridgeError if unavailable.
     Tolerates missing file (Graphify not yet run) with a clear error.
     """
     graph_path = workspace_root / GRAPH_JSON_PATH
+    if prepare_state_dirs is not None:
+        paths = prepare_state_dirs(workspace_root)
+        canonical = paths["graphify_out"] / "graph.json"
+        legacy = workspace_root / GRAPH_JSON_PATH
+        graph_path = canonical if canonical.is_file() else legacy
     if not graph_path.is_file():
         raise BridgeError(
             "GRAPH_JSON_MISSING",
-            f"graphify-out/graph.json not found at {graph_path}. Run `graphify update .` first.",
+            f"graphify graph.json not found at {graph_path}. Run `graphify update .` first.",
         )
     try:
         raw = graph_path.read_text(encoding="utf-8")

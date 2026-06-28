@@ -158,6 +158,36 @@ class RuntimeBackupRetentionTest(unittest.TestCase):
         result = retention.cleanup_runtime_backups(self.root, keep_last=1, apply=True)
         self.assertEqual(result["verdict"], retention.RUNTIME_ACTIVE_AGENTS_BUSY)
 
+
+    def test_17_organize_apply_refuses_if_validation_lock_active(self) -> None:
+        backup = make_backup(self.runtime / "coordination.backup-20260627T000777Z.sqlite", 777)
+        with validation_runtime_lock(self.root, timeout_seconds=1):
+            result = retention.organize_runtime_backups(self.root, apply=True)
+        self.assertEqual(result["verdict"], retention.VALIDATION_RUNTIME_BUSY)
+        self.assertTrue(backup.exists())
+
+    def test_18_organize_apply_refuses_with_active_agents(self) -> None:
+        backup = make_backup(self.runtime / "coordination.backup-20260627T000778Z.sqlite", 778)
+        db_file = self.runtime / "coordination.sqlite"
+        con = sqlite3.connect(db_file)
+        try:
+            con.execute("CREATE TABLE agents(agent_id TEXT, status TEXT)")
+            con.execute("INSERT INTO agents(agent_id,status) VALUES('active-agent','active')")
+            con.commit()
+        finally:
+            con.close()
+        result = retention.organize_runtime_backups(self.root, apply=True)
+        self.assertEqual(result["verdict"], retention.RUNTIME_ACTIVE_AGENTS_BUSY)
+        self.assertTrue(backup.exists())
+
+    def test_19_organize_dry_run_reports_even_when_validation_lock_active(self) -> None:
+        backup = make_backup(self.runtime / "coordination.backup-20260627T000779Z.sqlite", 779)
+        with validation_runtime_lock(self.root, timeout_seconds=1):
+            result = retention.organize_runtime_backups(self.root, apply=False)
+        self.assertEqual(result["verdict"], retention.RUNTIME_BACKUP_DRY_RUN)
+        self.assertEqual(result["would_move_count"], 1)
+        self.assertTrue(backup.exists())
+
     def _make_nested_backups(self, count: int) -> None:
         for i in range(count):
             make_backup(self.runtime / "backups" / f"coordination.backup-20260627T00000{i}Z.sqlite", i)

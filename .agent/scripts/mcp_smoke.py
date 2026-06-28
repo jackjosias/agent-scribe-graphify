@@ -14,6 +14,7 @@ MCP_DIR_FOR_LOCK = Path(__file__).resolve().parents[1] / "mcp"
 if str(MCP_DIR_FOR_LOCK) not in sys.path:
     sys.path.insert(0, str(MCP_DIR_FOR_LOCK))
 from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_lock
+from runtime.state_paths import prepare_state_dirs
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
@@ -93,7 +94,7 @@ def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None,
     result = call_tool("pre_action_guard", args)
     if result.get("verdict") == "PRE_ACTION_GUARD_OK" and "action_lease" in result:
         return result["action_lease"]["lease_id"]
-    return ""
+    fail(f"pre_action_guard failed for {action}: {result}")
 
 
 def establish_context(agent_id: str, request: str, intent: str, resource: str) -> dict[str, str]:
@@ -111,11 +112,11 @@ def establish_context(agent_id: str, request: str, intent: str, resource: str) -
 
 
 def _ensure_graphify_stubs() -> None:
-    """Create minimal graphify-out stubs so the Graphify Mandatory Guard
+    """Create minimal canonical graphify stubs so the Graphify Mandatory Guard
     does not block write operations during the smoke test.
 
     Never overwrites existing files — real graphify outputs are preserved."""
-    gdir = ROOT / "graphify-out"
+    gdir = prepare_state_dirs(ROOT)["graphify_out"]
     gdir.mkdir(parents=True, exist_ok=True)
     for fname, content in [
         ("graph.json", '{"nodes":[],"edges":[]}'),
@@ -129,7 +130,6 @@ def _ensure_graphify_stubs() -> None:
 
 def smoke_nominal_workflow() -> None:
     clean_runtime()
-    _ensure_graphify_stubs()
     work = ROOT / "tmp-smoke-workflow"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
@@ -149,6 +149,7 @@ def smoke_nominal_workflow() -> None:
     boot = call_tool("bootstrap", {"host_tool": "mcp-smoke", "model_name": "test", "run_legacy_bootstrap": False})
     if boot.get("verdict") != "BOOT_OK_MCP":
         fail(f"bootstrap failed: {boot}")
+    _ensure_graphify_stubs()
     agent_id = boot["agent"]["agent_id"]
 
     expect_next_tool({

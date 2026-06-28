@@ -201,6 +201,10 @@ def runtime_backup_report(project_root: Path, keep_last: int = DEFAULT_KEEP_LAST
 
 
 def organize_runtime_backups(project_root: Path, *, apply: bool = False) -> dict[str, Any]:
+    if apply:
+        safety = assert_runtime_cleanup_safe(project_root)
+        if not safety.get("ok"):
+            return safety
     runtime = _runtime_dir(project_root)
     backups_dir = _backups_dir(runtime)
     try:

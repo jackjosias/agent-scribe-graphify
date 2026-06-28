@@ -24,6 +24,14 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from .state_paths import prepare_state_dirs
+except Exception:
+    try:
+        from state_paths import prepare_state_dirs  # type: ignore
+    except Exception:
+        prepare_state_dirs = None  # type: ignore
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,7 +322,15 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
     if workspace_root is None:
         workspace_root = Path.cwd()
     root = Path(workspace_root).resolve()
-    out_dir = root / GRAPHIFY_OUT_DIR
+    candidates: list[Path] = []
+    if prepare_state_dirs is not None:
+        try:
+            paths = prepare_state_dirs(root)
+            candidates.append(paths["graphify_out"])
+        except Exception:
+            pass
+    candidates.extend([root / GRAPHIFY_OUT_DIR])
+    out_dir = next((candidate for candidate in candidates if candidate.is_dir()), candidates[0])
 
     if not out_dir.is_dir():
         return {
@@ -323,6 +339,7 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
             "reason": f"'{GRAPHIFY_OUT_DIR}/' directory not found at {out_dir}",
             "files": {},
             "output_dir": str(out_dir),
+            "checked_output_dirs": [str(candidate) for candidate in candidates],
         }
 
     file_status: dict[str, dict[str, Any]] = {}

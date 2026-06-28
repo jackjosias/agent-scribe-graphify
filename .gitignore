@@ -13,6 +13,7 @@ graphify-out/
 .agent/state/runtime/
 .agent/state/runtime/backups/
 .agent/state/install/
+.agent/state/outputs/
 .agent/state/redteam/
 .agent/state/**/*.sqlite
 .agent/state/**/*.sqlite-wal

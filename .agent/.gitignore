@@ -7,10 +7,20 @@ state/runtime/backups/
 state/runtime/events.log
 state/runtime/events.log.*
 state/install/
+state/outputs/
 state/proof/
 state/proof/*.json
+state/redteam/
+state/**/*.sqlite
+state/**/*.sqlite-wal
+state/**/*.sqlite-shm
+state/**/*.lock
+state/**/*.backup-*
 
 # New canonical local runtime outputs
+state/outputs/
+
+# Legacy runtime outputs kept ignored for backward compatibility
 state/scribe-out/
 state/graphify-out/
 
