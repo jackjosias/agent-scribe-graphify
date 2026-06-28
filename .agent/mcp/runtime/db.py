@@ -216,7 +216,9 @@ def _backup_db(project_root: Optional[Path] = None) -> Optional[str]:
         return None
 
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    backup_path = db_file.with_name(f"coordination.backup-{ts}.sqlite")
+    backup_dir = db_file.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f"coordination.backup-{ts}.sqlite"
     try:
         src = sqlite3.connect(str(db_file))
         dst = sqlite3.connect(str(backup_path))

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, scribe_commit_gate, task_context  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -1344,6 +1344,18 @@ def root_hygiene_status(max_parent_depth: int = 4, strict: bool = False) -> Dict
     return server.ok(report)
 
 
+def runtime_backup_status(keep_last: int = 20) -> Dict[str, Any]:
+    return server.ok(runtime_backup_retention.runtime_backup_report(server.ROOT, keep_last=keep_last))
+
+
+def runtime_backup_cleanup(keep_last: int = 20, apply: bool = False, organize: bool = False, cleanup: bool = False) -> Dict[str, Any]:
+    if organize:
+        return server.ok(runtime_backup_retention.organize_runtime_backups(server.ROOT, apply=bool(apply)))
+    if cleanup:
+        return server.ok(runtime_backup_retention.cleanup_runtime_backups(server.ROOT, keep_last=keep_last, apply=bool(apply)))
+    return server.ok(runtime_backup_retention.runtime_backup_report(server.ROOT, keep_last=keep_last))
+
+
 def wait_for_tasks(
     task_ids: List[str] | None = None,
     agent_id: str = "",
@@ -1436,6 +1448,10 @@ def tool_schema(name: str) -> Dict[str, Any]:
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "status": {"type": "string"}}, "additionalProperties": False}
     if name == "task_status":
         return {"type": "object", "properties": {"task_id": {"type": "string"}}, "additionalProperties": False}
+    if name == "runtime_backup_status":
+        return {"type": "object", "properties": {"keep_last": {"type": "integer"}}, "additionalProperties": False}
+    if name == "runtime_backup_cleanup":
+        return {"type": "object", "properties": {"keep_last": {"type": "integer"}, "apply": {"type": "boolean"}, "organize": {"type": "boolean"}, "cleanup": {"type": "boolean"}}, "additionalProperties": False}
     if name == "wait_for_tasks":
         return {
             "type": "object",
@@ -2253,6 +2269,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.list_tasks = list_tasks
     server.task_status = task_status
     server.wait_for_tasks = wait_for_tasks
+    server.runtime_backup_status = runtime_backup_status
+    server.runtime_backup_cleanup = runtime_backup_cleanup
     server.root_hygiene_status = root_hygiene_status
     server.tool_schema = tool_schema
     server.TOOLS["workflow_next"] = workflow_next
@@ -2272,6 +2290,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["list_tasks"] = list_tasks
     server.TOOLS["task_status"] = task_status
     server.TOOLS["wait_for_tasks"] = wait_for_tasks
+    server.TOOLS["runtime_backup_status"] = runtime_backup_status
+    server.TOOLS["runtime_backup_cleanup"] = runtime_backup_cleanup
     server.TOOLS["root_hygiene_status"] = root_hygiene_status
     server.TOOLS["discipline_ping"] = discipline_ping
     server.TOOLS["pre_action_guard"] = pre_action_guard
