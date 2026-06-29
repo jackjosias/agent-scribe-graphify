@@ -89,6 +89,15 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertEqual(proc.exitcode, 0)
         self.assertGreaterEqual(elapsed, 0.20)
 
+    def test_09_validation_suite_runs_lock_test_before_runtime_smokes(self) -> None:
+        text = (ROOT / ".agent" / "scripts" / "validation_suite.py").read_text(encoding="utf-8")
+        lock_pos = text.index("test_validation_runtime_lock.py")
+        smoke_pos = text.index("mcp_smoke.py")
+        redteam_pos = text.index("enforcement_redteam_smoke.py")
+        self.assertLess(lock_pos, smoke_pos)
+        self.assertLess(smoke_pos, redteam_pos)
+
+
 
 if __name__ == "__main__":
     unittest.main()
