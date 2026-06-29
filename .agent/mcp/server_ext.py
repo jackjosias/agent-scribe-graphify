@@ -1334,7 +1334,7 @@ def task_status(task_id: str) -> Dict[str, Any]:
 
 def root_hygiene_status(max_parent_depth: int = 4, strict: bool = False) -> Dict[str, Any]:
     try:
-        report = root_hygiene.assert_safe_project_root(server.ROOT, strict=bool(strict))
+        report = root_hygiene.assert_safe_project_root(server.ROOT, strict=bool(strict), max_parent_depth=max_parent_depth)
     except RuntimeError as exc:
         report = root_hygiene.inspect_root_hygiene(server.ROOT, max_parent_depth=max_parent_depth)
         report["strict_error"] = str(exc)

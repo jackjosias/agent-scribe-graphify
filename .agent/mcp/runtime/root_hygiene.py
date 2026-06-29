@@ -13,8 +13,10 @@ PARENT_AGENT_ROOT_DETECTED = "PARENT_AGENT_ROOT_DETECTED"
 GENERATED_OUTPUT_OUTSIDE_GIT_ROOT = "GENERATED_OUTPUT_OUTSIDE_GIT_ROOT"
 GIT_ROOT_NOT_FOUND = "GIT_ROOT_NOT_FOUND"
 PROJECT_MARKERS_MISSING = "PROJECT_MARKERS_MISSING"
+PROJECT_MARKERS_WEAK = "PROJECT_MARKERS_WEAK"
 
-CRITICAL_MARKERS = (".git", ".agent", "AGENTS.md", "README.md")
+REQUIRED_MARKERS = (".git", ".agent", "AGENTS.md", "AGENT-MEMOIRE_PROJECT_STATUS.scribe")
+SOFT_MARKERS = ("README.md",)
 GENERATED_NAMES = ("graphify-out", "scribe-out")
 SECRET_HINTS = ("token", "secret", "password", "passwd", "key")
 
@@ -99,9 +101,12 @@ def inspect_root_hygiene(start: Path | None = None, max_parent_depth: int = 4) -
 
     if git_root is None:
         errors.append({"code": GIT_ROOT_NOT_FOUND, "path": _safe_path(current), "message": "No .git root was found from the start path."})
-    missing = [marker for marker in CRITICAL_MARKERS if not (project_root / marker).exists()]
+    missing = [marker for marker in REQUIRED_MARKERS if not (project_root / marker).exists()]
     if missing:
         errors.append({"code": PROJECT_MARKERS_MISSING, "path": _safe_path(project_root), "message": "Missing project markers: " + ", ".join(missing)})
+    soft_missing = [marker for marker in SOFT_MARKERS if not (project_root / marker).exists()]
+    if soft_missing and not missing:
+        warnings.append(_warning(PROJECT_MARKERS_WEAK, project_root, "Missing optional project markers: " + ", ".join(soft_missing)))
 
     if git_root is not None:
         for parent in _nearby_parents(git_root, max_parent_depth):
