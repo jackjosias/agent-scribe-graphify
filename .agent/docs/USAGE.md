@@ -33,7 +33,13 @@ DELETE chemin/relatif/du/fichier
 
 ## Validation locale
 
-Depuis la racine du projet :
+Depuis la racine du projet, utiliser le runner séquentiel quand plusieurs smokes MCP doivent être validés :
+
+```bash
+python3 .agent/scripts/validation_suite.py
+```
+
+Pour lancer uniquement le smoke MCP principal :
 
 ```bash
 python3 .agent/scripts/mcp_smoke.py
@@ -81,7 +87,7 @@ python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
 
 Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED`. Depuis V2.8, le résultat attendu est `context_bypass=CLOSED` et `--strict-context` doit passer. Depuis V2.8.1, ce smoke vérifie aussi que les contextes wildcard, les mismatches de resource et les intents non mutateurs sont refusés pour les patches/deletes. `DIRECT_FS_WRITE_OUTSIDE_SANDBOX_OPEN` peut rester présent : c'est une limite host/OS, pas une limite MCP-context.
 
-Les smokes MCP qui nettoient `.agent/state/runtime/coordination.sqlite` ne sont pas parallélisables par défaut. En CI, exécuter `enforcement_redteam_smoke.py`, `mcp_smoke.py`, `delete_resource_smoke.py`, `scribe_record_smoke.py` et `sandbox_smoke.py` en séquentiel, ou isoler chaque job avec son propre runtime state.
+Les smokes MCP qui nettoient `.agent/state/runtime/coordination.sqlite` ne sont pas parallélisables. `mcp_smoke.py` et `enforcement_redteam_smoke.py` échouent immédiatement avec `VALIDATION_RUNTIME_BUSY_RUN_SEQUENTIALLY` si une validation runtime est déjà active. En CI et en agent local, préférer `python3 .agent/scripts/validation_suite.py`; sinon exécuter `enforcement_redteam_smoke.py`, `mcp_smoke.py`, `delete_resource_smoke.py`, `scribe_record_smoke.py` et `sandbox_smoke.py` strictement en séquentiel, ou isoler chaque job avec son propre runtime state.
 
 ## Copier .agent dans un nouveau projet
 

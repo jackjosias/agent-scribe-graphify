@@ -13,7 +13,7 @@ MCP_DIR = HERE.parent
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_lock
+from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_busy_message, validation_runtime_lock
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -61,17 +61,24 @@ class ValidationRuntimeLockTest(unittest.TestCase):
                 return
         self.fail("expected ValidationRuntimeBusy")
 
-    def test_05_mcp_smoke_uses_validation_lock(self) -> None:
+    def test_05_busy_message_tells_agents_to_run_sequentially(self) -> None:
+        message = validation_runtime_busy_message(self.root / ".agent" / "state" / "runtime" / "validation-smoke.lock")
+        self.assertIn("VALIDATION_RUNTIME_BUSY_RUN_SEQUENTIALLY", message)
+        self.assertIn("validation-smoke.lock", message)
+
+    def test_06_mcp_smoke_uses_validation_lock(self) -> None:
         text = (ROOT / ".agent" / "scripts" / "mcp_smoke.py").read_text(encoding="utf-8")
         self.assertIn("validation_runtime_lock", text)
         self.assertIn("VALIDATION_RUNTIME_LOCK_ACQUIRED", text)
+        self.assertIn("validation_runtime_busy_message", text)
 
-    def test_06_redteam_smoke_uses_validation_lock(self) -> None:
+    def test_07_redteam_smoke_uses_validation_lock(self) -> None:
         text = (ROOT / ".agent" / "scripts" / "enforcement_redteam_smoke.py").read_text(encoding="utf-8")
         self.assertIn("validation_runtime_lock", text)
         self.assertIn("VALIDATION_RUNTIME_LOCK_ACQUIRED", text)
+        self.assertIn("validation_runtime_busy_message", text)
 
-    def test_07_same_runtime_is_serialized(self) -> None:
+    def test_08_same_runtime_is_serialized(self) -> None:
         proc = mp.Process(target=hold_lock, args=(str(self.root), 0.3))
         proc.start()
         time.sleep(0.05)

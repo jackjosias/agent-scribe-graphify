@@ -19,6 +19,10 @@ class ValidationRuntimeBusy(RuntimeError):
         self.timeout_seconds = timeout_seconds
 
 
+def validation_runtime_busy_message(lock_path: Path) -> str:
+    return f"VALIDATION_RUNTIME_BUSY_RUN_SEQUENTIALLY: {lock_path}"
+
+
 def default_lock_path(root: Path | None = None) -> Path:
     base = (root or Path(__file__).resolve().parents[3]).resolve()
     return base / ".agent" / "state" / "runtime" / "validation-smoke.lock"
