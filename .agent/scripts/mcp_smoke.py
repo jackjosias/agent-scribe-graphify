@@ -310,13 +310,36 @@ def smoke_nominal_workflow() -> None:
         "last_verdict": "SCRIBE_RECORD_WRITTEN",
     }, "finish_task")
 
-    finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
+    canonical_skip_reason = (
+        "This smoke only verifies runtime MCP gates and a transient workflow mutation; "
+        "it intentionally leaves no durable project memory because canonical memory coverage "
+        "is exercised by the dedicated canonical memory gate tests."
+    )
+    finished = call_tool(
+        "finish_task",
+        {
+            "agent_id": agent_id,
+            "summary": "smoke finished",
+            "canonical_memory_skip_reason": canonical_skip_reason,
+            **ctx,
+            "action_lease_id": acquire_lease(agent_id, "finish_task", ctx),
+        },
+    )
     if finished.get("verdict") == "SCRIBE_COMMIT_GATE_REQUIRED":
         resolved = call_tool("scribe_commit_gate_resolve", {"agent_id": agent_id, **ctx, "decision": "commit"})
         if resolved.get("verdict") != "SCRIBE_COMMIT_GATE_RESOLVED":
             fail(f"scribe commit gate resolve failed: {resolved}")
-        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "smoke finished", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
-    if finished.get("verdict") != "TASK_FINISHED_OK":
+        finished = call_tool(
+            "finish_task",
+            {
+                "agent_id": agent_id,
+                "summary": "smoke finished",
+                "canonical_memory_skip_reason": canonical_skip_reason,
+                **ctx,
+                "action_lease_id": acquire_lease(agent_id, "finish_task", ctx),
+            },
+        )
+    if finished.get("verdict") not in {"TASK_FINISHED_OK", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}:
         fail(f"finish failed: {finished}")
 
     shutil.rmtree(work, ignore_errors=True)

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context, direct_fs_tripwire  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context, direct_fs_tripwire, canonical_memory_gate  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -71,6 +71,8 @@ _CONTEXT_VERDICTS = {"BEFORE_TASK_OK", *_SCRIBE_VERDICTS, *_GRAPHIFY_VERDICTS}
 _WRITE_DONE_VERDICTS = {"PATCH_APPLIED", "PATCH_APPLIED_CONFIRMED", "RESOURCE_DELETED"}
 _RECORD_REQUIRED_VERDICTS = {*_WRITE_DONE_VERDICTS, "CLAIM_RELEASED"}
 _RECORD_DONE_VERDICTS = {"SCRIBE_RECORD_WRITTEN"}
+_CANONICAL_MEMORY_TERMINAL_VERDICTS = {"CANONICAL_MEMORY_PROMOTED", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}
+_CANONICAL_MEMORY_BLOCKING_VERDICTS = {"CANONICAL_MEMORY_REQUIRED", "CANONICAL_MEMORY_SKIP_REJECTED"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
 _MUTATING_CONTEXT_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove"}
 _GRAPHIFY_KEYWORDS = {"api", "architecture", "backend", "base de données", "bug", "code", "database", "db", "frontend", "migration", "module", "production", "refactor", "sécurité", "security", "test"}
@@ -291,6 +293,15 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             server.ROOT, context["task_id"], agent_id, resource or ""
         )
         payload["direct_fs_tripwire"] = {"verdict": snapshot["verdict"]}
+        canonical_snapshot = canonical_memory_gate.snapshot_before_task(
+            server.ROOT,
+            context["task_id"],
+            agent_id,
+            request=request,
+            intent=intent or "",
+            resource=resource or "",
+        )
+        payload["canonical_memory_gate"] = {"verdict": canonical_snapshot["verdict"]}
     return server.ok(payload)
 
 
@@ -609,7 +620,7 @@ def _finish_ok_after_gate(agent_id: str, summary: str, task_id: str, context_tok
     return result
 
 
-def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "") -> Dict[str, Any]:
+def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_token: str = "", action_lease_id: str = "", intent: str = "", canonical_memory_skip_reason: str = "") -> Dict[str, Any]:
     ctx = _resolve_stored_task_intent(agent_id, task_id)
     normalized_intent = (intent or "").strip().lower()
 
@@ -672,6 +683,33 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
             "active_claims": claims["owned"],
             "forbidden": ["finish_task", "direct_file_edit"],
         })
+
+    if canonical_memory_gate.is_active(server.ROOT):
+        canonical = canonical_memory_gate.evaluate_finish(
+            server.ROOT,
+            task_id,
+            agent_id,
+            request=summary or "",
+            intent=stored or normalized_intent,
+            summary=summary or "",
+            skip_reason=canonical_memory_skip_reason or "",
+        )
+        verdict = canonical.get("verdict")
+        if verdict in _CANONICAL_MEMORY_BLOCKING_VERDICTS:
+            return server.ok({
+                "ok": False,
+                **canonical,
+                "state": canonical.get("state") or verdict,
+                "terminal": False,
+                "forbidden": ["finish_task", "direct_file_edit"],
+            })
+        if verdict in _CANONICAL_MEMORY_TERMINAL_VERDICTS:
+            result = _finish_ok_after_gate(agent_id, summary, task_id, context_token)
+            payload = json.loads(result["content"][0]["text"])
+            payload.update(canonical)
+            payload["terminal"] = True
+            payload["next_state_hint"] = "READY_FOR_NEXT_TASK"
+            return server.ok(payload)
 
     try:
         gate = scribe_commit_gate.require_or_create(agent_id, task_id, context_token, summary=summary)
@@ -1172,7 +1210,7 @@ def workflow_next(
     last = _last(last_verdict)
 
     # TASK_FINISHED_OK is a terminal verdict — the workflow is done.
-    if last == "TASK_FINISHED_OK":
+    if last in {"TASK_FINISHED_OK", "CANONICAL_MEMORY_PROMOTED", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}:
         return server.ok({
             "ok": True,
             "verdict": "READY_FOR_NEXT_TASK",
@@ -1186,6 +1224,20 @@ def workflow_next(
             args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "decision": "commit"},
             reason="Mutating finish_task is blocked until an explicit SCRIBE memory decision is resolved.",
             forbidden=["finish_task", "direct_file_edit"],
+        )
+    if last in _CANONICAL_MEMORY_BLOCKING_VERDICTS:
+        return server._next_payload(
+            state=last,
+            tool="finish_task",
+            args={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "context_token": context_token,
+                "intent": intent or "",
+                "canonical_memory_skip_reason": "",
+            },
+            reason="Canonical memory must be promoted or an auditable skip reason must be provided before finish_task can close.",
+            forbidden=["direct_file_edit"],
         )
 
     stop = _track_loop(agent_id, resource, last)
@@ -1471,7 +1523,7 @@ def tool_schema(name: str) -> Dict[str, Any]:
             }, "additionalProperties": False,
         }, {})
     if name == "finish_task":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string"})
+        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string", "canonical_memory_skip_reason": "string"})
     if name == "scribe_commit_gate_status":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}}, "required": ["agent_id", "task_id", "context_token"], "additionalProperties": False}
     if name == "scribe_commit_gate_resolve":
