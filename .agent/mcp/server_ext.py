@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context, direct_fs_tripwire  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -286,6 +286,11 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             })
         raise _context_error(exc) from exc
     payload.update(context)
+    if direct_fs_tripwire.is_mutating_intent(intent or ""):
+        snapshot = direct_fs_tripwire.workspace_snapshot(
+            server.ROOT, context["task_id"], agent_id, resource or ""
+        )
+        payload["direct_fs_tripwire"] = {"verdict": snapshot["verdict"]}
     return server.ok(payload)
 
 
@@ -485,7 +490,16 @@ def apply_patch(agent_id: str, patch_id: str, task_id: str = "", context_token: 
     )
     if lease_check is not None:
         return lease_check
-    return server.ok(patch_queue.apply_patch(agent_id=agent_id, patch_id=patch_id))
+    applied = patch_queue.apply_patch(agent_id=agent_id, patch_id=patch_id)
+    if applied.get("verdict") == "PATCH_APPLIED":
+        direct_fs_tripwire.record_authorized_mutation(
+            task_id=task_id, agent_id=agent_id,
+            resource=str(applied.get("target_path") or ""),
+            tool="apply_patch", patch_id=patch_id,
+            after_hash=str(applied.get("new_hash") or ""),
+            project_root=server.ROOT,
+        )
+    return server.ok(applied)
 
 
 def delete_resource(
@@ -520,7 +534,14 @@ def delete_resource(
         strict_resource=True,
         allowed_intents=_MUTATING_CONTEXT_INTENTS,
     )
-    return server.ok(delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason))
+    deleted = delete_ops.delete_resource(agent_id=agent_id, resource=resource, base_hash=base_hash, confirm_phrase=confirm_phrase, reason=reason)
+    if deleted.get("verdict") == "RESOURCE_DELETED":
+        direct_fs_tripwire.record_authorized_mutation(
+            task_id=task_id, agent_id=agent_id, resource=resource,
+            tool="delete_resource", before_hash=base_hash,
+            project_root=server.ROOT,
+        )
+    return server.ok(deleted)
 
 
 _READ_ONLY_INTENTS = {"read", "query", "ask", "explain", "list", "show", "status"}
@@ -620,6 +641,23 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
         task_context.require_context_ready(agent_id, task_id, context_token, allowed_intents=_MUTATING_CONTEXT_INTENTS)
     except task_context.TaskContextError as exc:
         raise _context_error(exc) from exc
+
+    tripwire = direct_fs_tripwire.assert_no_unauthorized_mutations(
+        server.ROOT, task_id, agent_id
+    )
+    if tripwire.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+        return server.ok({
+            "ok": False,
+            "verdict": direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED,
+            "state": "WORKSPACE_AUDIT_REQUIRED",
+            "reason": "Unauthorized dirty workspace mutation detected outside MCP-authorized writes.",
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "suspects": tripwire.get("suspects", []),
+            "git_status": tripwire.get("git_status", []),
+            "must_call": {"tool": "workspace_audit", "args": {"agent_id": agent_id, "task_id": task_id}},
+            "forbidden": ["finish_task", "git_commit", "git_push", "direct_file_edit"],
+        })
 
     pending = server._agent_pending_patches(agent_id)
     if pending:
@@ -972,8 +1010,8 @@ def workspace_audit(
     resource: str = "",
 ) -> Dict[str, Any]:
     try:
-        result = discipline.detect_direct_write_bypass(
-            agent_id=agent_id, task_id=task_id, resource=resource,
+        result = direct_fs_tripwire.detect_unauthorized_mutations(
+            server.ROOT, task_id, agent_id, resource=resource,
         )
     except db.CoordinationError as exc:
         return server.ok({
@@ -981,6 +1019,9 @@ def workspace_audit(
             "state": str(exc),
             "forbidden": _LEASE_FORBIDDEN,
         })
+    if result.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+        result["state"] = "WORKSPACE_AUDIT_REQUIRED"
+        result["forbidden"] = ["finish_task", "git_commit", "git_push", "direct_file_edit"]
     return server.ok(result)
 
 
@@ -1183,6 +1224,20 @@ def workflow_next(
             else:
                 last_verdict = "GRAPHIFY_QUERY_DONE" if task_data.get("requires_graphify") else "SCRIBE_QUERY_DONE"
             last = _last(last_verdict)
+
+    if task_data and task_data.get("status") == "active" and direct_fs_tripwire.is_mutating_intent(task_data.get("intent") or ""):
+        tripwire = direct_fs_tripwire.detect_unauthorized_mutations(
+            server.ROOT, task_id, agent_id, resource=resource or ""
+        )
+        if tripwire.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+            return server._next_payload(
+                state="WORKSPACE_AUDIT_REQUIRED",
+                tool="workspace_audit",
+                args={"agent_id": agent_id, "task_id": task_id, "resource": resource or ""},
+                reason="Unauthorized dirty workspace mutation detected outside MCP-authorized writes.",
+                forbidden=["finish_task", "git_commit", "git_push", "direct_file_edit"],
+                context={"suspects": tripwire.get("suspects", []), "git_status": tripwire.get("git_status", [])},
+            )
 
     # V2.15.17: Read-only FSM — stored intent isolates read path from write reflexes
     if task_data and task_data.get("status") == "active":

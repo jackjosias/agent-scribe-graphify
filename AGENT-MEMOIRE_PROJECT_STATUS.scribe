@@ -217,8 +217,28 @@ journal:
         - "Terminal A lock holder"
         - "Terminal B conflict tester"
 
+  - id: "JOURNAL-002"
+    date: "2026-06-29"
+    mode: "STANDARD"
+    agent_type: "cli"
+    surface: "mcp-install"
+    hot_entries_consulted: ["INV-F003", "PAT-SCRIBE-RAG-001", "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001", "GHOST-SCRIBE-STRICT-MEMORY-001"]
+    l0_abstract: "Project-local MCP configs were synchronized for Codex with absolute paths."
+    pourquoi: "Codex CLI on this host relies on the project-local config file, so using absolute command, absolute args, and absolute cwd removes root drift between shell launches and host launches. Runtime binding is still unproven inside this sandbox, so the host must be reloaded before the MCP can be considered visible to the model."
+    scribe_delta: "JOURNAL-002"
+
+  - id: "JOURNAL-003"
+    date: "2026-06-30"
+    mode: "STANDARD"
+    agent_type: "cli"
+    surface: "V2.15.21"
+    hot_entries_consulted: ["INV-F002", "PAT-GIT-001", "PAT-SCRIBE-PAIN-CAPTURE-REFLEX-001"]
+    l0_abstract: "Direct FS tripwire stabilized for local validation."
+    pourquoi: "The tripwire initially false-positive runtime state and missed legitimate mutation recording because hashes were normalized differently and the hostile redteam used an ignored path. The fix kept .agent/state ignored, normalized hashes, preserved symlink identity, required the resource lock for apply_patch tests, and moved the hostile redteam mutation onto a normal repo file so bypass detection is actually exercised."
+    scribe_delta: "JOURNAL-003"
+
 metrics:
-  sessions_total: 2
+  sessions_total: 3
   scars_total: 0
   vaccins_actifs: 0
   taux_recidive: 0.0
@@ -226,7 +246,7 @@ metrics:
   complexite_moyenne: 0.0
   mode_distribution:
     CRITICAL: 0
-    STANDARD: 1
+    STANDARD: 2
     QUICK: 0
   dette_p0_p1_courante: 0
   dezoom_total: 0

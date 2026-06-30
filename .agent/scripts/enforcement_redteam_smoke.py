@@ -307,6 +307,22 @@ def test_direct_fs_write() -> str:
         return "BLOCKED"
 
 
+def test_direct_fs_bypass_detection() -> str:
+    clean_runtime(); clean_redteam()
+    target = "hostile-direct.txt"
+    (ROOT / target).write_text("hostile original\n", encoding="utf-8")
+    agent = bootstrap("redteam-tripwire-bypass")
+    ctx = ready_context(agent, target, "redteam tripwire bypass")
+    direct = ROOT / target
+    direct.write_text("tamper after snapshot\n", encoding="utf-8")
+    result = call_tool("workspace_audit", {"agent_id": agent, "task_id": ctx["task_id"], "resource": target})
+    if result.get("verdict") == "DIRECT_WRITE_BYPASS_DETECTED":
+        print("DIRECT_FS_BYPASS_DETECTED_BY_TRIPWIRE")
+        return "DETECTED"
+    print("DIRECT_FS_BYPASS_NOT_DETECTED")
+    return "MISSED"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--strict-context", action="store_true", help="fail if direct MCP write path bypasses before_task/scribe_query/graphify_query")
@@ -321,7 +337,8 @@ def main() -> int:
         test_resource_mismatch_refused_at_claim()
         context_bypass = test_context_bypass()
         direct_fs = test_direct_fs_write()
-        print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs}")
+        tripwire = test_direct_fs_bypass_detection()
+        print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs} direct_fs_tripwire={tripwire}")
         if args.strict_context and context_bypass == "OPEN":
             return 2
         return 0
