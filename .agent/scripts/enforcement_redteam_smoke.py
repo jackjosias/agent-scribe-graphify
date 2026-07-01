@@ -310,17 +310,20 @@ def test_direct_fs_write() -> str:
 def test_direct_fs_bypass_detection() -> str:
     clean_runtime(); clean_redteam()
     target = "hostile-direct.txt"
-    (ROOT / target).write_text("hostile original\n", encoding="utf-8")
-    agent = bootstrap("redteam-tripwire-bypass")
-    ctx = ready_context(agent, target, "redteam tripwire bypass")
     direct = ROOT / target
-    direct.write_text("tamper after snapshot\n", encoding="utf-8")
-    result = call_tool("workspace_audit", {"agent_id": agent, "task_id": ctx["task_id"], "resource": target})
-    if result.get("verdict") == "DIRECT_WRITE_BYPASS_DETECTED":
-        print("DIRECT_FS_BYPASS_DETECTED_BY_TRIPWIRE")
-        return "DETECTED"
-    print("DIRECT_FS_BYPASS_NOT_DETECTED")
-    return "MISSED"
+    try:
+        direct.write_text("hostile original\n", encoding="utf-8")
+        agent = bootstrap("redteam-tripwire-bypass")
+        ctx = ready_context(agent, target, "redteam tripwire bypass")
+        direct.write_text("tamper after snapshot\n", encoding="utf-8")
+        result = call_tool("workspace_audit", {"agent_id": agent, "task_id": ctx["task_id"], "resource": target})
+        if result.get("verdict") == "DIRECT_WRITE_BYPASS_DETECTED":
+            print("DIRECT_FS_BYPASS_DETECTED_BY_TRIPWIRE")
+            return "DETECTED"
+        print("DIRECT_FS_BYPASS_NOT_DETECTED")
+        return "MISSED"
+    finally:
+        direct.unlink(missing_ok=True)
 
 
 def main() -> int:
