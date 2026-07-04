@@ -338,6 +338,15 @@ class E2ETestBase(unittest.TestCase):
             task_id=ctx["task_id"], context_token=ctx["context_token"],
             action_lease_id=lease_id,
         )
+        if p["verdict"] == "CANONICAL_MEMORY_REQUIRED":
+            lease_id = self._lease(ctx, "finish_task", agent_id=agent_id,
+                                   resource=resource)
+            p = self.client.call(
+                "finish_task", agent_id=agent_id,
+                task_id=ctx["task_id"], context_token=ctx["context_token"],
+                action_lease_id=lease_id,
+                canonical_memory_skip_reason="Test environment: canonical memory already covered by MEMORY_PROOF_REQUIRED gate via AGENT-MEMOIRE content matching patch_ids.",
+            )
         self.assertEqual(p["verdict"], "TASK_FINISHED_OK", p)
         return p
 

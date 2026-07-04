@@ -30,7 +30,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import db, discipline, patch_queue, task_context
+from runtime import db, direct_fs_tripwire, discipline, patch_queue, task_context
 
 R = "workfile.txt"
 A1 = "func-agent-one"
@@ -144,7 +144,6 @@ def apply_(a: str, c: dict, r: str, pid: str) -> None:
 
 
 def finish(a: str, c: dict, r: str) -> None:
-    # Release the patch-queue claim so finish_task does not refuse.
     cid = _CLAIM_IDS.pop(a, "")
     if cid:
         ct("release_claim", agent_id=a, claim_id=cid)
@@ -153,7 +152,37 @@ def finish(a: str, c: dict, r: str) -> None:
         pass
     l = lease(a, c, r, "finish_task")
     f = ct("finish_task", agent_id=a, action_lease_id=l, **c)
-    assert f["verdict"] in ("TASK_FINISHED", "TASK_FINISHED_OK"), f
+    if f["verdict"] == "MEMORY_PROOF_REQUIRED":
+        _ensure_memory(a, c, f.get("applied_patch_ids", []))
+        from runtime import canonical_memory_gate as _cmg
+        _cmg.snapshot_before_task(
+            Path(mcp.server.ROOT), c.get("task_id", ""), a,
+            request="finish", intent="write",
+        )
+        l = lease(a, c, r, "finish_task")
+        f = ct("finish_task", agent_id=a, action_lease_id=l,
+               canonical_memory_skip_reason="Test environment: canonical memory reflects MCP-applied patch_ids; skip promotion for test-only flow.", **c)
+    if f["verdict"] == "SCRIBE_COMMIT_GATE_REQUIRED":
+        resolved = ct("scribe_commit_gate_resolve", agent_id=a, decision="commit", **c)
+        assert resolved["verdict"] == "SCRIBE_COMMIT_GATE_RESOLVED", resolved
+        l = lease(a, c, r, "finish_task")
+        f = ct("finish_task", agent_id=a, action_lease_id=l, **c)
+    assert f["verdict"] in ("TASK_FINISHED", "TASK_FINISHED_OK", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"), f
+
+
+def _ensure_memory(a: str, c: dict, force_pids: list[str] | None = None) -> None:
+    pids = force_pids if force_pids is not None else _applied_patch_ids(a, c["task_id"])
+    if not pids:
+        return
+    memo_file = Path(mcp.server.ROOT) / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
+    memo_file.write_text(f"Applied patches: {', '.join(pids)}\n", encoding="utf-8")
+    g(mcp.server.ROOT, "add", "AGENT-MEMOIRE_PROJECT_STATUS.scribe")
+    g(mcp.server.ROOT, "commit", "-m", "memory proof")
+    ct("scribe_query", agent_id=a, **c, query="finish memory proof", limit=3)
+
+
+def _applied_patch_ids(agent_id: str, task_id: str) -> list[str]:
+    return direct_fs_tripwire.applied_patch_ids(Path(mcp.server.ROOT), task_id, agent_id)
 
 
 SUCCESS = {"AGENT_REGISTERED", "BEFORE_TASK_OK", "PRE_ACTION_GUARD_OK",
@@ -225,7 +254,7 @@ class FunctionalAcceptanceTest(unittest.TestCase):
         self.assertIn("modified", content)
         self.assertNotIn("\nline2\n", f"\n{content}\n")
 
-        audit = ct("workspace_audit", agent_id=A1, resource=R)
+        audit = ct("workspace_audit", agent_id=A1, resource=R, task_id=ctx["task_id"])
         self.assertEqual(audit["verdict"], "WORKSPACE_AUDIT_OK")
 
     # ── BR5: Write gate — direct edit forbidden ────────────────────────────
@@ -234,8 +263,12 @@ class FunctionalAcceptanceTest(unittest.TestCase):
 
     def test_b5_direct_write_detected(self) -> None:
         register(A1)
+        ctx = {"task_id": bt(A1)["task_id"], "context_token": ""}
+        ct("scribe_query", agent_id=A1, **ctx, query="x", limit=1)
+        ct("graphify_query", agent_id=A1, **ctx, query="x", resource=R)
+        direct_fs_tripwire.workspace_snapshot(Path(mcp.server.ROOT), ctx["task_id"], A1)
         (self.root / R).write_text("direct!\n")
-        audit = ct("workspace_audit", agent_id=A1, resource=R)
+        audit = ct("workspace_audit", agent_id=A1, task_id=ctx["task_id"], resource=R)
         self.assertEqual(audit["verdict"], "DIRECT_WRITE_BYPASS_DETECTED")
 
     # ── BR6: Workflow FSM enforces step order ──────────────────────────────
@@ -482,8 +515,8 @@ class FunctionalAcceptanceTest(unittest.TestCase):
     # when workspace_audit is called, it reports OK.
 
     def test_b20_workspace_audit_clean(self) -> None:
-        register(A1)
-        audit = ct("workspace_audit", agent_id=A1, resource=R)
+        ctx = ready(A1)
+        audit = ct("workspace_audit", agent_id=A1, task_id=ctx["task_id"], resource=R)
         self.assertEqual(audit["verdict"], "WORKSPACE_AUDIT_OK")
 
     # ── BR21: Stale agents detected as idle ───────────────────────────────

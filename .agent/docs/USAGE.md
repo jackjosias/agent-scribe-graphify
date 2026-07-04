@@ -33,13 +33,7 @@ DELETE chemin/relatif/du/fichier
 
 ## Validation locale
 
-Depuis la racine du projet, utiliser le runner séquentiel canonique pour les validations runtime MCP :
-
-```bash
-python3 .agent/scripts/validation_suite.py
-```
-
-Pour lancer uniquement le smoke MCP principal :
+Depuis la racine du projet :
 
 ```bash
 python3 .agent/scripts/mcp_smoke.py
@@ -87,7 +81,7 @@ python3 .agent/scripts/enforcement_redteam_smoke.py --strict-context
 
 Le mode normal prouve les gates fondamentaux et rapporte `context_bypass=OPEN|CLOSED`. Depuis V2.8, le résultat attendu est `context_bypass=CLOSED` et `--strict-context` doit passer. Depuis V2.8.1, ce smoke vérifie aussi que les contextes wildcard, les mismatches de resource et les intents non mutateurs sont refusés pour les patches/deletes. `DIRECT_FS_WRITE_OUTSIDE_SANDBOX_OPEN` peut rester présent : c'est une limite host/OS, pas une limite MCP-context.
 
-Toute validation qui touche `.agent/state/runtime` est one-at-a-time. `validation_suite.py` lance `test_validation_runtime_lock.py`, `mcp_smoke.py`, puis `enforcement_redteam_smoke.py` dans cet ordre. `mcp_smoke.py` et `enforcement_redteam_smoke.py` échouent immédiatement avec `VALIDATION_RUNTIME_BUSY_RUN_SEQUENTIALLY` si une validation runtime est déjà active. En CI et en agent local, préférer `python3 .agent/scripts/validation_suite.py`; sinon exécuter `test_validation_runtime_lock.py`, `enforcement_redteam_smoke.py`, `mcp_smoke.py`, `delete_resource_smoke.py`, `scribe_record_smoke.py` et `sandbox_smoke.py` strictement en séquentiel, ou isoler chaque job avec son propre runtime state.
+Les smokes MCP qui nettoient `.agent/state/runtime/coordination.sqlite` ne sont pas parallélisables par défaut. En CI, exécuter `enforcement_redteam_smoke.py`, `mcp_smoke.py`, `delete_resource_smoke.py`, `scribe_record_smoke.py` et `sandbox_smoke.py` en séquentiel, ou isoler chaque job avec son propre runtime state.
 
 ## Copier .agent dans un nouveau projet
 
@@ -182,6 +176,29 @@ scribe-out/records/
 
 Le host ne doit pas écrire directement dans `scribe-out/`. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant `finish_task`.
 
+## Preuve mémoire finish_task
+
+Depuis V2.15, `finish_task` exige une preuve mémoire si des patches MCP ont été
+appliqués via le protocole. Le verdict `MEMORY_PROOF_REQUIRED` est retourné quand
+aucun `patch_id` des mutations autorisées n'apparaît dans le fichier mémoire canonique
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe`.
+
+Procédure de déblocage :
+
+1. Modifier `AGENT-MEMOIRE_PROJECT_STATUS.scribe` via le protocole MCP contrôlé
+   (`file_hash` → `propose_patch` → `apply_patch`) avec les `patch_id` retournés
+   par `finish_task` dans `applied_patch_ids`
+2. Rappeler `scribe_query` pour rafraîchir le hash mémoire
+3. Rappeler `finish_task`
+
+Le commit du fichier mémoire n'est pas automatiquement requis. Si l'utilisateur
+demande explicitement le versioning, `git add`/`git commit` sont autorisés.
+
+La vérification se fait par substring exact-match : au moins un `patch_id` doit
+apparaître textuellement dans le fichier mémoire. Aucune modification directe de
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe` n'est autorisée — le tripwire la détecte
+comme `DIRECT_WRITE_BYPASS_DETECTED`.
+
 ## Workflow mécanique attendu
 
 ```text
@@ -263,6 +280,7 @@ Règles d'écriture :
 - suppression = claim + base_hash + confirmation exacte obligatoires
 - patch = base_hash obligatoire
 - finish_task interdit avec patch pending/conflict
+- finish_task retourne MEMORY_PROOF_REQUIRED si des patches MCP sont appliqués sans preuve dans AGENT-MEMOIRE_PROJECT_STATUS.scribe
 - before_edit refuse les écritures directes du host
 ```
 

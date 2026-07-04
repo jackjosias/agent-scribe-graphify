@@ -18,6 +18,7 @@ except Exception:
 DIRECT_WRITE_BYPASS_DETECTED = "DIRECT_WRITE_BYPASS_DETECTED"
 TRIPWIRE_CLEAN = "DIRECT_FS_TRIPWIRE_CLEAN"
 MUTATING_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
+MEMOIRE_FILE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
 IGNORED_PREFIXES = (
     ".git/",
     ".agent/state/",
@@ -234,6 +235,14 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         if _is_authorized_change(entry, base, auth):
             continue
         suspects.append(entry)
+    for entry in current:
+        if entry["path"] == MEMOIRE_FILE and entry not in suspects:
+            if wanted_resource and entry["path"] != wanted_resource:
+                continue
+            auth_paths = {a.get("resource") for a in auth}
+            if MEMOIRE_FILE not in auth_paths:
+                suspects.append(entry)
+
     verdict = DIRECT_WRITE_BYPASS_DETECTED if suspects else TRIPWIRE_CLEAN
     with db.connect(root) as con:
         event = "direct_fs_tripwire.bypass_detected" if suspects else "direct_fs_tripwire.clean"
@@ -246,3 +255,14 @@ def assert_no_unauthorized_mutations(project_root: Path | None, task_id: str, ag
     if result["verdict"] == DIRECT_WRITE_BYPASS_DETECTED:
         return result
     return result
+
+
+def applied_patch_ids(project_root: Path | None, task_id: str, agent_id: str) -> list[str]:
+    root = _project_root(project_root)
+    _ensure_schema(root)
+    with db.connect(root) as con:
+        rows = con.execute(
+            "SELECT patch_id FROM direct_fs_authorized_mutations_v1 WHERE task_id=? AND agent_id=? AND patch_id != ''",
+            (task_id, agent_id),
+        ).fetchall()
+    return [row["patch_id"] for row in rows if row["patch_id"]]

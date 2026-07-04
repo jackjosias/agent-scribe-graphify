@@ -444,13 +444,25 @@ def claim_resource(agent_id: str, resource: str, mode: str = "write", ttl_second
 
 def scribe_query(query: str, limit: int = 5, agent_id: str = "", task_id: str = "", context_token: str = "") -> Dict[str, Any]:
     result = _BASE_SCRIBE_QUERY(query=query, limit=limit)
+    payload = json.loads(result["content"][0]["text"])
+    res = payload.get("result", {})
+    if res.get("returncode", 0) != 0:
+        return server.ok({
+            "ok": False,
+            "verdict": "SCRIBE_QUERY_FAILED",
+            "query": query,
+            "result": res,
+        })
     if agent_id or task_id or context_token:
         try:
-            task_context.mark_scribe_done(agent_id, task_id, context_token)
+            ctx_result = task_context.mark_scribe_done(agent_id, task_id, context_token)
         except task_context.TaskContextError as exc:
             raise _context_error(exc) from exc
-        payload = json.loads(result["content"][0]["text"])
-        payload["task_context"] = {"task_id": task_id, "scribe_done": True}
+        payload["task_context"] = {
+            "task_id": task_id,
+            "scribe_done": True,
+            "memory_hash": ctx_result.get("memory_hash"),
+        }
         return server.ok(payload)
     return result
 
@@ -669,6 +681,26 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
             "must_call": {"tool": "workspace_audit", "args": {"agent_id": agent_id, "task_id": task_id}},
             "forbidden": ["finish_task", "git_commit", "git_push", "direct_file_edit"],
         })
+
+    patch_ids = direct_fs_tripwire.applied_patch_ids(server.ROOT, task_id, agent_id)
+    if patch_ids:
+        memo_file = server.ROOT / direct_fs_tripwire.MEMOIRE_FILE
+        memory_content = memo_file.read_text(encoding="utf-8", errors="replace") if memo_file.is_file() else ""
+        memory_proven = any(pid and pid in memory_content for pid in patch_ids)
+        if not memory_proven:
+            return server.ok({
+                "ok": False,
+                "verdict": "MEMORY_PROOF_REQUIRED",
+                "state": "MEMORY_PROOF_REQUIRED",
+                "reason": (
+                    f"Canonical memory required: none of the {len(patch_ids)} MCP-applied "
+                    "patch_ids appear in AGENT-MEMOIRE_PROJECT_STATUS.scribe. "
+                    "Record a SCRIBE entry referencing at least one applied patch_id "
+                    "before finish_task."
+                ),
+                "applied_patch_ids": patch_ids,
+                "forbidden": ["finish_task", "git_commit", "git_push", "direct_file_edit"],
+            })
 
     pending = server._agent_pending_patches(agent_id)
     if pending:
@@ -1060,6 +1092,9 @@ def workspace_audit(
     if result.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
         result["state"] = "WORKSPACE_AUDIT_REQUIRED"
         result["forbidden"] = ["finish_task", "git_commit", "git_push", "direct_file_edit"]
+    elif result.get("verdict") == direct_fs_tripwire.TRIPWIRE_CLEAN:
+        result["verdict"] = "WORKSPACE_AUDIT_OK"
+        result["state"] = "WORKSPACE_AUDIT_OK"
     return server.ok(result)
 
 

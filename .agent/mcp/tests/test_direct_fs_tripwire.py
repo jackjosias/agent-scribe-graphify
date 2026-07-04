@@ -142,7 +142,7 @@ class DirectFsTripwireTest(unittest.TestCase):
         ctx = self.ready()
         self.apply_authorized_patch(ctx)
         result = self.audit(ctx)
-        self.assertEqual(result["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN, result)
+        self.assertEqual(result["verdict"], "WORKSPACE_AUDIT_OK", result)
 
     def test_07_delete_resource_authorized_is_clean(self) -> None:
         ctx = self.ready(intent="delete")
@@ -151,7 +151,7 @@ class DirectFsTripwireTest(unittest.TestCase):
         deleted = call_tool("delete_resource", agent_id=self.agent, resource="tracked.txt", base_hash=fh["hash"], confirm_phrase="DELETE tracked.txt", reason="test", action_lease_id=self.lease("delete_resource", ctx), **ctx)
         self.assertEqual(deleted["verdict"], "RESOURCE_DELETED", deleted)
         result = self.audit(ctx)
-        self.assertEqual(result["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN, result)
+        self.assertEqual(result["verdict"], "WORKSPACE_AUDIT_OK", result)
 
     def test_08_direct_modification_after_authorized_patch_detected(self) -> None:
         ctx = self.ready()
@@ -165,28 +165,28 @@ class DirectFsTripwireTest(unittest.TestCase):
         path = self.root / ".agent" / "state" / "runtime" / "noise.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("noise\n", encoding="utf-8")
-        self.assertEqual(self.audit(ctx)["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN)
+        self.assertEqual(self.audit(ctx)["verdict"], "WORKSPACE_AUDIT_OK")
 
     def test_10_agent_state_outputs_ignored(self) -> None:
         ctx = self.before()
         path = self.root / ".agent" / "state" / "outputs" / "noise.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("noise\n", encoding="utf-8")
-        self.assertEqual(self.audit(ctx)["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN)
+        self.assertEqual(self.audit(ctx)["verdict"], "WORKSPACE_AUDIT_OK")
 
     def test_11_pytest_cache_ignored(self) -> None:
         ctx = self.before()
         path = self.root / ".pytest_cache" / "v" / "cache.txt"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("cache\n", encoding="utf-8")
-        self.assertEqual(self.audit(ctx)["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN)
+        self.assertEqual(self.audit(ctx)["verdict"], "WORKSPACE_AUDIT_OK")
 
     def test_12_pycache_ignored(self) -> None:
         ctx = self.before()
         path = self.root / "pkg" / "__pycache__" / "mod.pyc"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"cache")
-        self.assertEqual(self.audit(ctx)["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN)
+        self.assertEqual(self.audit(ctx)["verdict"], "WORKSPACE_AUDIT_OK")
 
     def test_13_symlink_does_not_follow_target(self) -> None:
         ctx = self.before(resource="passwd-link")
@@ -231,7 +231,7 @@ class DirectFsTripwireTest(unittest.TestCase):
         (self.root / "tracked.txt").write_text("direct\n", encoding="utf-8")
         self.assertEqual(self.audit(ctx)["verdict"], "DIRECT_WRITE_BYPASS_DETECTED")
         (self.root / "tracked.txt").write_text("base\n", encoding="utf-8")
-        self.assertEqual(self.audit(ctx)["verdict"], direct_fs_tripwire.TRIPWIRE_CLEAN)
+        self.assertEqual(self.audit(ctx)["verdict"], "WORKSPACE_AUDIT_OK")
 
     def test_20_no_regression_scribe_commit_gate_required(self) -> None:
         ctx = self.ready()
