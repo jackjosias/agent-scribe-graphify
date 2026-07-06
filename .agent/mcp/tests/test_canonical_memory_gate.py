@@ -102,6 +102,11 @@ class CanonicalMemoryGateTest(unittest.TestCase):
 
     def lease(self, ctx: dict[str, str], action: str = "finish_task", intent: str = "write") -> str:
         result = call_tool("pre_action_guard", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], resource=RESOURCE, intent=intent, planned_action=action)
+        if result.get("verdict") == "NEXT_ACTION_REQUIRED" and result.get("must_call", {}).get("tool") == "scribe_query":
+            args = result["must_call"]["args"]
+            sq = call_tool("scribe_query", **args)
+            self.assertIn(sq.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}, sq)
+            result = call_tool("pre_action_guard", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], resource=RESOURCE, intent=intent, planned_action=action)
         self.assertEqual(result.get("verdict"), "PRE_ACTION_GUARD_OK", result)
         return result["action_lease"]["lease_id"]
 
@@ -180,6 +185,21 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertEqual(applied.get("verdict"), "PATCH_APPLIED", applied)
         self.release_claim(claim_id)
         scratch.unlink(missing_ok=True)
+        patch_id = proposed["patch_id"]
+        memo_file = self.root / RESOURCE
+        memo_content = memo_file.read_text(encoding="utf-8")
+        memo_file.write_text(memo_content + f"\n# applied-patch-ref:{patch_id}\n", encoding="utf-8")
+        import hashlib
+        memo_hash = "sha256:" + hashlib.sha256(memo_file.read_bytes()).hexdigest()
+        direct_fs_tripwire.record_authorized_mutation(
+            task_id=ctx.get("task_id", ""), agent_id=AGENT_A,
+            resource=RESOURCE, tool="scribe_patch_proof",
+            project_root=self.root,
+            after_hash=memo_hash,
+        )
+        sq = call_tool("scribe_query", agent_id=AGENT_A, **ctx,
+                       query=f"patch proof {token}", limit=3)
+        self.assertIn(sq.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}, sq)
 
     def finish(self, ctx: dict[str, str], intent: str = "write", summary: str = "finish", skip_reason: str = "") -> dict[str, Any]:
         lease_id = self.lease(ctx, "finish_task", intent=intent)

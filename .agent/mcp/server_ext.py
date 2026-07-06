@@ -682,7 +682,7 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
             "forbidden": ["finish_task", "git_commit", "git_push", "direct_file_edit"],
         })
 
-    patch_ids = direct_fs_tripwire.applied_patch_ids(server.ROOT, task_id, agent_id)
+    patch_ids = direct_fs_tripwire.applied_patch_ids(server.ROOT, task_id, agent_id, resource=direct_fs_tripwire.MEMOIRE_FILE)
     if patch_ids:
         memo_file = server.ROOT / direct_fs_tripwire.MEMOIRE_FILE
         memory_content = memo_file.read_text(encoding="utf-8", errors="replace") if memo_file.is_file() else ""

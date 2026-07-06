@@ -409,7 +409,7 @@ def scribe_query(query: str, limit: int = 5) -> Dict[str, Any]:
     scribe_rag = AGENT_DIR / "workflow" / "scribe" / "scribe-rag"
     if not scribe_rag.exists():
         return ok({"verdict": "SCRIBE_UNAVAILABLE", "query": query, "reason": "scribe-rag not found"})
-    res = run_cmd([str(scribe_rag), "query", query, "--top", str(max(1, min(int(limit), 20)))], timeout=30)
+    res = run_cmd([str(scribe_rag), "query", query, "--limit", str(max(1, min(int(limit), 20)))], timeout=30)
     return ok({"verdict": "SCRIBE_QUERY_DONE", "query": query, "result": res})
 
 

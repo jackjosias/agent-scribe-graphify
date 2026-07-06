@@ -257,12 +257,19 @@ def assert_no_unauthorized_mutations(project_root: Path | None, task_id: str, ag
     return result
 
 
-def applied_patch_ids(project_root: Path | None, task_id: str, agent_id: str) -> list[str]:
+def applied_patch_ids(project_root: Path | None, task_id: str, agent_id: str, resource: str = "") -> list[str]:
     root = _project_root(project_root)
+    safe = _safe_resource(resource)
     _ensure_schema(root)
     with db.connect(root) as con:
-        rows = con.execute(
-            "SELECT patch_id FROM direct_fs_authorized_mutations_v1 WHERE task_id=? AND agent_id=? AND patch_id != ''",
-            (task_id, agent_id),
-        ).fetchall()
+        if safe:
+            rows = con.execute(
+                "SELECT patch_id FROM direct_fs_authorized_mutations_v1 WHERE task_id=? AND agent_id=? AND resource=? AND patch_id != ''",
+                (task_id, agent_id, safe),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT patch_id FROM direct_fs_authorized_mutations_v1 WHERE task_id=? AND agent_id=? AND patch_id != ''",
+                (task_id, agent_id),
+            ).fetchall()
     return [row["patch_id"] for row in rows if row["patch_id"]]

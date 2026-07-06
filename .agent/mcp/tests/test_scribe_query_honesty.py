@@ -202,6 +202,13 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         p = self._call("pre_action_guard", agent_id=agent_id, intent="write",
                         resource=resource, planned_action=action,
                         task_id=ctx["task_id"], context_token=ctx["context_token"])
+        if p.get("verdict") == "NEXT_ACTION_REQUIRED" and p.get("must_call", {}).get("tool") == "scribe_query":
+            args = p["must_call"]["args"]
+            sq = self._call("scribe_query", **args)
+            self.assertEqual(sq.get("verdict"), "SCRIBE_QUERY_DONE", sq)
+            p = self._call("pre_action_guard", agent_id=agent_id, intent="write",
+                            resource=resource, planned_action=action,
+                            task_id=ctx["task_id"], context_token=ctx["context_token"])
         self.assertEqual(p["verdict"], "PRE_ACTION_GUARD_OK", p)
         lid: str = p["action_lease"]["lease_id"]
         self.assertTrue(lid.startswith("lease-"), lid)
@@ -284,36 +291,31 @@ class ScribeQueryHonestyTest(unittest.TestCase):
     # ── Test 2: finish_task blocks when patch_ids absent from mémoire ─────────
 
     def test_finish_task_blocks_when_memory_missing_patch_id(self) -> None:
-        (self.root / "README.md").write_text(FILE_CONTENT, encoding="utf-8")
+        MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
         _make_scribe_rag(self.root, returncode=0)
         memo = self._init_memo()
-        subprocess.run(["git", "add", "README.md"],
-                       cwd=str(self.root), capture_output=True, env=self._env)
-        subprocess.run(["git", "commit", "-m", "update README.md content"],
-                       cwd=str(self.root), capture_output=True, env=self._env)
-        memo.write_text("memory without patch_id\n", encoding="utf-8")
+        memo.write_text(FILE_CONTENT, encoding="utf-8")
         import hashlib
         memo_after_hash = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
-        ctx = self.register_and_before(intent="write", resource="README.md")
+        ctx = self.register_and_before(intent="write", resource=MEMOIRE)
         direct_fs_tripwire.record_authorized_mutation(
             task_id=ctx["task_id"], agent_id=ctx["agent_id"],
-            resource="AGENT-MEMOIRE_PROJECT_STATUS.scribe",
-            tool="scribe_record", project_root=self.root,
+            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
             after_hash=memo_after_hash,
         )
         sq = self.call("scribe_query", **ctx, query="test", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
         aid = ctx["agent_id"]
-        lease_claim = self._lease(ctx, "claim_resource", aid)
-        cid = self._claim(ctx, lease_claim, aid)
-        base = self._file_hash()
-        lease_propose = self._lease(ctx, "propose_patch", aid)
-        pid = self._propose(ctx, lease_propose, base, aid)
-        lease_apply = self._lease(ctx, "apply_patch", aid)
-        self._apply(ctx, lease_apply, pid, aid)
+        lease_claim = self._lease(ctx, "claim_resource", aid, resource=MEMOIRE)
+        cid = self._claim(ctx, lease_claim, aid, resource=MEMOIRE)
+        base = self._file_hash(resource=MEMOIRE)
+        lease_propose = self._lease(ctx, "propose_patch", aid, resource=MEMOIRE)
+        pid = self._propose(ctx, lease_propose, base, aid, resource=MEMOIRE)
+        lease_apply = self._lease(ctx, "apply_patch", aid, resource=MEMOIRE)
+        self._apply(ctx, lease_apply, pid, aid, resource=MEMOIRE)
         self._release_claim(cid, aid)
-        lease_finish = self._lease(ctx, "finish_task", aid)
+        lease_finish = self._lease(ctx, "finish_task", aid, resource=MEMOIRE)
         result = self._finish_with_lease(ctx, lease_finish, aid)
         self.assertEqual(result.get("verdict"), "MEMORY_PROOF_REQUIRED", result)
         self.assertEqual(result.get("state"), "MEMORY_PROOF_REQUIRED", result)
@@ -322,59 +324,52 @@ class ScribeQueryHonestyTest(unittest.TestCase):
     # ── Test 3: finish_task succeeds when patch_id appears in mémoire ─────────
 
     def test_finish_task_accepts_when_patch_id_in_memory(self) -> None:
-        (self.root / "README.md").write_text(FILE_CONTENT, encoding="utf-8")
+        MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
         _make_scribe_rag(self.root, returncode=0)
         memo = self._init_memo()
-        subprocess.run(["git", "add", "README.md"],
-                       cwd=str(self.root), capture_output=True, env=self._env)
-        subprocess.run(["git", "commit", "-m", "update README.md content"],
-                       cwd=str(self.root), capture_output=True, env=self._env)
-        memo.write_text("memory without patch_id\n", encoding="utf-8")
+        memo.write_text(FILE_CONTENT, encoding="utf-8")
         import hashlib
         memo_after_hash = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
-        ctx = self.register_and_before(intent="write", resource="README.md")
+        ctx = self.register_and_before(intent="write", resource=MEMOIRE)
         direct_fs_tripwire.record_authorized_mutation(
             task_id=ctx["task_id"], agent_id=ctx["agent_id"],
-            resource="AGENT-MEMOIRE_PROJECT_STATUS.scribe",
-            tool="scribe_record", project_root=self.root,
+            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
             after_hash=memo_after_hash,
         )
         sq = self.call("scribe_query", **ctx, query="test", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
         aid = ctx["agent_id"]
-        lease_claim = self._lease(ctx, "claim_resource", aid)
-        cid = self._claim(ctx, lease_claim, aid)
-        base = self._file_hash()
-        lease_propose = self._lease(ctx, "propose_patch", aid)
-        pid = self._propose(ctx, lease_propose, base, aid)
-        lease_apply = self._lease(ctx, "apply_patch", aid)
-        self._apply(ctx, lease_apply, pid, aid)
+        lease_claim = self._lease(ctx, "claim_resource", aid, resource=MEMOIRE)
+        cid = self._claim(ctx, lease_claim, aid, resource=MEMOIRE)
+        base = self._file_hash(resource=MEMOIRE)
+        lease_propose = self._lease(ctx, "propose_patch", aid, resource=MEMOIRE)
+        pid = self._propose(ctx, lease_propose, base, aid, resource=MEMOIRE)
+        lease_apply = self._lease(ctx, "apply_patch", aid, resource=MEMOIRE)
+        self._apply(ctx, lease_apply, pid, aid, resource=MEMOIRE)
         self._release_claim(cid, aid)
         memo.write_text(f"memory referencing patch {pid}\n", encoding="utf-8")
         memo_after_hash2 = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
         direct_fs_tripwire.record_authorized_mutation(
             task_id=ctx["task_id"], agent_id=aid,
-            resource="AGENT-MEMOIRE_PROJECT_STATUS.scribe",
-            tool="scribe_record", project_root=self.root,
+            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
             after_hash=memo_after_hash2,
         )
         sq2 = self.call("scribe_query", **ctx, query="test", limit=3)
         self.assertIs(sq2.get("ok"), True, sq2)
         from runtime import canonical_memory_gate as _cmg
         from runtime import db as _cdb
-        memo_path = self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
-        current_bytes = memo_path.read_bytes() if memo_path.exists() else b""
+        current_bytes = memo.read_bytes() if memo.exists() else b""
         current_hex = hashlib.sha256(current_bytes).hexdigest()
         with _cdb.connect(self.root) as _con:
             _con.execute(
                 "UPDATE canonical_memory_gate_v1 SET baseline_hash=? WHERE task_id=? AND agent_id=?",
                 (current_hex, ctx["task_id"], aid),
             )
-        lease_finish = self._lease(ctx, "finish_task", aid)
+        lease_finish = self._lease(ctx, "finish_task", aid, resource=MEMOIRE)
         result = self._finish_with_lease(ctx, lease_finish, aid)
         if result.get("verdict") == "CANONICAL_MEMORY_REQUIRED":
-            lease_finish = self._lease(ctx, "finish_task", aid)
+            lease_finish = self._lease(ctx, "finish_task", aid, resource=MEMOIRE)
             result = self.call("finish_task", agent_id=aid,
                                task_id=ctx["task_id"], context_token=ctx["context_token"],
                                action_lease_id=lease_finish,
