@@ -516,6 +516,37 @@ class WorkspaceAuditIntegrationTest(unittest.TestCase):
         audit = call_tool("workspace_audit", agent_id=AGENT_A, task_id=ctx["task_id"], resource=RESOURCE)
         self.assertEqual(audit["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", audit)
 
+    # ── V2.15.24-A: Security audit — direct write on secondary resource ──
+
+    def test_18_direct_write_on_secondary_resource_detected(self) -> None:
+        """Same agent, task on RESOURCE, direct write on secondary file:
+        finish_task must return DIRECT_WRITE_BYPASS_DETECTED."""
+        secondary = RESOURCE2
+        (self.root / secondary).write_text("initial\n", encoding="utf-8")
+        git(self.root, "add", secondary)
+        git(self.root, "commit", "-m", "add secondary")
+
+        call_tool("register_agent", agent_id=AGENT_A, host_tool="test")
+        bt = call_tool("before_task", agent_id=AGENT_A, request="edit tracked", intent="write", resource=RESOURCE)
+        ctx = {"task_id": bt["task_id"], "context_token": bt["context_token"]}
+        call_tool("scribe_query", agent_id=AGENT_A, **ctx, query="x", limit=1)
+        call_tool("graphify_query", agent_id=AGENT_A, **ctx, query="x", resource=RESOURCE)
+
+        claim_id = _claim(ctx, AGENT_A, RESOURCE)
+        pid = _propose(ctx, AGENT_A, RESOURCE, "@@ -1,3 +1,3 @@\n line1\n-line2\n+modified\n line3\n")
+        _apply(ctx, AGENT_A, RESOURCE, pid)
+        _release_claim(claim_id, AGENT_A)
+
+        (self.root / secondary).write_text("direct edit bypass\n", encoding="utf-8")
+
+        lease_id = _lease(ctx, AGENT_A, RESOURCE, "finish_task")
+        ft = call_tool("finish_task", agent_id=AGENT_A,
+                       task_id=ctx["task_id"], context_token=ctx["context_token"],
+                       action_lease_id=lease_id)
+        self.assertEqual(ft.get("verdict"), "DIRECT_WRITE_BYPASS_DETECTED", ft)
+        suspects = ft.get("suspects", [])
+        self.assertTrue(any(secondary in s.get("path", "") for s in suspects), ft)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Section 6 — Patch Queue Lifecycle

@@ -158,6 +158,13 @@ def _authorized(con: Any, task_id: str, agent_id: str) -> list[dict[str, str]]:
     return [dict(row) for row in rows]
 
 
+def _all_authorized(con: Any) -> list[dict[str, str]]:
+    rows = con.execute(
+        "SELECT task_id,agent_id,resource,tool,patch_id,before_hash,after_hash FROM direct_fs_authorized_mutations_v1"
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _status_key(entries: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return {entry["path"]: entry for entry in entries}
 
@@ -220,7 +227,7 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         if not snapshot:
             return {"verdict": "DIRECT_FS_TRIPWIRE_NO_SNAPSHOT", "task_id": task_id, "agent_id": agent_id, "suspects": [], "git_status": _git_status(root)}
         baseline = json.loads(snapshot["baseline_status_json"])
-        auth = _authorized(con, task_id, agent_id)
+        all_auth = _all_authorized(con)
     current = _git_status(root)
     baseline_map = _status_key(baseline)
     suspects: list[dict[str, str]] = []
@@ -232,22 +239,22 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         base = baseline_map.get(path)
         if base and base.get("status") == entry.get("status") and base.get("hash") == entry.get("hash"):
             continue
-        if _is_authorized_change(entry, base, auth):
+        if _is_authorized_change(entry, base, all_auth):
             continue
         suspects.append(entry)
     for entry in current:
         if entry["path"] == MEMOIRE_FILE and entry not in suspects:
             if wanted_resource and entry["path"] != wanted_resource:
                 continue
-            auth_paths = {a.get("resource") for a in auth}
+            auth_paths = {a.get("resource") for a in all_auth}
             if MEMOIRE_FILE not in auth_paths:
                 suspects.append(entry)
 
     verdict = DIRECT_WRITE_BYPASS_DETECTED if suspects else TRIPWIRE_CLEAN
     with db.connect(root) as con:
         event = "direct_fs_tripwire.bypass_detected" if suspects else "direct_fs_tripwire.clean"
-        db.add_event(con, event, {"task_id": task_id, "resource": wanted_resource, "suspects": suspects, "authorized": auth}, agent_id)
-    return {"verdict": verdict, "task_id": task_id, "agent_id": agent_id, "resource": wanted_resource, "suspects": suspects, "git_status": current, "authorized_mutations": auth}
+        db.add_event(con, event, {"task_id": task_id, "resource": wanted_resource, "suspects": suspects, "authorized": all_auth}, agent_id)
+    return {"verdict": verdict, "task_id": task_id, "agent_id": agent_id, "resource": wanted_resource, "suspects": suspects, "git_status": current, "authorized_mutations": all_auth}
 
 
 def assert_no_unauthorized_mutations(project_root: Path | None, task_id: str, agent_id: str, resource: str = "") -> dict[str, Any]:

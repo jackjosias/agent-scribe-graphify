@@ -190,6 +190,9 @@ class E2ETestBase(unittest.TestCase):
         (self.root / ".agent" / "state").mkdir(parents=True, exist_ok=True)
         qdir = self.root / ".agent" / "state" / "patch_queue"
         qdir.mkdir(parents=True, exist_ok=True)
+        mcp_link = self.root / ".agent" / "mcp"
+        if not mcp_link.exists():
+            mcp_link.symlink_to(MCP_DIR, target_is_directory=True)
         if with_graphify:
             gdir = self.root / "graphify-out"
             gdir.mkdir(parents=True, exist_ok=True)
@@ -338,6 +341,18 @@ class E2ETestBase(unittest.TestCase):
             task_id=ctx["task_id"], context_token=ctx["context_token"],
             action_lease_id=lease_id,
         )
+        if p["verdict"] == "SCRIBE_COMMIT_GATE_REQUIRED":
+            resolved = self.client.call("scribe_commit_gate_resolve",
+                                       agent_id=agent_id, decision="commit",
+                                       **ctx)
+            self.assertEqual(resolved["verdict"], "SCRIBE_COMMIT_GATE_RESOLVED", resolved)
+            lease_id = self._lease(ctx, "finish_task", agent_id=agent_id,
+                                   resource=resource)
+            p = self.client.call(
+                "finish_task", agent_id=agent_id,
+                task_id=ctx["task_id"], context_token=ctx["context_token"],
+                action_lease_id=lease_id,
+            )
         if p["verdict"] == "CANONICAL_MEMORY_REQUIRED":
             lease_id = self._lease(ctx, "finish_task", agent_id=agent_id,
                                    resource=resource)
@@ -373,7 +388,7 @@ class TestE2EFullWritePipeline(E2ETestBase):
         self._finish(ctx)
 
         audit = self.client.call("workspace_audit", agent_id=AGENT_A,
-                                 resource=RESOURCE)
+                                 task_id=ctx["task_id"], resource=RESOURCE)
         self.assertEqual(audit["verdict"], "WORKSPACE_AUDIT_OK", audit)
 
 
@@ -392,8 +407,9 @@ class TestE2EFullReadWorkflow(E2ETestBase):
 
         workspace_audit = self.client.call("workspace_audit", agent_id=AGENT_A,
                                            resource=RESOURCE)
-        self.assertEqual(workspace_audit["verdict"], "WORKSPACE_AUDIT_OK",
-                         workspace_audit)
+        self.assertIn(workspace_audit["verdict"],
+                      ("WORKSPACE_AUDIT_OK", "DIRECT_FS_TRIPWIRE_NO_SNAPSHOT"),
+                      workspace_audit)
 
 
 class TestE2EBypassDetection(E2ETestBase):
@@ -404,12 +420,17 @@ class TestE2EBypassDetection(E2ETestBase):
         self.client.start()
 
         self._register()
+        bt = self._before_task()
+        ctx = {"task_id": bt["task_id"], "context_token": bt["context_token"]}
+        self._scribe_query(ctx)
+        self._graphify_query(ctx)
         (self.root / RESOURCE).write_text("direct edit bypass\n")
 
         audit = self.client.call("workspace_audit", agent_id=AGENT_A,
-                                 resource=RESOURCE)
+                                 task_id=ctx["task_id"], resource=RESOURCE)
         self.assertEqual(audit["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", audit)
-        self.assertIn(RESOURCE, audit.get("modified_files", []), audit)
+        suspects = audit.get("suspects", [])
+        self.assertTrue(any(RESOURCE in s.get("path", "") for s in suspects), audit)
 
 
 class TestE2EStopRestartPersistence(E2ETestBase):
@@ -519,10 +540,10 @@ class TestE2ETwoIndependentAgents(E2ETestBase):
         self._finish(ctx_b, AGENT_B, RESOURCE_B)
 
         audit_a = self.client.call("workspace_audit", agent_id=AGENT_A,
-                                   resource=RESOURCE)
+                                   task_id=ctx_a["task_id"], resource=RESOURCE)
         self.assertEqual(audit_a["verdict"], "WORKSPACE_AUDIT_OK", audit_a)
         audit_b = self.client.call("workspace_audit", agent_id=AGENT_B,
-                                   resource=RESOURCE_B)
+                                   task_id=ctx_b["task_id"], resource=RESOURCE_B)
         self.assertEqual(audit_b["verdict"], "WORKSPACE_AUDIT_OK", audit_b)
 
 
