@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import datetime
 import json
+import sqlite3
+import sys
+import time
 import os
 import shutil
 import subprocess
@@ -116,6 +120,46 @@ class StableAgentIdentityTest(unittest.TestCase):
         self.assertEqual(waiting["verdict"], "TASKS_WAITING")
         timeout = self.call("wait_for_tasks", task_ids=[a["task_id"]], timeout_seconds=1, poll_interval_seconds=0.1)
         self.assertEqual(timeout["verdict"], "WAIT_TIMEOUT")
+
+    def test_workflow_next_after_bypass_routes_to_audit_only(self) -> None:
+        self.register("agent-a")
+        ctx = self.call("before_task", agent_id="agent-a", request="edit readme", intent="write", resource="README.md")
+        result = self.call("workflow_next", agent_id="agent-a", request="edit readme", intent="write", resource="README.md", task_id=ctx["task_id"], context_token=ctx["context_token"], last_verdict="DIRECT_WRITE_BYPASS_DETECTED")
+        self.assertEqual(result["state"], "BYPASS_BLOCKED", result)
+        self.assertEqual(result["must_call"]["tool"], "workspace_audit", result)
+        self.assertIn("claim_resource", result["forbidden"])
+        self.assertIn("apply_patch", result["forbidden"])
+        self.assertIn("finish_task", result["forbidden"])
+
+    def test_abandoned_agent_still_becomes_idle_after_timeout(self) -> None:
+        self.register("agent-a")
+        db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        with sqlite3.connect(str(db_path)) as con:
+            con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (int(time.time()) - 901, "agent-a"))
+        agents = self.call("list_agents")
+        match = [agent for agent in agents["agents"] if agent["agent_id"] == "agent-a"]
+        self.assertEqual(match[0]["status"], "idle", agents)
+
+    def test_json_response_serializes_date_values(self) -> None:
+        mcp_dir = ROOT / ".agent" / "mcp"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
+        from server import ok
+
+        payload = json.loads(ok({"today": datetime.date(2026, 7, 7)})["content"][0]["text"])
+        self.assertEqual(payload["today"], "2026-07-07")
+
+    def test_require_agent_active_refreshes_last_seen(self) -> None:
+        self.register("agent-a")
+        db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        stale_seen = int(time.time()) - 300
+        with sqlite3.connect(str(db_path)) as con:
+            con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (stale_seen, "agent-a"))
+        result = self.call("before_task", agent_id="agent-a", request="edit readme", intent="write", resource="README.md")
+        self.assertEqual(result["verdict"], "BEFORE_TASK_OK", result)
+        with sqlite3.connect(str(db_path)) as con:
+            last_seen = con.execute("SELECT last_seen FROM agents WHERE agent_id=?", ("agent-a",)).fetchone()[0]
+        self.assertGreaterEqual(int(last_seen), int(time.time()) - 5)
 
 
 if __name__ == "__main__":

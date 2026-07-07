@@ -1252,6 +1252,14 @@ def workflow_next(
             "state": "READY_FOR_NEXT_TASK",
             "reason": "Previous task finished. No pending actions. Awaiting next user task.",
         })
+    if last == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+        return server._next_payload(
+            state="BYPASS_BLOCKED",
+            tool="workspace_audit",
+            args={"agent_id": agent_id, "task_id": task_id, "resource": resource or ""},
+            reason="Direct write bypass was detected. Re-audit or resolve the dirty workspace before any new claim, patch or finish attempt.",
+            forbidden=["before_task", "claim_resource", "resource_lock_claim", "file_hash", "propose_patch", "apply_patch", "delete_resource", "finish_task", "git_commit", "git_push", "direct_file_edit"],
+        )
     if last == "SCRIBE_COMMIT_GATE_REQUIRED":
         return server._next_payload(
             state="SCRIBE_COMMIT_GATE_REQUIRED",

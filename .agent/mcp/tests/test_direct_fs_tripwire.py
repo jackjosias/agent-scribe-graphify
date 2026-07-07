@@ -240,6 +240,24 @@ class DirectFsTripwireTest(unittest.TestCase):
         result = call_tool("finish_task", agent_id=self.agent, summary="gate", action_lease_id=self.lease("finish_task", ctx), **ctx)
         self.assertNotEqual(result["verdict"], "DIRECT_WRITE_BYPASS_DETECTED")
 
+    def test_21_preexisting_dirty_memoire_unchanged_is_not_new_bypass(self) -> None:
+        memoire = self.root / direct_fs_tripwire.MEMOIRE_FILE
+        memoire.write_text("preexisting dirty memory\n", encoding="utf-8")
+        ctx = self.ready(resource="tracked.txt")
+        self.apply_authorized_patch(ctx, resource="tracked.txt", replacement="patched tracked\n")
+        result = self.audit(ctx)
+        self.assertEqual(result["verdict"], "WORKSPACE_AUDIT_OK", result)
+        self.assertFalse(any(item["path"] == direct_fs_tripwire.MEMOIRE_FILE for item in result.get("suspects", [])), result)
+
+    def test_22_memoire_modified_after_snapshot_is_bypass(self) -> None:
+        memoire = self.root / direct_fs_tripwire.MEMOIRE_FILE
+        memoire.write_text("preexisting dirty memory\n", encoding="utf-8")
+        ctx = self.ready(resource="README.md")
+        memoire.write_text("preexisting dirty memory\nnew direct write\n", encoding="utf-8")
+        result = self.audit(ctx)
+        self.assertEqual(result["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", result)
+        self.assertTrue(any(item["path"] == direct_fs_tripwire.MEMOIRE_FILE for item in result.get("suspects", [])), result)
+
 
 if __name__ == "__main__":
     unittest.main()

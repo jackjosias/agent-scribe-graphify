@@ -361,11 +361,22 @@ def add_event(
 # Staleness sweeper (internal helper — called within transactions)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _agent_idle_timeout_seconds() -> int:
+    raw = os.environ.get("AGENT_IDLE_TIMEOUT_SECONDS", "").strip()
+    if not raw:
+        return 900
+    try:
+        value = int(raw)
+    except ValueError:
+        return 900
+    return min(max(value, 180), 86400)
+
+
 def expire_stale(con: sqlite3.Connection) -> None:
     t = now_ts()
     con.execute(
         "UPDATE agents SET status='idle' WHERE status='active' AND last_seen < ?",
-        (t - 180,),
+        (t - _agent_idle_timeout_seconds(),),
     )
     con.execute(
         "UPDATE claims SET status='expired' WHERE status='active' AND expires_at < ?",
@@ -565,6 +576,8 @@ def require_agent_active(agent_id: str) -> Dict[str, Any]:
         raise CoordinationError("AGENT_RETIRED")
     if status != "active":
         raise CoordinationError("AGENT_NOT_ACTIVE")
+    with connect() as con:
+        con.execute("UPDATE agents SET last_seen=? WHERE agent_id=? AND status='active'", (now_ts(), agent_id.strip()))
     return agent
 
 

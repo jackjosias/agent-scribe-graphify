@@ -169,6 +169,13 @@ def _status_key(entries: list[dict[str, str]]) -> dict[str, dict[str, str]]:
     return {entry["path"]: entry for entry in entries}
 
 
+def _changed_since_baseline(entry: dict[str, str], baseline_map: dict[str, dict[str, str]]) -> bool:
+    base = baseline_map.get(entry["path"])
+    if not base:
+        return True
+    return base.get("status") != entry.get("status") or base.get("hash") != entry.get("hash")
+
+
 def workspace_snapshot(project_root: Path | None, task_id: str, agent_id: str, resource: str = "") -> dict[str, Any]:
     root = _project_root(project_root)
     if not task_id or not agent_id:
@@ -245,6 +252,8 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
     for entry in current:
         if entry["path"] == MEMOIRE_FILE and entry not in suspects:
             if wanted_resource and entry["path"] != wanted_resource:
+                continue
+            if not _changed_since_baseline(entry, baseline_map):
                 continue
             auth_paths = {a.get("resource") for a in all_auth}
             if MEMOIRE_FILE not in auth_paths:
