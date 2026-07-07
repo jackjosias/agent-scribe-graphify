@@ -23,6 +23,7 @@ def make_project(root: Path) -> None:
     (root / ".git").mkdir()
     (root / "README.md").write_text("readme\n", encoding="utf-8")
     (root / "AGENTS.md").write_text("agents\n", encoding="utf-8")
+    (root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").write_text("version: 1\n", encoding="utf-8")
     (root / ".agent" / "agent.json").write_text('{"schema_version":"2.14","project_name":"portable"}\n', encoding="utf-8")
     for name in ENGINE_DIRS:
         path = root / ".agent" / name
