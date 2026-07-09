@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+from datetime import date
 import shutil
 import subprocess
 import sys
@@ -119,6 +120,24 @@ class CanonicalMemoryGateTest(unittest.TestCase):
     def release_claim(self, claim_id: str) -> None:
         result = call_tool("release_claim", agent_id=AGENT_A, claim_id=claim_id, summary="release")
         self.assertEqual(result.get("verdict"), "CLAIM_RELEASED", result)
+
+    def inject_yaml_date_entry(self, entry_id: str = "JOURNAL-DATE-REGRESSION") -> None:
+        memo_file = self.root / RESOURCE
+        original = memo_file.read_text(encoding="utf-8")
+        marker = "\nmetrics:\n"
+        entry = f"""
+  - id: "{entry_id}"
+    date: 2026-07-08
+    mode: "STANDARD"
+    agent_type: "cli"
+    surface: "yaml-date-regression"
+    hot_entries_consulted: ["INV-F002"]
+    l0_abstract: "YAML_DATE_REGRESSION"
+    pourquoi: "Regression fixture for unquoted YAML date parsing."
+    scribe_delta: "{entry_id}"
+"""
+        self.assertIn(marker, original)
+        memo_file.write_text(original.replace(marker, f"{entry}{marker}", 1), encoding="utf-8")
 
     def apply_authorized_scribe_patch(self, ctx: dict[str, str], token: str) -> None:
         claim_id = self.claim(ctx)
@@ -432,6 +451,30 @@ class CanonicalMemoryGateTest(unittest.TestCase):
             self.assertIn(token, stdout, query)
         else:
             self.assertIn("scribe-rag not found", str(query.get("reason") or ""), query)
+
+    def test_20_entity_signature_accepts_yaml_date_values(self) -> None:
+        entity = type(
+            "FakeEntity",
+            (),
+            {
+                "id": "ENTITY-DATE-001",
+                "collection": "journal",
+                "path": "AGENT-MEMOIRE_PROJECT_STATUS.scribe",
+                "value": {"date": date(2026, 7, 8), "summary": "yaml date regression"},
+            },
+        )()
+        sig1 = canonical_memory_gate._entity_signature(entity)
+        sig2 = canonical_memory_gate._entity_signature(entity)
+        self.assertTrue(sig1)
+        self.assertEqual(sig1, sig2)
+
+    def test_21_before_task_write_handles_yaml_date_value(self) -> None:
+        self.inject_yaml_date_entry()
+        self.register()
+        result = call_tool("before_task", agent_id=AGENT_A, request="edit tracked", intent="write", resource=RESOURCE)
+        self.assertEqual(result.get("verdict"), "BEFORE_TASK_OK", result)
+        self.assertIn("task_id", result)
+        self.assertIn("context_token", result)
 
     def test_19_canonical_delta_present_when_memory_changes(self) -> None:
         ctx = self.ready_context()

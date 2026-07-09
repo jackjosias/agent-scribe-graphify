@@ -237,7 +237,7 @@ def _entity_signature(entity: Any) -> str:
         "path": getattr(entity, "path", "") or "",
         "value": value,
     }
-    return _hash_bytes(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+    return _hash_bytes(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8"))
 
 
 def _retrieval_terms(entity: Any) -> str:
