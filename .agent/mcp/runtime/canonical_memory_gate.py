@@ -15,6 +15,11 @@ except Exception:
     import db  # type: ignore
 
 try:
+    from . import direct_fs_tripwire
+except Exception:
+    import direct_fs_tripwire  # type: ignore
+
+try:
     _SCRIBE_SCRIPTS = Path(__file__).resolve().parents[2] / "workflow" / "scribe" / "sel" / "scripts"
     if str(_SCRIBE_SCRIPTS) not in sys.path:
         sys.path.insert(0, str(_SCRIBE_SCRIPTS))
@@ -209,6 +214,13 @@ def policy_can_finish_without_promotion(policy: str, skip_reason: str = "") -> b
 
 
 def _latest_entity(store: Any) -> Any | None:
+    canonical = store.data.get("canonical")
+    if isinstance(canonical, list) and canonical:
+        last = canonical[-1]
+        if isinstance(last, dict) and last.get("id"):
+            entity = store.by_id(str(last["id"]))
+            if entity is not None:
+                return entity
     journal = store.data.get("journal")
     if isinstance(journal, list) and journal:
         last = journal[-1]
@@ -604,11 +616,16 @@ def _canonical_entry_block(
 
 
 def _append_canonical_entry_text(existing: str, entry_block: str) -> str:
-    marker = "\nmetrics:\n"
-    if marker in existing:
-        prefix, suffix = existing.rsplit(marker, 1)
-        return prefix.rstrip() + "\n" + entry_block + marker + suffix
-    return existing.rstrip() + "\n" + entry_block
+    canon_marker = "\ncanonical:\n"
+    metrics_marker = "\nmetrics:\n"
+    if canon_marker in existing:
+        prefix, suffix = existing.rsplit(metrics_marker, 1)
+        canon_prefix, canon_body = prefix.rsplit(canon_marker, 1)
+        return canon_prefix + canon_marker + canon_body.rstrip() + "\n" + entry_block + metrics_marker + suffix
+    if metrics_marker in existing:
+        prefix, suffix = existing.rsplit(metrics_marker, 1)
+        return prefix.rstrip() + "\n" + canon_marker + entry_block + metrics_marker + suffix
+    return existing.rstrip() + "\n" + canon_marker + entry_block
 
 
 def promote_record(
@@ -618,6 +635,8 @@ def promote_record(
     *,
     scope: str = "",
     memory_policy: str = "canonical_required",
+    agent_id: str = "",
+    task_id: str = "",
 ) -> dict[str, Any]:
     root = _project_root(project_root)
     scribe_path = _scribe_path(root)
@@ -674,6 +693,7 @@ def promote_record(
         prefix=f".{scribe_path.name}.",
         suffix=".tmp",
     )
+    before_hash = hashlib.sha256(existing.encode("utf-8")).hexdigest() if existing else ""
     try:
         with tmp as fh:
             fh.write(new_content)
@@ -686,6 +706,18 @@ def promote_record(
         except OSError:
             pass
         raise
+    after_hash = hashlib.sha256(scribe_path.read_bytes()).hexdigest()
+    if agent_id and task_id:
+        scribe_path_str = str(scribe_path.relative_to(root)) if scribe_path.is_relative_to(root) else scribe_path.name
+        direct_fs_tripwire.record_authorized_mutation(
+            task_id=task_id,
+            agent_id=agent_id,
+            resource=scribe_path_str,
+            tool="scribe_promote_record",
+            before_hash=before_hash,
+            after_hash=after_hash,
+            project_root=root,
+        )
     return {
         "ok": True,
         "verdict": "CANONICAL_MEMORY_PROMOTED",

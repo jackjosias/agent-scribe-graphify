@@ -1108,6 +1108,8 @@ def scribe_promote_record(
         source,
         scope=scope,
         memory_policy=policy,
+        agent_id=agent_id,
+        task_id=task_id,
     )
     if result.get("verdict") == "CANONICAL_MEMORY_PROMOTED":
         try:

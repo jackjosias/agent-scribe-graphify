@@ -21,6 +21,8 @@ if str(MCP_DIR) not in sys.path:
 
 import server_ext as mcp
 from runtime import canonical_memory_gate, db, discipline, patch_queue, direct_fs_tripwire, scribe_commit_gate, task_context
+import scribe_store as _scribe_store
+import scribe_doctor_model as _scribe_doctor_model
 
 RESOURCE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
 AGENT_A = "memory-agent-a"
@@ -66,6 +68,9 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         importlib.reload(direct_fs_tripwire)
         importlib.reload(canonical_memory_gate)
         importlib.reload(scribe_commit_gate)
+        importlib.reload(_scribe_doctor_model)
+        importlib.reload(_scribe_doctor_model)
+        importlib.reload(_scribe_store)
         mcp.db = db
         mcp.patch_queue = patch_queue
         mcp.task_context = task_context
@@ -293,9 +298,8 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         ctx = self.ready_context()
         token = "CONTEXT_20260630"
         self.apply_authorized_scribe_patch(ctx, token)
-        from scribe_store import load_scribe
 
-        store = load_scribe(self.root / RESOURCE)
+        store = _scribe_store.load_scribe(self.root / RESOURCE)
         entry = store.by_id(f"JOURNAL-TEST-{token}")
         self.assertIsNotNone(entry)
         self.assertEqual(entry.value.get("l0_abstract"), f"CANONICAL_PROMOTION_{token}")
@@ -485,6 +489,120 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertNotEqual(result.get("scribe_delta"), "Aucun", result)
         self.assertIn(f"JOURNAL-TEST-{token}", str(result.get("scribe_delta") or ""))
         self.assertEqual(result.get("terminal"), True)
+
+    def test_22_yaml_valid_after_canonical_promotion(self) -> None:
+        import yaml
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="canonical yaml format check",
+            summary="YAML_CANONICAL_FORMAT_PROBE",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        text = (self.root / RESOURCE).read_text(encoding="utf-8")
+        data = yaml.safe_load(text)
+        self.assertIsNotNone(data)
+        self.assertIn("canonical", data)
+        self.assertIsInstance(data["canonical"], list)
+        self.assertTrue(len(data["canonical"]) > 0)
+        last_canon = data["canonical"][-1]
+        self.assertIn("id", last_canon)
+        self.assertTrue(str(last_canon["id"]).startswith("CANON-"))
+
+    def test_23_canonical_entry_findable_via_scribe_store(self) -> None:
+        ctx = self.ready_context(intent="read")
+        canon_summary = "FINDABLE_CANON_ENTRY_PROBE_20260709"
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="findable check",
+            summary=canon_summary,
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        store = _scribe_store.load_scribe(self.root / RESOURCE)
+        entry = store.by_id(promoted["entry_id"])
+        self.assertIsNotNone(entry, f"entry {promoted['entry_id']} not found by scribe store")
+        entry_value = getattr(entry, "value", {}) or {}
+        combined = " ".join(str(v) for v in entry_value.values())
+        self.assertIn(canon_summary, combined)
+
+    def test_24_canonical_promotion_write_finish_pipeline(self) -> None:
+        ctx = self.ready_context()
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="canonical write finish pipeline",
+            summary="CANONICAL_WRITE_FINISH_PIPELINE_PROBE",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        result = self.finish(ctx, summary="canonical write finish pipeline")
+        self.assertIn(result.get("verdict"), ("CANONICAL_MEMORY_PROMOTED", "TASK_FINISHED_OK"), result)
+
+    def test_25_scribe_rag_entities_preserved_after_rebuild(self) -> None:
+        subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="scribe rag rebuild test",
+            summary="SCRIBE_RAG_ENTITIES_PRESERVED_PROBE",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        cp = subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        self.assertEqual(cp.returncode, 0, f"scribe-rag build failed: {cp.stderr}")
+        bc = subprocess.run([str(SCRIBE_RAG), "context"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        self.assertEqual(bc.returncode, 0, f"scribe-rag context failed: {bc.stderr}")
+        self.assertNotIn("entities: 0", bc.stdout)
+        self.assertIn("entities:", bc.stdout)
 
 
 if __name__ == "__main__":

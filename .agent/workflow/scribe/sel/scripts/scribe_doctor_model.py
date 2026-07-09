@@ -31,6 +31,7 @@ ENTITY_COLLECTIONS = {
     "hypotheses",
     "mutations",
     "journal",
+    "canonical",
 }
 NEGATION_MARKERS = ("ne jamais", "ne pas", "never", "interdit", "forbid", "avoid")
 POSITIVE_MARKERS = ("toujours", "obligatoire", "use ", "utiliser", "doit", "must")
