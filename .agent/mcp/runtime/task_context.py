@@ -77,6 +77,14 @@ def ensure_schema() -> None:
             con.execute("ALTER TABLE task_context_v2 ADD COLUMN memory_hash TEXT")
         except sqlite3.OperationalError:
             pass
+        try:
+            con.execute("ALTER TABLE task_context_v2 ADD COLUMN scribe_result_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            con.execute("ALTER TABLE task_context_v2 ADD COLUMN scribe_result_resources TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         con.executescript("""
 
             CREATE TABLE IF NOT EXISTS workflow_retry_v1(
@@ -278,21 +286,25 @@ def _load_ready(agent_id: str, task_id: str, context_token: str) -> dict[str, An
     return data
 
 
-def mark_scribe_done(agent_id: str, task_id: str, context_token: str) -> dict[str, Any]:
+def mark_scribe_done(agent_id: str, task_id: str, context_token: str, result_count: int = 0, result_resources: str = "") -> dict[str, Any]:
     data = _load_ready(agent_id, task_id, context_token)
     memory_hash = _compute_memory_hash()
     with connect() as con:
         con.execute(
-            "UPDATE task_context_v2 SET scribe_done=1, memory_hash=? WHERE task_id=?",
-            (memory_hash, task_id),
+            "UPDATE task_context_v2 SET scribe_done=1, memory_hash=?, scribe_result_count=?, scribe_result_resources=? WHERE task_id=?",
+            (memory_hash, result_count, result_resources, task_id),
         )
     data["scribe_done"] = 1
     data["memory_hash"] = memory_hash
+    data["scribe_result_count"] = result_count
+    data["scribe_result_resources"] = result_resources
     return {
         "task_id": task_id,
         "scribe_done": True,
         "memory_hash": memory_hash,
         "requires_graphify": bool(data["requires_graphify"]),
+        "scribe_result_count": result_count,
+        "scribe_result_resources": result_resources,
     }
 
 
@@ -375,7 +387,7 @@ def list_tasks(agent_id: str = "", status: str = "") -> dict[str, Any]:
     if status:
         where.append("status=?")
         params.append(status)
-    query = "SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,memory_hash,status,created_at,expires_at,finished_at FROM task_context_v2"
+    query = "SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,memory_hash,scribe_result_count,scribe_result_resources,status,created_at,expires_at,finished_at FROM task_context_v2"
     if where:
         query += " WHERE " + " AND ".join(where)
     query += " ORDER BY created_at DESC"
@@ -389,7 +401,21 @@ def task_status(task_id: str) -> dict[str, Any]:
         raise TaskContextError("TASK_CONTEXT_REQUIRED: task_id is required")
     ensure_schema()
     with connect() as con:
-        row = con.execute("SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,memory_hash,status,created_at,expires_at,finished_at FROM task_context_v2 WHERE task_id=?", (task_id,)).fetchone()
+        row = con.execute("SELECT task_id,agent_id,request,intent,resource,requires_graphify,before_done,scribe_done,graphify_done,memory_hash,scribe_result_count,scribe_result_resources,status,created_at,expires_at,finished_at FROM task_context_v2 WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        raise TaskContextError("TASK_CONTEXT_UNKNOWN_TASK")
+    return dict(row)
+
+
+def get_task_context(agent_id: str, task_id: str) -> dict[str, Any]:
+    if not agent_id or not task_id:
+        raise TaskContextError("TASK_CONTEXT_REQUIRED: agent_id and task_id are required")
+    ensure_schema()
+    with connect() as con:
+        row = con.execute(
+            "SELECT * FROM task_context_v2 WHERE task_id=? AND agent_id=?",
+            (task_id, agent_id),
+        ).fetchone()
     if not row:
         raise TaskContextError("TASK_CONTEXT_UNKNOWN_TASK")
     return dict(row)

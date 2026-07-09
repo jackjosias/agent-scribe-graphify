@@ -454,14 +454,40 @@ def scribe_query(query: str, limit: int = 5, agent_id: str = "", task_id: str = 
             "result": res,
         })
     if agent_id or task_id or context_token:
+        task_intent = ""
+        task_resource = ""
+        base_verdict = payload.get("verdict", "")
+        if agent_id and task_id:
+            try:
+                task_data = task_context.get_task_context(agent_id, task_id)
+                task_intent = str(task_data.get("intent", "")).strip().lower()
+                task_resource = task_data.get("resource", "") or ""
+            except task_context.TaskContextError:
+                pass
+        if task_intent in _MUTATING_CONTEXT_INTENTS and base_verdict == "SCRIBE_QUERY_DONE":
+            stdout = (res.get("stdout") or "").strip()
+            if not stdout:
+                return server.ok({
+                    "ok": False,
+                    "verdict": "SCRIBE_CONTEXT_EMPTY",
+                    "query": query,
+                    "result": res,
+                    "reason": "SCRIBE returned no content. Write tasks require a non-empty SCRIBE result.",
+                })
         try:
-            ctx_result = task_context.mark_scribe_done(agent_id, task_id, context_token)
+            result_count = 1 if (res.get("stdout") or "").strip() else 0
+            ctx_result = task_context.mark_scribe_done(
+                agent_id, task_id, context_token,
+                result_count=result_count,
+                result_resources=task_resource,
+            )
         except task_context.TaskContextError as exc:
             raise _context_error(exc) from exc
         payload["task_context"] = {
             "task_id": task_id,
             "scribe_done": True,
             "memory_hash": ctx_result.get("memory_hash"),
+            "scribe_result_count": ctx_result.get("scribe_result_count"),
         }
         return server.ok(payload)
     return result

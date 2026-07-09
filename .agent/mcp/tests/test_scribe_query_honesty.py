@@ -26,11 +26,14 @@ FILE_CONTENT = "line1\nline2\nline3\n"
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _make_scribe_rag(root: Path, returncode: int = 0, stderr: str = "") -> Path:
+def _make_scribe_rag(root: Path, returncode: int = 0, stderr: str = "", stdout: str = "") -> Path:
     scribe_dir = root / ".agent" / "workflow" / "scribe"
     scribe_dir.mkdir(parents=True, exist_ok=True)
     script = scribe_dir / "scribe-rag"
     lines = ["#!/usr/bin/env python3", "import sys"]
+    if stdout:
+        escaped = stdout.replace("'", "'\"'\"'")
+        lines.append(f"sys.stdout.write('{escaped}')")
     if stderr:
         escaped = stderr.replace("'", "'\"'\"'")
         lines.append(f"sys.stderr.write('{escaped}')")
@@ -147,7 +150,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         self.assertIsNotNone(tc["memory_hash"], sq)
 
     def test_memory_hash_invalidation_blocks_write_claim(self) -> None:
-        _make_scribe_rag(self.root, returncode=0)
+        _make_scribe_rag(self.root, returncode=0, stdout="memory context for README.md write task")
         memo = self._init_memo()
         memo.write_text("original memory\n", encoding="utf-8")
         ctx = self.register_and_before(intent="write")
@@ -162,7 +165,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         self.assertIn("memory changed since scribe_query", claim.get("reason", ""), claim)
 
     def test_memory_hash_invalidation_write_workflow_routes_to_scribe_query(self) -> None:
-        _make_scribe_rag(self.root, returncode=0)
+        _make_scribe_rag(self.root, returncode=0, stdout="memory context for README.md write task")
         memo = self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
         memo.write_text("original memory\n", encoding="utf-8")
         subprocess.run(["git", "add", "AGENT-MEMOIRE_PROJECT_STATUS.scribe"],
@@ -302,7 +305,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
 
     def test_finish_task_blocks_when_memory_missing_patch_id(self) -> None:
         MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
-        _make_scribe_rag(self.root, returncode=0)
+        _make_scribe_rag(self.root, returncode=0, stdout="memory context for AGENT-MEMOIRE_PROJECT_STATUS.scribe write task")
         memo = self._init_memo()
         memo.write_text(FILE_CONTENT, encoding="utf-8")
         import hashlib
@@ -335,7 +338,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
 
     def test_finish_task_accepts_when_patch_id_in_memory(self) -> None:
         MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
-        _make_scribe_rag(self.root, returncode=0)
+        _make_scribe_rag(self.root, returncode=0, stdout="memory context for AGENT-MEMOIRE_PROJECT_STATUS.scribe write task")
         memo = self._init_memo()
         memo.write_text(FILE_CONTENT, encoding="utf-8")
         import hashlib
