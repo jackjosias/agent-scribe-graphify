@@ -26,16 +26,16 @@ FILE_CONTENT = "line1\nline2\nline3\n"
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def _make_scribe_rag(root: Path, returncode: int = 0) -> Path:
+def _make_scribe_rag(root: Path, returncode: int = 0, stderr: str = "") -> Path:
     scribe_dir = root / ".agent" / "workflow" / "scribe"
     scribe_dir.mkdir(parents=True, exist_ok=True)
     script = scribe_dir / "scribe-rag"
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        f"sys.exit({returncode})\n",
-        encoding="utf-8",
-    )
+    lines = ["#!/usr/bin/env python3", "import sys"]
+    if stderr:
+        escaped = stderr.replace("'", "'\"'\"'")
+        lines.append(f"sys.stderr.write('{escaped}')")
+    lines.append(f"sys.exit({returncode})")
+    script.write_text("\n".join(lines) + "\n", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return script
 
@@ -179,6 +179,16 @@ class ScribeQueryHonestyTest(unittest.TestCase):
                        task_id=ctx["task_id"], context_token=ctx["context_token"])
         self.assertEqual(wn.get("state"), "SCRIBE_CONTEXT_REQUIRED", wn)
         self.assertEqual(wn.get("must_call", {}).get("tool"), "scribe_query", wn)
+
+    def test_scribe_query_failure_returncode_2_with_stderr(self) -> None:
+        _make_scribe_rag(self.root, returncode=2, stderr="scribe-rag: error: unrecognized arguments: --top 5")
+        ctx = self.register_and_before()
+        sq = self.call("scribe_query", **ctx, query="test", limit=5)
+        self.assertIs(sq.get("ok"), False, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_QUERY_FAILED", sq)
+        self.assertEqual(sq["result"].get("returncode"), 2, sq)
+        self.assertIn("scribe-rag: error: unrecognized arguments", sq["result"].get("stderr", ""), sq)
+        self.assertNotIn("task_context", sq, sq)
 
     # ── Mini-tâche 3 : AGENT-MEMOIRE via MCP only ─────────────────────────────
 
