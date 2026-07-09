@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,28 @@ WEAK_SKIP_REASONS = {
     "just a change",
     "pas nécessaire",
     "petit changement",
+}
+VALID_MEMORY_POLICIES = {"canonical_required", "local_only", "skip_with_reason", "ephemeral"}
+CANONICAL_RECORD_TYPES = {
+    "validation",
+    "test_result",
+    "audit_result",
+    "decision",
+    "scar",
+    "vaccine",
+    "bug_fix",
+    "postmortem",
+    "acceptance",
+}
+LOCAL_ONLY_RECORD_TYPES = {
+    "task_summary",
+    "journal",
+    "note",
+    "debug",
+    "log",
+    "trace",
+    "receipt",
+    "runtime_receipt",
 }
 
 
@@ -143,6 +167,45 @@ def _skip_reason_is_strong(skip_reason: str) -> bool:
     if len(normalized) < 24:
         return False
     return True
+
+
+def normalize_memory_policy(policy: str | None) -> str:
+    normalized = (policy or "").strip().lower()
+    return normalized if normalized in VALID_MEMORY_POLICIES else ""
+
+
+def derive_memory_policy(
+    record_type: str,
+    memory_policy: str = "",
+    request: str = "",
+    summary: str = "",
+    verdict: str = "",
+) -> str:
+    normalized = normalize_memory_policy(memory_policy)
+    if normalized:
+        return normalized
+    record = (record_type or "").strip().lower()
+    if record in CANONICAL_RECORD_TYPES:
+        return "canonical_required"
+    if record in LOCAL_ONLY_RECORD_TYPES:
+        return "local_only"
+    text = " ".join(part for part in [record, request, summary, verdict] if part).strip().lower()
+    if any(term in text for term in ("validation", "test result", "audit", "decision", "postmortem", "acceptance", "bug fix", "scar", "vaccine")):
+        return "canonical_required"
+    return "local_only"
+
+
+def policy_requires_canonical_promotion(policy: str) -> bool:
+    return normalize_memory_policy(policy) == "canonical_required"
+
+
+def policy_can_finish_without_promotion(policy: str, skip_reason: str = "") -> bool:
+    normalized = normalize_memory_policy(policy)
+    if normalized in {"local_only", "ephemeral"}:
+        return True
+    if normalized == "skip_with_reason":
+        return _skip_reason_is_strong(skip_reason)
+    return False
 
 
 def _latest_entity(store: Any) -> Any | None:
@@ -463,4 +526,174 @@ def evaluate_finish(
         "latest_entity_signature": current_signature,
         "scribe_delta": getattr(entity, "id", ""),
         "terminal": True,
+    }
+
+
+def _canonical_entry_id(source_record_digest: str, source_record_path: str) -> str:
+    raw = f"{source_record_digest}:{source_record_path}".encode("utf-8")
+    return "CANON-" + hashlib.sha256(raw).hexdigest()[:16].upper()
+
+
+def _canonical_status(record_type: str, memory_policy: str, verdict: str = "") -> str:
+    normalized = (record_type or "").strip().lower()
+    if normalized in {"scar", "bug_fix"} or "fail" in (verdict or "").lower():
+        return "FAIL"
+    if normalize_memory_policy(memory_policy) == "skip_with_reason":
+        return "INFO"
+    if normalized in {"audit_result", "validation", "test_result", "acceptance"}:
+        return "PASS"
+    return "INFO"
+
+
+def _canonical_scope(record: dict[str, Any], scope: str = "") -> str:
+    if scope.strip():
+        return scope.strip()
+    resources = record.get("resources") or record.get("touched_resources") or []
+    if isinstance(resources, list) and resources:
+        first = resources[0]
+        if isinstance(first, str) and first.strip():
+            return first.strip()
+    request = str(record.get("request") or "").strip()
+    summary = str(record.get("summary") or "").strip()
+    return request or summary or "project"
+
+
+def _canonical_summary(record: dict[str, Any]) -> str:
+    summary = str(record.get("summary") or record.get("request") or "").strip()
+    if not summary:
+        summary = "Canonical memory promotion"
+    return " ".join(summary.split())
+
+
+def _canonical_entry_block(
+    entry_id: str,
+    record: dict[str, Any],
+    source_record_path: str,
+    memory_policy: str,
+    scope: str,
+    source_record_digest: str,
+) -> str:
+    record_type = str(record.get("record_type") or record.get("type") or "journal").strip().lower() or "journal"
+    status = _canonical_status(record_type, memory_policy, str(record.get("verdict") or ""))
+    summary = _canonical_summary(record)
+    evidence = source_record_path.replace('"', '\"')
+    source_name = Path(source_record_path).name.replace('"', '\"')
+    digest = source_record_digest.replace('"', '\"')
+    scope_value = scope.replace('"', '\"') or "project"
+    policy_value = normalize_memory_policy(memory_policy) or "local_only"
+    date_value = time.strftime("%Y-%m-%d", time.gmtime(int(record.get("timestamp") or _now())))
+    entry = [
+        f'  - id: "{entry_id}"',
+        f'    date: "{date_value}"',
+        f'    type: "{record_type}"',
+        f'    scope: "{scope_value}"',
+        f'    status: "{status}"',
+        "    summary: >",
+        f'      {summary}',
+        "    evidence:",
+        f'      - "{evidence}"',
+        "    result:",
+        "      canonical_memory_promoted: true",
+        f'      source_record: "{source_name}"',
+        f'      source_record_path: "{evidence}"',
+        f'      source_record_digest: "{digest}"',
+        f'      memory_policy: "{policy_value}"',
+        f'      promoted_at: "{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}"',
+    ]
+    return "\n".join(entry) + "\n"
+
+
+def _append_canonical_entry_text(existing: str, entry_block: str) -> str:
+    marker = "\nmetrics:\n"
+    if marker in existing:
+        prefix, suffix = existing.rsplit(marker, 1)
+        return prefix.rstrip() + "\n" + entry_block + marker + suffix
+    return existing.rstrip() + "\n" + entry_block
+
+
+def promote_record(
+    project_root: Path | None,
+    record: dict[str, Any],
+    source_record_path: Path,
+    *,
+    scope: str = "",
+    memory_policy: str = "canonical_required",
+) -> dict[str, Any]:
+    root = _project_root(project_root)
+    scribe_path = _scribe_path(root)
+    if not source_record_path.is_file():
+        record_path = str(source_record_path.relative_to(root)) if source_record_path.is_relative_to(root) else str(source_record_path)
+        return {
+            "ok": False,
+            "verdict": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "state": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "reason": "source record is missing",
+            "canonical_memory_file": str(scribe_path.relative_to(root)),
+            "record_path": record_path,
+        }
+    normalized_policy = normalize_memory_policy(memory_policy)
+    record_path = str(source_record_path.relative_to(root)) if source_record_path.is_relative_to(root) else str(source_record_path)
+    if normalized_policy != "canonical_required":
+        return {
+            "ok": False,
+            "verdict": "CANONICAL_MEMORY_NOT_REQUIRED",
+            "state": "CANONICAL_MEMORY_NOT_REQUIRED",
+            "reason": f"memory_policy={normalized_policy or memory_policy or 'local_only'} does not require canonical promotion",
+            "canonical_memory_file": str(scribe_path.relative_to(root)),
+            "record_path": record_path,
+        }
+    payload = dict(record)
+    source_record_digest = hashlib.sha256(source_record_path.read_bytes()).hexdigest()
+    entry_id = _canonical_entry_id(source_record_digest, record_path)
+    existing = scribe_path.read_text(encoding="utf-8") if scribe_path.is_file() else ""
+    if entry_id in existing or source_record_digest in existing or record_path in existing:
+        return {
+            "ok": True,
+            "verdict": "CANONICAL_MEMORY_ALREADY_PROMOTED",
+            "state": "CANONICAL_MEMORY_ALREADY_PROMOTED",
+            "canonical_memory_file": str(scribe_path.relative_to(root)),
+            "record_path": record_path,
+            "entry_id": entry_id,
+            "already_promoted": True,
+            "canonical_memory_updated": False,
+        }
+    entry_block = _canonical_entry_block(
+        entry_id,
+        payload,
+        record_path,
+        normalized_policy,
+        scope,
+        source_record_digest,
+    )
+    new_content = _append_canonical_entry_text(existing, entry_block)
+    tmp = tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(scribe_path.parent),
+        delete=False,
+        prefix=f".{scribe_path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with tmp as fh:
+            fh.write(new_content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp.name, scribe_path)
+    except Exception:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise
+    return {
+        "ok": True,
+        "verdict": "CANONICAL_MEMORY_PROMOTED",
+        "state": "CANONICAL_MEMORY_PROMOTED",
+        "canonical_memory_file": str(scribe_path.relative_to(root)),
+        "record_path": record_path,
+        "entry_id": entry_id,
+        "already_promoted": False,
+        "canonical_memory_updated": True,
+        "source_record_digest": source_record_digest,
     }

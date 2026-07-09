@@ -151,7 +151,7 @@ Le host ne doit pas écrire directement dans `scribe-out/`. La seule écriture m
 scribe_record
 ```
 
-`scribe_record` écrit une note structurée dans `scribe-out/records/`. Il sert aussi aux cicatrices, patterns, erreurs, décisions, dettes, invariants, conflits et approches interdites, pas seulement aux fins de tâche.
+`scribe_record` écrit un record local de staging dans `scribe-out/records/`. Ce verdict ne signifie pas que la mémoire durable a été mise à jour. Si le record est durable, le host doit ensuite appeler `scribe_promote_record` avant `finish_task`.
 
 ## Fin de tâche
 

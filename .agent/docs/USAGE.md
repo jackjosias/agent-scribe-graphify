@@ -20,7 +20,7 @@ before_task → scribe_query → graphify_query si requis → task_id/context_to
 Les suppressions acceptées passent par le **delete gate MCP** :
 
 ```text
-workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → scribe_promote_record si durable → finish_task
 ```
 
 `delete_resource` exige une permission utilisateur explicite avec la phrase exacte :
@@ -168,13 +168,13 @@ before_task → task_id/context_token → targeted_scribe_query → targeted_gra
 
 ## Gravure mémoire
 
-`scribe_record` écrit une note structurée de fin de tâche, cicatrice, pattern, erreur, décision, dette, invariant, conflit ou approche interdite dans :
+`scribe_record` écrit un record JSON local de staging dans :
 
 ```text
 scribe-out/records/
 ```
 
-Le host ne doit pas écrire directement dans `scribe-out/`. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant `finish_task`.
+Ce record ne signifie pas qu'une mémoire durable a été mise à jour. Quand `workflow_next` demande `scribe_record`, il faut l'exécuter avant de décider s'il faut ensuite appeler `scribe_promote_record` puis `finish_task`.
 
 ## Preuve mémoire finish_task
 
@@ -194,6 +194,7 @@ Procédure de déblocage :
 Le commit du fichier mémoire n'est pas automatiquement requis. Si l'utilisateur
 demande explicitement le versioning, `git add`/`git commit` sont autorisés.
 
+Quand le record local est durable, il faut d'abord le promouvoir avec `scribe_promote_record`.
 La vérification se fait par substring exact-match : au moins un `patch_id` doit
 apparaître textuellement dans le fichier mémoire. Aucune modification directe de
 `AGENT-MEMOIRE_PROJECT_STATUS.scribe` n'est autorisée — le tripwire la détecte
@@ -317,7 +318,7 @@ workflow_next → before_task → scribe_query → graphify_query si code → cl
 Et une suppression acceptable doit passer par :
 
 ```text
-workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → finish_task
+workflow_next → before_task → scribe_query → graphify_query si code → claim_resource → file_hash → delete_resource → release_claim → scribe_record → scribe_promote_record si durable → finish_task
 ```
 
 ## Règle finale

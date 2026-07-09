@@ -122,11 +122,11 @@ def main() -> int:
         next_record = call_tool("workflow_next", {"agent_id": agent_id, "intent": "finish", "resource": "tmp-delete-resource-smoke/delete-me.txt", "last_verdict": "CLAIM_RELEASED"})
         if (next_record.get("must_call") or {}).get("tool") != "scribe_record":
             fail(f"workflow_next should require scribe_record before finish after delete: {next_record}")
-        record = call_tool("scribe_record", {"agent_id": agent_id, "request": "delete smoke workflow file", "summary": "delete resource smoke ok", "touched_resources": ["tmp-delete-resource-smoke/delete-me.txt"], "verdict": "CLAIM_RELEASED", "tags": ["smoke", "delete"]})
-        if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+        record = call_tool("scribe_record", {"agent_id": agent_id, "request": "delete smoke workflow file", "summary": "delete resource smoke ok", "touched_resources": ["tmp-delete-resource-smoke/delete-me.txt"], "verdict": "CLAIM_RELEASED", "tags": ["smoke", "delete"], "memory_policy": "local_only"})
+        if record.get("verdict") != "SCRIBE_RECORD_STAGED_ONLY":
             fail(f"scribe_record failed after delete: {record}")
-        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok", "action_lease_id": acquire_lease(agent_id, "finish_task", ctx, resource=""), **ctx})
-        if finished.get("verdict") != "TASK_FINISHED_OK":
+        finished = call_tool("finish_task", {"agent_id": agent_id, "summary": "delete resource smoke ok", "canonical_memory_skip_reason": "This smoke only verifies delete workflow behavior and transient cleanup; it intentionally leaves no durable project memory because canonical memory coverage is exercised elsewhere.", "action_lease_id": acquire_lease(agent_id, "finish_task", ctx, resource=""), **ctx})
+        if finished.get("verdict") not in {"TASK_FINISHED_OK", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}:
             fail(f"finish failed: {finished}")
         print("DELETE_RESOURCE_SMOKE_OK")
         return 0

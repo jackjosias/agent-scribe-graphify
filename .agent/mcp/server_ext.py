@@ -70,7 +70,7 @@ _GRAPHIFY_VERDICTS = {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}
 _CONTEXT_VERDICTS = {"BEFORE_TASK_OK", *_SCRIBE_VERDICTS, *_GRAPHIFY_VERDICTS}
 _WRITE_DONE_VERDICTS = {"PATCH_APPLIED", "PATCH_APPLIED_CONFIRMED", "RESOURCE_DELETED"}
 _RECORD_REQUIRED_VERDICTS = {*_WRITE_DONE_VERDICTS, "CLAIM_RELEASED"}
-_RECORD_DONE_VERDICTS = {"SCRIBE_RECORD_WRITTEN"}
+_RECORD_DONE_VERDICTS = {"SCRIBE_RECORD_STAGED_ONLY", "SCRIBE_RECORD_WRITTEN"}
 _CANONICAL_MEMORY_TERMINAL_VERDICTS = {"CANONICAL_MEMORY_PROMOTED", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}
 _CANONICAL_MEMORY_BLOCKING_VERDICTS = {"CANONICAL_MEMORY_REQUIRED", "CANONICAL_MEMORY_SKIP_REJECTED"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
@@ -170,6 +170,29 @@ def _requires_graphify(request: str, intent: str, resource: str) -> bool:
 def _requires_scribe_record(intent: str, last_verdict: str) -> bool:
     normalized = (intent or "").strip().lower()
     return _last(last_verdict) in _RECORD_REQUIRED_VERDICTS or normalized in _WRITE_OR_DECISION_INTENTS
+
+
+def _task_requires_canonical_promotion(task_data: dict[str, Any] | None) -> bool:
+    return bool(task_data and task_data.get("scribe_record_done") and task_data.get("scribe_record_required") and not task_data.get("scribe_record_promoted"))
+
+
+def _scribe_record_args(agent_id: str, task_id: str, context_token: str, request: str, intent: str, resource: str, task_data: dict[str, Any] | None = None) -> dict[str, Any]:
+    record_type = "task_summary"
+    if task_data and task_data.get("scribe_record_policy") == "canonical_required":
+        record_type = str(task_data.get("scribe_record_type") or "validation")
+    return {
+        "agent_id": agent_id,
+        "task_id": task_id,
+        "context_token": context_token,
+        "request": request or "task completed",
+        "summary": "record useful task outcome before finish",
+        "touched_resources": [resource] if resource else [],
+        "resources": [resource] if resource else [],
+        "verdict": "READ_TASK_NOTE" if (intent or "").strip().lower() == "read" else "READY_TO_FINISH",
+        "record_type": record_type,
+        "severity": "medium",
+        "tags": ["workflow_next"],
+    }
 
 
 def _require_action_lease(
@@ -708,7 +731,7 @@ def _write_gate_record(record: dict[str, Any]) -> dict[str, Any]:
         resources=list(record.get("touched_resources") or []),
     )
     payload = json.loads(result["content"][0]["text"])
-    if payload.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+    if payload.get("verdict") not in {"SCRIBE_RECORD_STAGED_ONLY", "SCRIBE_RECORD_WRITTEN"}:
         raise server.ToolError("SCRIBE_COMMIT_GATE_RECORD_WRITE_FAILED")
     return payload
 
@@ -744,6 +767,60 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
         is_read_only = stored in _READ_ONLY_INTENTS
     else:
         is_read_only = normalized_intent in _SAFE_FINISH_INTENTS
+
+    task_memory_state: dict[str, Any] | None = None
+    if task_id:
+        try:
+            task_memory_state = task_context.get_task_context(agent_id, task_id)
+        except task_context.TaskContextError:
+            task_memory_state = None
+    if _task_requires_canonical_promotion(task_memory_state):
+        skip_reason = (canonical_memory_skip_reason or "").strip()
+        if skip_reason:
+            if not canonical_memory_gate._skip_reason_is_strong(skip_reason):
+                return server.ok({
+                    "ok": False,
+                    "verdict": "CANONICAL_MEMORY_SKIP_REJECTED",
+                    "state": "CANONICAL_MEMORY_SKIP_REJECTED",
+                    "reason": "Skip reason is too weak or generic to justify finishing a durable memory task without promotion.",
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "skip_reason": skip_reason,
+                    "forbidden": ["finish_task", "direct_file_edit"],
+                })
+            try:
+                task_context.mark_scribe_record_skipped(agent_id, task_id, context_token, skip_reason=skip_reason)
+            except task_context.TaskContextError as exc:
+                raise _context_error(exc) from exc
+            result = _finish_ok_after_gate(agent_id, summary, task_id, context_token)
+            payload = json.loads(result["content"][0]["text"])
+            payload.update({
+                "verdict": "CANONICAL_MEMORY_SKIPPED_WITH_REASON",
+                "state": "CANONICAL_MEMORY_SKIPPED_WITH_REASON",
+                "skip_reason": skip_reason,
+                "terminal": True,
+                "next_state_hint": "READY_FOR_NEXT_TASK",
+            })
+            return server.ok(payload)
+        return server.ok({
+            "ok": False,
+            "verdict": "CANONICAL_MEMORY_REQUIRED",
+            "state": "CANONICAL_MEMORY_REQUIRED",
+            "reason": "A staged durable record must be promoted before finish_task can close.",
+            "task_id": task_id,
+            "agent_id": agent_id,
+            "record_path": task_memory_state.get("scribe_record_path") or "",
+            "must_call": {
+                "tool": "scribe_promote_record",
+                "args": {
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "context_token": context_token,
+                    "record_path": task_memory_state.get("scribe_record_path") or "",
+                },
+            },
+            "forbidden": ["finish_task", "direct_file_edit"],
+        })
 
     if is_read_only:
         return _finish_ok_after_gate(agent_id, summary, task_id, context_token)
@@ -909,11 +986,16 @@ def scribe_record(
     related_errors: List[str] | None = None,
     related_tests: List[str] | None = None,
     resources: List[str] | None = None,
+    task_id: str = "",
+    context_token: str = "",
+    memory_policy: str = "",
 ) -> Dict[str, Any]:
     if not agent_id:
         raise server.ToolError("agent_id is required")
     now = int(time.time())
     merged_resources = resources if resources is not None else touched_resources
+    policy = canonical_memory_gate.derive_memory_policy(record_type or "", memory_policy or "", request or "", summary or "", verdict or "")
+    required = canonical_memory_gate.policy_requires_canonical_promotion(policy)
     payload = {
         "timestamp": now,
         "agent_id": agent_id,
@@ -931,6 +1013,10 @@ def scribe_record(
         "related_errors": related_errors or [],
         "related_tests": related_tests or [],
         "tags": tags or [],
+        "task_id": task_id or "",
+        "context_token": context_token or "",
+        "memory_policy": policy,
+        "canonical_memory_required": required,
     }
     paths = prepare_state_dirs(server.ROOT)
     records = paths["scribe_out"] / "records"
@@ -945,14 +1031,90 @@ def scribe_record(
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, target)
+        if task_id and context_token:
+            try:
+                task_context.mark_scribe_record_staged(
+                    agent_id,
+                    task_id,
+                    context_token,
+                    required=required,
+                    policy=policy,
+                    record_path=str(target.relative_to(server.ROOT)),
+                    record_digest=digest,
+                )
+            except task_context.TaskContextError as exc:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise _context_error(exc) from exc
     except Exception:
         try:
             os.unlink(tmp_name)
         except FileNotFoundError:
             pass
         raise
-    return server.ok({"verdict": "SCRIBE_RECORD_WRITTEN", "record": str(target.relative_to(server.ROOT)), "entry": payload})
+    return server.ok({
+        "verdict": "SCRIBE_RECORD_STAGED_ONLY",
+        "record_json_created": True,
+        "canonical_memory_updated": False,
+        "canonical_memory_required": required,
+        "promotion_required": required,
+        "promotion_tool": "scribe_promote_record" if required else "",
+        "memory_policy": policy,
+        "record_path": str(target.relative_to(server.ROOT)),
+        "entry": payload,
+    })
 
+
+def scribe_promote_record(
+    agent_id: str = "",
+    task_id: str = "",
+    context_token: str = "",
+    record_path: str = "",
+) -> Dict[str, Any]:
+    if not agent_id:
+        raise server.ToolError("agent_id is required")
+    if not task_id or not context_token:
+        raise server.ToolError("task_id and context_token are required")
+    try:
+        task_data = task_context.get_task_context(agent_id, task_id)
+    except task_context.TaskContextError as exc:
+        raise _context_error(exc) from exc
+    safe_record_path = record_path or str(task_data.get("scribe_record_path") or "")
+    if not safe_record_path:
+        raise server.ToolError("record_path is required")
+    source = Path(safe_record_path)
+    if not source.is_absolute():
+        source = (server.ROOT / source).resolve()
+    else:
+        source = source.resolve()
+    if not source.is_file():
+        raise server.ToolError("SCRIBE_RECORD_NOT_FOUND")
+    if not source.is_relative_to(server.ROOT):
+        raise server.ToolError("SCRIBE_RECORD_OUTSIDE_PROJECT")
+    record = json.loads(source.read_text(encoding="utf-8"))
+    policy = canonical_memory_gate.derive_memory_policy(
+        str(record.get("record_type") or record.get("type") or ""),
+        str(record.get("memory_policy") or task_data.get("scribe_record_policy") or ""),
+        str(record.get("request") or ""),
+        str(record.get("summary") or ""),
+        str(record.get("verdict") or ""),
+    )
+    scope = str(task_data.get("resource") or "") or ""
+    result = canonical_memory_gate.promote_record(
+        server.ROOT,
+        record,
+        source,
+        scope=scope,
+        memory_policy=policy,
+    )
+    if result.get("verdict") == "CANONICAL_MEMORY_PROMOTED":
+        try:
+            task_context.mark_scribe_record_promoted(agent_id, task_id, context_token, entry_id=str(result.get("entry_id") or ""))
+        except task_context.TaskContextError as exc:
+            raise _context_error(exc) from exc
+    return server.ok(result)
 
 def discipline_ping(
     agent_id: str = "",
@@ -1251,31 +1413,44 @@ def _read_only_workflow_next(
             reason="Targeted Graphify impact query is recommended for read task context.",
             forbidden=_READ_ONLY_FORBIDDEN,
         )
-    # Scribe or graphify done → scribe_record recommended
-    if last in _SCRIBE_VERDICTS | _GRAPHIFY_VERDICTS or last == "BEFORE_TASK_OK" \
-            or (task_data.get("scribe_done") and last not in ("SCRIBE_RECORD_WRITTEN", "TASK_FINISHED_OK")):
-        if last == "SCRIBE_RECORD_WRITTEN":
-            return server._next_payload(
-                state="FINISH_TASK_RECOMMENDED",
-                tool="finish_task",
-                args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "intent": "read"},
-                reason="Read task complete. Call finish_task to close.",
-                forbidden=_READ_ONLY_FORBIDDEN,
-            )
+    # Scribe or graphify done → scribe_record, then optional canonical promotion, then finish
+    if _task_requires_canonical_promotion(task_data):
+        return server._next_payload(
+            state="SCRIBE_PROMOTION_REQUIRED",
+            tool="scribe_promote_record",
+            args={
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "context_token": context_token,
+                "record_path": str(task_data.get("scribe_record_path") or ""),
+            },
+            reason="The staged memory record is durable and must be promoted before finish_task.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    if task_data.get("scribe_record_done"):
+        return server._next_payload(
+            state="FINISH_TASK_RECOMMENDED",
+            tool="finish_task",
+            args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "intent": "read"},
+            reason="Read task complete. Call finish_task to close.",
+            forbidden=_READ_ONLY_FORBIDDEN,
+        )
+    if last in _SCRIBE_VERDICTS | _GRAPHIFY_VERDICTS or last == "BEFORE_TASK_OK" or (task_data.get("scribe_done") and not task_data.get("scribe_record_done")):
         return server._next_payload(
             state="SCRIBE_RECORD_RECOMMENDED",
             tool="scribe_record",
-            args={"agent_id": agent_id, "request": request or "task completed",
-                  "summary": "record useful task outcome before finish",
-                  "touched_resources": [resource] if resource else [],
-                  "resources": [resource] if resource else [],
-                  "verdict": last or "READY_TO_FINISH",
-                  "record_type": "task_summary", "severity": "medium",
-                  "tags": ["workflow_next"]},
+            args=_scribe_record_args(agent_id, task_id, context_token, request, intent, resource, task_data),
             reason="Typed memory recording is recommended before finishing the read task.",
             forbidden=_READ_ONLY_FORBIDDEN,
         )
-    # Safety fallback — guide toward scribe_record
+    # Safety fallback — guide toward finish_task
+    return server._next_payload(
+        state="FINISH_TASK_RECOMMENDED",
+        tool="finish_task",
+        args={"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "intent": "read"},
+        reason="Read task ready for finish.",
+        forbidden=_READ_ONLY_FORBIDDEN,
+    )
     return server._next_payload(
         state="FINISH_TASK_RECOMMENDED",
         tool="finish_task",
@@ -1453,32 +1628,34 @@ def workflow_next(
             model_name=model_name,
         )
 
-    if normalized in server.FINISH_INTENTS and last not in _RECORD_DONE_VERDICTS:
+    if normalized in server.FINISH_INTENTS:
+        if _task_requires_canonical_promotion(task_data):
+            return server._next_payload(
+                state="SCRIBE_PROMOTION_REQUIRED",
+                tool="scribe_promote_record",
+                args={
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "context_token": context_token,
+                    "record_path": str(task_data.get("scribe_record_path") or ""),
+                },
+                reason="The staged memory record is durable and must be promoted before finish_task.",
+                forbidden=["finish_task", "direct_file_edit"],
+            )
         pending = server._agent_pending_patches(agent_id, resource)
         if pending:
             return _BASE_WORKFLOW_NEXT(agent_id=agent_id, request=request, intent=intent, resource=resource, mode=mode, base_hash=base_hash, patch_id=patch_id, claim_id=claim_id, last_verdict=last_verdict, host_tool=host_tool, model_name=model_name)
         claims = server._active_claims_for(agent_id)
         if claims["owned"]:
             return _BASE_WORKFLOW_NEXT(agent_id=agent_id, request=request, intent=intent, resource=resource, mode=mode, base_hash=base_hash, patch_id=patch_id, claim_id=claim_id, last_verdict=last_verdict, host_tool=host_tool, model_name=model_name)
-        if _requires_scribe_record(intent, last_verdict):
+        if _requires_scribe_record(intent, last_verdict) and not (task_data or {}).get("scribe_record_done"):
             return server._next_payload(
                 state="SCRIBE_RECORD_REQUIRED",
                 tool="scribe_record",
-                args={
-                    "agent_id": agent_id,
-                    "request": request or "task completed",
-                    "summary": "record useful task outcome before finish",
-                    "touched_resources": [resource] if resource else [],
-                    "resources": [resource] if resource else [],
-                    "verdict": last or "READY_TO_FINISH",
-                    "record_type": "task_summary",
-                    "severity": "medium",
-                    "tags": ["workflow_next"],
-                },
+                args=_scribe_record_args(agent_id, task_id, context_token, request, intent, resource, task_data),
                 reason="Typed memory recording is required before finish_task when useful: writes, deletions, tests, refactors, decisions, scars, debt or conflicts.",
                 forbidden=["finish_task", "direct_file_edit"],
             )
-
     gate = _context_gate(agent_id, request, intent, resource, last_verdict, task_id, context_token)
     if gate is not None:
         return gate
@@ -1685,8 +1862,23 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "related_errors": {"type": "array", "items": {"type": "string"}},
                 "related_tests": {"type": "array", "items": {"type": "string"}},
                 "resources": {"type": "array", "items": {"type": "string"}},
+                "task_id": {"type": "string"},
+                "context_token": {"type": "string"},
+                "memory_policy": {"type": "string"},
             },
             "required": ["agent_id", "request", "summary", "touched_resources", "verdict"],
+            "additionalProperties": False,
+        }
+    if name == "scribe_promote_record":
+        return {
+            "type": "object",
+            "properties": {
+                "agent_id": {"type": "string"},
+                "task_id": {"type": "string"},
+                "context_token": {"type": "string"},
+                "record_path": {"type": "string"},
+            },
+            "required": ["agent_id", "task_id", "context_token"],
             "additionalProperties": False,
         }
     if name == "list_tasks":
@@ -2511,6 +2703,7 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.scribe_commit_gate_status = scribe_commit_gate_status
     server.scribe_commit_gate_resolve = scribe_commit_gate_resolve
     server.scribe_record = scribe_record
+    server.scribe_promote_record = scribe_promote_record
     server.list_tasks = list_tasks
     server.task_status = task_status
     server.wait_for_tasks = wait_for_tasks
@@ -2532,6 +2725,7 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["scribe_commit_gate_status"] = scribe_commit_gate_status
     server.TOOLS["scribe_commit_gate_resolve"] = scribe_commit_gate_resolve
     server.TOOLS["scribe_record"] = scribe_record
+    server.TOOLS["scribe_promote_record"] = scribe_promote_record
     server.TOOLS["list_tasks"] = list_tasks
     server.TOOLS["task_status"] = task_status
     server.TOOLS["wait_for_tasks"] = wait_for_tasks

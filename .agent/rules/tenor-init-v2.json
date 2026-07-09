@@ -212,6 +212,7 @@
       "propose_patch",
       "apply_patch",
       "delete_resource",
+      "scribe_promote_record",
       "finish_task"
     ],
     "do_not_confuse_states": [

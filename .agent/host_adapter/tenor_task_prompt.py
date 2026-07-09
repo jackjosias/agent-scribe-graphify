@@ -32,7 +32,7 @@ Pour toute modification de code :
 - utilise pre_action_guard avant toute action sensible ;
 - utilise action_lease_id quand necessaire ;
 - applique les changements uniquement via le workflow MCP ;
-- termine avec workspace_audit, scribe_record et finish_task.
+- termine avec workspace_audit, scribe_record, puis scribe_promote_record si le record est durable, et finish_task.
 
 Si tu ne peux pas appeler les tools MCP, STOP et affiche exactement :
 HOST_MCP_UNBOUND

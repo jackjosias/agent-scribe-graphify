@@ -55,10 +55,12 @@ def main() -> int:
         "related_tests": [".agent/scripts/scribe_record_smoke.py"],
         "tags": ["smoke", "scribe_record", "scar"],
     })
-    if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
-        fail(f"scribe_record did not write: {record}")
-    path = ROOT / record["record"]
-    if not path.is_file() or ROOT / ".agent" / "state" / "scribe-out" / "records" not in path.parents:
+    if record.get("verdict") != "SCRIBE_RECORD_STAGED_ONLY":
+        fail(f"scribe_record did not stage: {record}")
+    if record.get("record_json_created") is not True or record.get("canonical_memory_updated") is not False:
+        fail(f"scribe_record should stage only: {record}")
+    path = ROOT / record["record_path"]
+    if not path.is_file() or ROOT / ".agent" / "state" / "outputs" / "scribe-out" / "records" not in path.parents:
         fail(f"record path invalid: {path}")
     payload = json.loads(path.read_text(encoding="utf-8"))
     if payload.get("agent_id") != agent_id or payload.get("verdict") != "SMOKE_VERDICT":

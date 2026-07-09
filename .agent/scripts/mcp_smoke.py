@@ -304,13 +304,13 @@ def smoke_nominal_workflow() -> None:
         "verdict": "CLAIM_RELEASED",
         "tags": ["smoke"],
     })
-    if record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+    if record.get("verdict") != "SCRIBE_RECORD_STAGED_ONLY":
         fail(f"scribe_record failed: {record}")
 
     expect_next_tool({
         "agent_id": agent_id,
         "intent": "finish",
-        "last_verdict": "SCRIBE_RECORD_WRITTEN",
+        "last_verdict": "SCRIBE_RECORD_STAGED_ONLY",
     }, "finish_task")
 
     canonical_skip_reason = (

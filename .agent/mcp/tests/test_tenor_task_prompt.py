@@ -46,6 +46,7 @@ def contains_sections(prompt: str) -> bool:
         "action_lease_id",
         "workspace_audit",
         "scribe_record",
+        "scribe_promote_record",
         "HOST_MCP_UNBOUND",
     ]
     return all(indicator in prompt for indicator in indicators)

@@ -421,7 +421,7 @@ def main() -> None:
                 "tags": ["smoke"],
             },
         )
-        if res_record.get("verdict") != "SCRIBE_RECORD_WRITTEN":
+        if res_record.get("verdict") != "SCRIBE_RECORD_STAGED_ONLY":
             fail(f"scribe_record failed: {res_record}")
 
         # 19. finish_task avec lease
@@ -450,7 +450,45 @@ def main() -> None:
                 "action_lease_id": lease_id_finish,
             },
         )
-        if res_finish.get("verdict") not in {"TASK_FINISHED", "TASK_FINISHED_OK"}:
+        if res_finish.get("verdict") == "SCRIBE_COMMIT_GATE_REQUIRED":
+            resolved = call_mcp(
+                temp_dir,
+                "scribe_commit_gate_resolve",
+                {
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                    "context_token": context_token,
+                    "decision": "skip",
+                    "skip_reason": "This smoke only verifies runtime guards and transient workflow mutation; it intentionally leaves no durable project memory because canonical coverage is exercised elsewhere.",
+                },
+            )
+            if resolved.get("verdict") != "SCRIBE_COMMIT_GATE_RESOLVED":
+                fail(f"commit gate resolve failed: {resolved}")
+            res_guard_finish = run_cli(
+                temp_dir, "guard",
+                "--agent-id", agent_id,
+                "--request", "modify tracked.txt",
+                "--intent", "write",
+                "--resource", "tracked.txt",
+                "--planned-action", "finish_task",
+                "--task-id", task_id,
+                "--context-token", context_token,
+            )
+            if res_guard_finish.get("verdict") != "PRE_ACTION_GUARD_OK":
+                fail(f"Guard before finish_task retry failed: {res_guard_finish}")
+            lease_id_finish = res_guard_finish["action_lease"]["lease_id"]
+            res_finish = call_mcp(
+                temp_dir,
+                "finish_task",
+                {
+                    "agent_id": agent_id,
+                    "summary": "Completed modification of tracked.txt",
+                    "task_id": task_id,
+                    "context_token": context_token,
+                    "action_lease_id": lease_id_finish,
+                },
+            )
+        if res_finish.get("verdict") not in {"TASK_FINISHED", "TASK_FINISHED_OK", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}:
             fail(f"finish_task failed: {res_finish}")
 
         # 20. verifying final clean state

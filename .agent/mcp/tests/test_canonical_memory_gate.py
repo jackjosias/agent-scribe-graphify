@@ -213,8 +213,20 @@ class CanonicalMemoryGateTest(unittest.TestCase):
 
     def test_02_mutating_scribe_record_only_requires_canonical_memory(self) -> None:
         ctx = self.ready_context()
-        record = call_tool("scribe_record", agent_id=AGENT_A, request="mutating task", summary="runtime only", touched_resources=[RESOURCE], verdict="ok")
-        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_WRITTEN", record)
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="mutating task validation",
+            summary="validation result requires promotion",
+            touched_resources=[RESOURCE],
+            verdict="ok",
+            record_type="validation",
+        )
+        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", record)
+        self.assertTrue(record.get("record_json_created"), record)
+        self.assertFalse(record.get("canonical_memory_updated"), record)
+        self.assertTrue(record.get("canonical_memory_required"), record)
+        self.assertEqual(record.get("promotion_tool"), "scribe_promote_record", record)
         result = self.finish(ctx, summary="mutating finish")
         self.assertEqual(result.get("verdict"), "CANONICAL_MEMORY_REQUIRED", result)
 
@@ -289,12 +301,139 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertEqual(result.get("verdict"), direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED, result)
 
     def test_13_scribe_record_alone_is_not_canonical_memory(self) -> None:
+        ctx = self.ready_context(intent="read")
+        call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="local only check",
+            summary="runtime receipt only",
+            touched_resources=[RESOURCE],
+            verdict="ok",
+            memory_policy="local_only",
+        )
+        result = call_tool("finish_task", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], intent="read", summary="runtime receipt only")
+        self.assertEqual(result.get("verdict"), "TASK_FINISHED_OK", result)
+
+    def test_14_promote_record_is_idempotent(self) -> None:
         ctx = self.ready_context()
-        call_tool("scribe_record", agent_id=AGENT_A, request="mutating durable task", summary="runtime receipt only", touched_resources=[RESOURCE], verdict="ok")
-        result = self.finish(ctx, summary="runtime receipt only")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="read-only validation run",
+            summary="read-only validation result",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", record)
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        self.assertTrue(promoted.get("canonical_memory_updated"), promoted)
+        duplicate = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(duplicate.get("verdict"), "CANONICAL_MEMORY_ALREADY_PROMOTED", duplicate)
+        self.assertTrue(duplicate.get("already_promoted"), duplicate)
+
+    def test_15_readonly_validation_cannot_finish_with_durable_record_only(self) -> None:
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="read-only validation run",
+            summary="read-only validation result",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", record)
+        result = call_tool("finish_task", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], intent="read", summary="read-only validation result")
         self.assertEqual(result.get("verdict"), "CANONICAL_MEMORY_REQUIRED", result)
 
-    def test_14_canonical_delta_present_when_memory_changes(self) -> None:
+    def test_16_readonly_validation_can_finish_after_promotion(self) -> None:
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="read-only validation run",
+            summary="read-only validation result",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        result = call_tool("finish_task", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], intent="read", summary="read-only validation result")
+        self.assertEqual(result.get("verdict"), "TASK_FINISHED_OK", result)
+
+    def test_17_local_only_record_can_finish_without_canonical_promotion(self) -> None:
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="read-only runtime note",
+            summary="runtime receipt only",
+            touched_resources=[RESOURCE],
+            verdict="INFO",
+            memory_policy="local_only",
+        )
+        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", record)
+        result = call_tool("finish_task", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], intent="read", summary="runtime receipt only")
+        self.assertEqual(result.get("verdict"), "TASK_FINISHED_OK", result)
+
+    def test_18_promoted_validation_is_findable_by_scribe_query(self) -> None:
+        ctx = self.ready_context()
+        token = "PROMOTED_QUERY_20260630"
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request=f"validation {token}",
+            summary=f"validation summary {token}",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        query = call_tool("scribe_query", agent_id=AGENT_A, task_id=ctx["task_id"], context_token=ctx["context_token"], query=token, limit=5)
+        self.assertIn(query.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}, query)
+        if query.get("verdict") == "SCRIBE_QUERY_DONE":
+            stdout = str((query.get("result") or {}).get("stdout") or "")
+            self.assertIn(token, stdout, query)
+        else:
+            self.assertIn("scribe-rag not found", str(query.get("reason") or ""), query)
+
+    def test_19_canonical_delta_present_when_memory_changes(self) -> None:
         ctx = self.ready_context()
         token = "DELTA_20260630"
         self.apply_authorized_scribe_patch(ctx, token)

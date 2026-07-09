@@ -75,7 +75,9 @@ class ReadOnlyTaskTerminationTest(unittest.TestCase):
 
         # 5. scribe_record (optionnel, lit)
         sr = self.call("scribe_record", agent_id=agent_id, summary="read-only check", verdict="ok")
-        self.assertIn(sr.get("verdict"), {"SCRIBE_RECORD_WRITTEN", "SCRIBE_UNAVAILABLE"})
+        self.assertEqual(sr.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", sr)
+        self.assertFalse(sr.get("canonical_memory_updated"), sr)
+        self.assertTrue(sr.get("record_json_created"), sr)
 
         # 6. finish_task avec intent="read" — pas de lease requis
         ft = self.call("finish_task", agent_id=agent_id, task_id=task_id, context_token=context_token, intent="read", summary="read-only done")
