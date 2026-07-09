@@ -97,12 +97,15 @@ def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None,
     fail(f"pre_action_guard failed for {action}: {result}")
 
 
+def _scoped_query(request: str, resource: str) -> str:
+    return f"{request} resource:{resource}" if resource else request
+
 def establish_context(agent_id: str, request: str, intent: str, resource: str) -> dict[str, str]:
     before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": resource})
     if before.get("verdict") != "BEFORE_TASK_OK":
         fail(f"before_task failed: {before}")
     ctx = task_context_args(before)
-    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": request, "limit": 5})
+    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": _scoped_query(request, resource), "limit": 5})
     if scribe.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
         fail(f"scribe_query failed: {scribe}")
     graphify = call_tool("graphify_query", {"agent_id": agent_id, **ctx, "query": request, "resource": resource})
@@ -173,7 +176,7 @@ def smoke_nominal_workflow() -> None:
         **ctx,
     }, "scribe_query")
 
-    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": "modify smoke workflow file", "limit": 5})
+    scribe = call_tool("scribe_query", {"agent_id": agent_id, **ctx, "query": "modify tmp-smoke-workflow/file.txt", "limit": 5})
     if scribe.get("verdict") not in {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}:
         fail(f"scribe_query failed: {scribe}")
 

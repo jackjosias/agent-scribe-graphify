@@ -75,6 +75,66 @@ _CANONICAL_MEMORY_TERMINAL_VERDICTS = {"CANONICAL_MEMORY_PROMOTED", "CANONICAL_M
 _CANONICAL_MEMORY_BLOCKING_VERDICTS = {"CANONICAL_MEMORY_REQUIRED", "CANONICAL_MEMORY_SKIP_REJECTED"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
 _MUTATING_CONTEXT_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove"}
+
+_GENERIC_TOKENS: frozenset = frozenset({
+    "file", "files", "code", "main", "index", "core", "utils", "util",
+    "module", "modules", "api", "backend", "frontend", "component",
+    "components", "page", "pages", "service", "services", "helper",
+    "helpers", "common", "shared", "base", "config", "data", "docs",
+    "node", "public", "static", "assets", "media", "dist", "build",
+    "target", "bin", "obj", "cache", "temp", "logs", "migrations",
+    "middleware", "types", "type", "enum", "enums", "interfaces",
+    "model", "models", "view", "views", "controller", "controllers",
+    "input", "output", "result", "error", "errors", "handler",
+    "handlers", "style", "styles", "route", "routes", "schema",
+    "schemas", "table", "tables", "field", "fields", "column",
+    "columns", "value", "values", "param", "params", "method",
+    "methods", "event", "events", "state", "status", "rules",
+    "policy", "policies", "action", "actions", "name", "names",
+    "group", "groups", "role", "roles", "user", "users", "admin",
+    "token", "tokens", "key", "keys", "session", "sessions",
+})
+_EXTENSION_TOKENS: frozenset = frozenset({
+    "py", "ts", "tsx", "js", "jsx", "md", "json", "yaml", "yml",
+    "toml", "ini", "cfg", "conf", "xml", "html", "css", "scss",
+    "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "ico",
+    "woff", "woff2", "ttf", "eot", "pdf", "doc", "docx", "xls",
+    "xlsx", "csv", "txt", "log", "env", "gitignore", "dockerfile",
+    "makefile", "sql", "db", "lock", "sum", "mod", "sum",
+})
+
+
+def _check_scribe_scope(task_resource: str, query: str, stdout: str) -> tuple[bool, str]:
+    if not task_resource:
+        return (True, "no resource to scope against")
+    q = query.strip().lower()
+    s = stdout.strip().lower()
+    r = task_resource.strip().lower()
+    r_name = Path(r).name.lower() if r else ""
+    r_parent = Path(r).parent.name.lower() if Path(r).parent.name else ""
+
+    if r_name and (r_name in q or r_name in s):
+        return (True, "resource name found in query or stdout")
+    if r_parent and (r_parent in q or r_parent in s):
+        return (True, "resource parent path found in query or stdout")
+    r_tokens: set[str] = set()
+    for sep in (".", "/", "-", "_"):
+        r_tokens.update(t for t in r.split(sep) if len(t) >= 4 and t not in _GENERIC_TOKENS and t not in _EXTENSION_TOKENS and not t.isdigit())
+    if r_name:
+        r_tokens.update(t for t in r_name.split(".") if len(t) >= 4 and t not in _GENERIC_TOKENS and t not in _EXTENSION_TOKENS and not t.isdigit())
+        r_tokens.update(t for t in r_name.split("-") if len(t) >= 4 and t not in _GENERIC_TOKENS and t not in _EXTENSION_TOKENS and not t.isdigit())
+    if r_parent:
+        r_tokens.update(t for t in r_parent.split("-") if len(t) >= 4 and t not in _GENERIC_TOKENS and t not in _EXTENSION_TOKENS and not t.isdigit())
+    matching_tokens = [t for t in r_tokens if t in q or t in s]
+    if matching_tokens:
+        return (True, f"resource token(s) found in query or stdout: {', '.join(matching_tokens[:3])}")
+    if "project-wide" in q or "global-context" in q:
+        has_reason = "because:" in q or "reason:" in q or (r_name and r_name in q)
+        if has_reason:
+            return (True, "project-wide/global-context scope with explicit reason or resource reference")
+    return (False, "SCRIBE context irrelevant for write task — query and stdout do not reference the target resource or any parent scope")
+
+
 _GRAPHIFY_KEYWORDS = {"api", "architecture", "backend", "base de données", "bug", "code", "database", "db", "frontend", "migration", "module", "production", "refactor", "sécurité", "security", "test"}
 _DEBUG_KEYWORDS = {"bug", "debug", "erreur", "error", "fail", "failure", "fix", "regression", "refactor", "test"}
 _LOOP_VERDICTS = {
@@ -473,6 +533,15 @@ def scribe_query(query: str, limit: int = 5, agent_id: str = "", task_id: str = 
                     "query": query,
                     "result": res,
                     "reason": "SCRIBE returned no content. Write tasks require a non-empty SCRIBE result.",
+                })
+            scope_ok, scope_reason = _check_scribe_scope(task_resource, query, stdout)
+            if not scope_ok:
+                return server.ok({
+                    "ok": False,
+                    "verdict": "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE",
+                    "query": query,
+                    "result": res,
+                    "reason": scope_reason,
                 })
         try:
             result_count = 1 if (res.get("stdout") or "").strip() else 0

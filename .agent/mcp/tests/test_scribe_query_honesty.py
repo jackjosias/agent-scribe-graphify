@@ -32,10 +32,10 @@ def _make_scribe_rag(root: Path, returncode: int = 0, stderr: str = "", stdout: 
     script = scribe_dir / "scribe-rag"
     lines = ["#!/usr/bin/env python3", "import sys"]
     if stdout:
-        escaped = stdout.replace("'", "'\"'\"'")
+        escaped = stdout.replace("\\", "\\\\").replace("'", "'\"'\"'").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         lines.append(f"sys.stdout.write('{escaped}')")
     if stderr:
-        escaped = stderr.replace("'", "'\"'\"'")
+        escaped = stderr.replace("\\", "\\\\").replace("'", "'\"'\"'").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         lines.append(f"sys.stderr.write('{escaped}')")
     lines.append(f"sys.exit({returncode})")
     script.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -154,7 +154,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         memo = self._init_memo()
         memo.write_text("original memory\n", encoding="utf-8")
         ctx = self.register_and_before(intent="write")
-        sq = self.call("scribe_query", **ctx, query="test", limit=3)
+        sq = self.call("scribe_query", **ctx, query="README.md context test", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         tc = sq.get("task_context", {})
         self.assertIsNotNone(tc.get("memory_hash"), sq)
@@ -173,7 +173,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         subprocess.run(["git", "commit", "-m", "init memo"],
                        cwd=str(self.root), capture_output=True, env=self._env)
         ctx = self.register_and_before(intent="write")
-        sq = self.call("scribe_query", **ctx, query="test", limit=3)
+        sq = self.call("scribe_query", **ctx, query="README.md context test", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         memo.write_text("changed memory\n", encoding="utf-8")
         wn = self.call("workflow_next", agent_id=ctx["agent_id"],
@@ -291,7 +291,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         memo = self._init_memo()
         memo.write_text("revised memory\n", encoding="utf-8")
         ctx = self.register_and_before(intent="write")
-        sq = self.call("scribe_query", **ctx, query="test", limit=3)
+        sq = self.call("scribe_query", **ctx, query="README.md context", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         memo.write_text("unauthorized revision\n", encoding="utf-8")
         tw = direct_fs_tripwire.detect_unauthorized_mutations(
@@ -316,7 +316,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
             resource=MEMOIRE, tool="scribe_record", project_root=self.root,
             after_hash=memo_after_hash,
         )
-        sq = self.call("scribe_query", **ctx, query="test", limit=3)
+        sq = self.call("scribe_query", **ctx, query="AGENT-MEMOIRE_PROJECT_STATUS.scribe context", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
         aid = ctx["agent_id"]
@@ -349,7 +349,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
             resource=MEMOIRE, tool="scribe_record", project_root=self.root,
             after_hash=memo_after_hash,
         )
-        sq = self.call("scribe_query", **ctx, query="test", limit=3)
+        sq = self.call("scribe_query", **ctx, query="AGENT-MEMOIRE_PROJECT_STATUS.scribe context", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
         aid = ctx["agent_id"]
@@ -392,3 +392,80 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         self.assertNotEqual(result.get("verdict"), "FINISH_REFUSED_PENDING_PATCHES", result)
         self.assertNotEqual(result.get("verdict"), "FINISH_REFUSED_ACTIVE_CLAIMS", result)
         self.assertIn(result.get("verdict"), {"SCRIBE_COMMIT_GATE_REQUIRED", "TASK_FINISHED_OK", "CLEANUP_MEMORY_DECISION_REQUIRED", "CANONICAL_MEMORY_SKIPPED_WITH_REASON"}, result)
+
+    # ── B2: irrelevant (non-empty, off-topic) scribe must not allow write ──────
+
+    def test_irrelevant_scribe_blocks_write(self) -> None:
+        UNRELATED = ("=== MEMORY: database_connection_pool ===\n"
+                     "File: src/database/pool.py\n"
+                     "Type: connection_pool\n"
+                     "Active connections: 12\n"
+                     "Max connections: 50\n"
+                     "Pool strategy: lazy\n"
+                     "Timeout: 30s\n"
+                     "This file manages PostgreSQL connection pooling.\n")
+        _make_scribe_rag(self.root, returncode=0, stdout=UNRELATED)
+        ctx = self.register_and_before(intent="write", resource="README.md")
+        aid = ctx["agent_id"]
+
+        # scribe_query with off-topic content and query that doesn't reference target
+        sq = self.call("scribe_query", **ctx, query="edit database pool config", limit=3)
+        self.assertIs(sq.get("ok"), False, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)
+        self.assertNotIn("task_context", sq, sq)
+
+        # graphify_query should still be callable
+        gq = self.call("graphify_query", agent_id=aid,
+                        task_id=ctx["task_id"], context_token=ctx["context_token"],
+                        query="edit database pool", resource="README.md")
+        self.assertIn(gq.get("verdict", ""), {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}, gq)
+
+        # claim_resource should fail — scribe not done
+        claim = self.call("claim_resource", agent_id=aid, resource="README.md",
+                          mode="patch_queue", ttl_seconds=600,
+                          task_id=ctx["task_id"], context_token=ctx["context_token"])
+        self.assertIn(claim.get("verdict", ""), {"CLAIM_CONTEXT_NOT_READY", "TASK_CONTEXT_NOT_READY"}, claim)
+
+        # propose_patch should fail — context not ready (scribe not done)
+        base = self.call("file_hash", resource="README.md")["hash"]
+        prop = self.call("propose_patch", agent_id=aid, target="README.md",
+                          base_hash=base,
+                          diff_text="@@ -1,3 +1,3 @@\n line1\n-line2\n+modified\n line3\n",
+                          task_id=ctx["task_id"], context_token=ctx["context_token"])
+        self.assertIs(prop.get("ok"), False, prop)
+        error = prop.get("error", "") or prop.get("verdict", "")
+        self.assertIn("TASK_CONTEXT_NOT_READY", error, prop)
+
+        # apply_patch should not succeed (scribe not done, so write path blocked)
+        ap = self.call("apply_patch", agent_id=aid, patch_id="nonexistent",
+                        task_id=ctx["task_id"], context_token=ctx["context_token"])
+        self.assertIs(ap.get("ok"), False, ap)
+        self.assertNotEqual(ap.get("verdict"), "PATCH_APPLIED", ap)
+
+        # file should be unchanged
+        self.assertEqual((self.root / "README.md").read_text(), "test project\n")
+
+    # ── B2.1: scope gate bypass tests ────────────────────────────────────────
+
+    def test_global_scope_without_reason_blocked(self) -> None:
+        _make_scribe_rag(self.root, returncode=0, stdout="unrelated database content")
+        ctx = self.register_and_before(intent="write", resource="README.md")
+        sq = self.call("scribe_query", **ctx, query="project-wide context", limit=3)
+        self.assertIs(sq.get("ok"), False, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)
+
+    def test_global_scope_with_reason_passes(self) -> None:
+        _make_scribe_rag(self.root, returncode=0, stdout="project unrelated content")
+        ctx = self.register_and_before(intent="write", resource="README.md")
+        sq = self.call("scribe_query", **ctx, query="project-wide refactor because:global change", limit=3)
+        self.assertIs(sq.get("ok"), True, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_QUERY_DONE", sq)
+        self.assertIn("task_context", sq, sq)
+        self.assertIs(sq["task_context"].get("scribe_done"), True, sq)
+
+    def test_generic_token_in_resource_does_not_validate_scope(self) -> None:
+        _make_scribe_rag(self.root, returncode=0, stdout="unrelated database pool content")
+        ctx = self.register_and_before(intent="write", resource="src/utils/helper.py")
+        sq = self.call("scribe_query", **ctx, query="edit utility code", limit=3)
+        self.assertIs(sq.get("ok"), False, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)

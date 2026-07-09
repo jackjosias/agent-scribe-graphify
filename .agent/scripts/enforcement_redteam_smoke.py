@@ -123,9 +123,10 @@ def mark_graphify(agent_id: str, target: str, ctx: dict[str, str], query: str = 
 
 def ready_context(agent_id: str, target: str, request: str = "redteam write", intent: str = "write") -> dict[str, str]:
     ctx = start_context(agent_id, target, request, intent=intent)
-    mark_scribe(agent_id, ctx, request)
+    scoped_query = f"{request} resource:{target}" if target else request
+    mark_scribe(agent_id, ctx, scoped_query)
     if intent != "read":
-        mark_graphify(agent_id, target, ctx, request)
+        mark_graphify(agent_id, target, ctx, scoped_query)
     return ctx
 
 
