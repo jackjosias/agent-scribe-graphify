@@ -45,7 +45,7 @@ Résultat attendu :
 MCP_SMOKE_ALL_OK
 ```
 
-> **Budget de validation (officiel) :** `mcp_smoke.py` est un *full integration smoke*, pas un *quick smoke*. Il lance volontairement de nombreux sous-process `server_entry` à froid (audit perf V2.15.29 : 53 appels `server_entry`, 28 appels CLI `graphify`, 6 appels `scribe-rag`, ~76s wall). Son temps d'exécution peut dépasser 60s. Budget officiel = **120s**. Ne pas l'exécuter sous `timeout 60` (il serait tué avant la fin). En CI, distinguer : *quick smoke* (serveur/tools/root minimal, rapide) vs *full mcp_smoke* (intégration complète, budget 120s).
+> **Budget de validation (officiel) :** `mcp_smoke.py` est un *full integration smoke*, pas un *quick smoke*. Il lance volontairement de nombreux sous-process `server_entry` à froid (audit perf V2.15.29 : 53 appels `server_entry`, 28 appels CLI `graphify`, 6 appels `scribe-rag`). Sur un petit arbre source il tourne ~76s wall ; sur un gros projet terrain (algowebsite) mesuré à **125-137s** sur 3 runs. Le budget de **120s a été réfuté par le terrain**, donc le budget par défaut est **180s**. Les très gros repos peuvent nécessiter plus — mesurer localement. Ne pas l'exécuter sous `timeout 60` ni `timeout 120` (il serait tué avant la fin). En CI, distinguer : *quick smoke* (serveur/tools/root minimal, rapide) vs *full mcp_smoke* (intégration complète, budget 180s, ajustable selon la taille du workspace).
 
 Ce smoke-test valide :
 
