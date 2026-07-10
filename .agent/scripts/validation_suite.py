@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# mcp_smoke is a FULL integration smoke (not a quick smoke). It intentionally
+# exercises many cold server_entry subprocess calls (perf audit on 959409c: 53
+# server_entry spawns + 28 graphify CLI + 6 scribe-rag, ~76s wall). Expected
+# runtime may exceed 60s; its official budget is 120s. Do not wrap it in a
+# 60s timeout or it will be killed before completing.
 STEPS = (
     ("validation_runtime_lock", [sys.executable, ".agent/mcp/tests/test_validation_runtime_lock.py"]),
     ("agent_runtime_sync", [sys.executable, ".agent/tests/test_agent_runtime_sync.py"]),
