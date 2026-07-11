@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
 import runpy
 import sys
@@ -12,10 +13,29 @@ os.chdir(PROJECT_ROOT)
 MCP_ROOT = SOURCE_ROOT / ".agent" / "mcp"
 if str(MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(MCP_ROOT))
-if os.environ.get("AGENT_DISABLE_RELOCATION_PURGE") != "1":
-    from runtime.installation_state import ensure_fresh_installation_state
 
-    result = ensure_fresh_installation_state(PROJECT_ROOT)
-    if not result.get("ok"):
-        raise SystemExit(result.get("verdict", "PROJECT_BOUND_STATE_PURGE_REFUSED"))
-runpy.run_path(str(SOURCE_ROOT / ".agent" / "mcp" / "server_ext.py"), run_name="__main__")
+from runtime.installation_state import inspect_installation_state  # noqa: E402
+
+
+def _emit_gate_failure(gate: dict[str, object]) -> None:
+    payload = {
+        "ok": False,
+        "verdict": gate.get("verdict", "TENOR_INIT_REQUIRED"),
+        "project_root": str(PROJECT_ROOT),
+        "detection": gate.get("detection", {}),
+        "next_action": gate.get("next_action", "python .agent/workflow/scribe/scribe tenor-init --type cli"),
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr, flush=True)
+
+
+def main() -> int:
+    gate = inspect_installation_state(PROJECT_ROOT)
+    if not gate.get("ready"):
+        _emit_gate_failure(gate)
+        return 78
+    runpy.run_path(str(SOURCE_ROOT / ".agent" / "mcp" / "server_ext.py"), run_name="__main__")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
