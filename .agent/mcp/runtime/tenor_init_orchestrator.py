@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 import uuid
 from contextlib import contextmanager
@@ -23,6 +24,7 @@ SCRIBE_MEMORY_CREATE = "SCRIBE_MEMORY_CREATE"
 
 TENOR_INIT_LOCK_ACQUIRED = "TENOR_INIT_LOCK_ACQUIRED"
 TENOR_INIT_ALREADY_RUNNING = "TENOR_INIT_ALREADY_RUNNING"
+TENOR_INIT_LOCK_OWNERSHIP_LOST = "TENOR_INIT_LOCK_OWNERSHIP_LOST"
 
 LOCK_RELATIVE = Path(".agent") / ".tenor-init.lock"
 SCRIBE_RELATIVE = Path("AGENT-MEMOIRE_PROJECT_STATUS.scribe")
@@ -32,6 +34,10 @@ class TenorInitBusy(RuntimeError):
     def __init__(self, lock: dict[str, Any]) -> None:
         super().__init__(TENOR_INIT_ALREADY_RUNNING)
         self.lock = lock
+
+
+class TenorInitLockOwnershipLost(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -97,13 +103,7 @@ def classify_installation(project_root: Path | str) -> dict[str, Any]:
 
 
 def prepare_tenor_init(project_root: Path | str, *, allow_purge: bool = True) -> TenorInitPlan:
-    """Classify the installation before SCRIBE creation/adoption, then prepare runtime.
-
-    This function is the installation authority for TENOR INIT.  The presence of
-    AGENT-MEMOIRE_PROJECT_STATUS.scribe never decides whether the bundle belongs
-    to the same project.  The installation manifest/fingerprint decides that
-    first; SCRIBE is adopted or created only after project-bound state is safe.
-    """
+    """Classify installation before SCRIBE adoption/creation and prepare state."""
 
     root = Path(project_root).resolve()
     scribe_existed_before = (root / SCRIBE_RELATIVE).is_file()
@@ -129,6 +129,12 @@ def prepare_tenor_init(project_root: Path | str, *, allow_purge: bool = True) ->
     )
 
 
+def finalize_tenor_init(project_root: Path | str) -> dict[str, Any]:
+    """Mark the installation ready only after shared bootstrap succeeds."""
+
+    return installation_state.finalize_installation_state(Path(project_root).resolve())
+
+
 def _lock_path(project_root: Path | str) -> Path:
     return Path(project_root).resolve() / LOCK_RELATIVE
 
@@ -141,14 +147,91 @@ def _read_lock(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _lock_is_stale(payload: dict[str, Any], stale_after_seconds: float) -> bool:
+def _payload_age_seconds(path: Path, payload: dict[str, Any]) -> float:
+    raw = payload.get("updated_epoch", payload.get("created_epoch", 0.0))
     try:
-        created_epoch = float(payload.get("created_epoch", 0.0))
+        epoch = float(raw)
     except (TypeError, ValueError):
+        try:
+            epoch = path.stat().st_mtime
+        except OSError:
+            return float("inf")
+    return max(0.0, time.time() - epoch)
+
+
+def _pid_is_alive(pid: object) -> bool:
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
         return True
-    if created_epoch <= 0:
+    except OSError:
         return True
-    return (time.time() - created_epoch) > stale_after_seconds
+    return True
+
+
+def _lock_is_stale(path: Path, payload: dict[str, Any], stale_after_seconds: float) -> bool:
+    if _payload_age_seconds(path, payload) <= stale_after_seconds:
+        return False
+    owner_host = str(payload.get("hostname") or "")
+    if owner_host and owner_host != socket.gethostname():
+        return False
+    return not _pid_is_alive(payload.get("pid"))
+
+
+def _remove_stale_lock(path: Path, observed: dict[str, Any]) -> bool:
+    """Remove only the exact stale lock that was observed.
+
+    The second read closes the release/re-acquire TOCTOU window: a waiter must
+    never unlink a newer owner's lock merely because the previous path vanished
+    between FileExistsError and inspection.
+    """
+    expected_nonce = str(observed.get("nonce") or "")
+    if expected_nonce:
+        latest = _read_lock(path)
+        if str(latest.get("nonce") or "") != expected_nonce:
+            return False
+    else:
+        try:
+            before = path.stat()
+        except FileNotFoundError:
+            return False
+        latest = _read_lock(path)
+        try:
+            after = path.stat()
+        except FileNotFoundError:
+            return False
+        if latest or (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+            return False
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _atomic_lock_write(path: Path, payload: dict[str, Any]) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
 
 
 def acquire_tenor_init_lock(
@@ -159,55 +242,61 @@ def acquire_tenor_init_lock(
     poll_seconds: float = 0.10,
     on_wait: Callable[[dict[str, Any]], None] | None = None,
 ) -> TenorInitLock:
-    """Serialize shared TENOR bootstrap while allowing many agent sessions.
-
-    Six terminals may launch TENOR INIT in the same project.  Only the shared
-    installation/bootstrap phase is serialized.  Once the lock is released,
-    every terminal may register its own agent session in the common runtime.
-    """
+    """Serialize shared bootstrap while preserving independent agent sessions."""
 
     root = Path(project_root).resolve()
     path = _lock_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + max(0.0, wait_timeout_seconds)
-    notified = False
+    notified_nonce = ""
 
     while True:
         nonce = uuid.uuid4().hex
+        now = time.time()
         payload = {
-            "schema": "tenor_init_lock_v1",
+            "schema": "tenor_init_lock_v2",
             "nonce": nonce,
             "pid": os.getpid(),
+            "hostname": socket.gethostname(),
             "project_root": str(root),
+            "stage": "acquired",
             "created_at": _utc_now(),
-            "created_epoch": time.time(),
+            "created_epoch": now,
+            "updated_at": _utc_now(),
+            "updated_epoch": now,
         }
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             current = _read_lock(path)
-            if _lock_is_stale(current, stale_after_seconds):
+            if not current and not path.exists():
+                continue
+            if _lock_is_stale(path, current, stale_after_seconds):
                 try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
+                    removed = _remove_stale_lock(path, current)
                 except OSError:
                     current["verdict"] = TENOR_INIT_ALREADY_RUNNING
                     raise TenorInitBusy(current) from None
-                continue
-            if not notified and on_wait is not None:
+                if removed:
+                    continue
+            current_nonce = str(current.get("nonce") or "")
+            if on_wait is not None and current_nonce != notified_nonce:
                 on_wait(current)
-                notified = True
+                notified_nonce = current_nonce
             if time.monotonic() >= deadline:
                 current["verdict"] = TENOR_INIT_ALREADY_RUNNING
+                current["age_seconds"] = _payload_age_seconds(path, current)
+                current["owner_alive"] = _pid_is_alive(current.get("pid"))
                 raise TenorInitBusy(current)
             time.sleep(max(0.01, poll_seconds))
             continue
 
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
                 handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
         except Exception:
             try:
                 path.unlink()
@@ -215,6 +304,24 @@ def acquire_tenor_init_lock(
                 pass
             raise
         return TenorInitLock(path=path, nonce=nonce, payload=payload)
+
+
+def refresh_tenor_init_lock(lock: TenorInitLock, *, stage: str) -> TenorInitLock:
+    current: dict[str, Any] = {}
+    for attempt in range(5):
+        current = _read_lock(lock.path)
+        if current.get("nonce") == lock.nonce:
+            break
+        if current:
+            raise TenorInitLockOwnershipLost(TENOR_INIT_LOCK_OWNERSHIP_LOST)
+        if attempt < 4:
+            time.sleep(0.01 * (attempt + 1))
+    else:
+        raise TenorInitLockOwnershipLost(TENOR_INIT_LOCK_OWNERSHIP_LOST)
+    now = time.time()
+    current.update({"stage": stage, "updated_at": _utc_now(), "updated_epoch": now})
+    _atomic_lock_write(lock.path, current)
+    return TenorInitLock(path=lock.path, nonce=lock.nonce, payload=current)
 
 
 def release_tenor_init_lock(lock: TenorInitLock) -> None:
