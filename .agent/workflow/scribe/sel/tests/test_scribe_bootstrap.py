@@ -5,9 +5,9 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from scribe_test_utils import load_script_module
-
 
 scribe_bootstrap = load_script_module("scribe_bootstrap")
 bootstrap_project = getattr(scribe_bootstrap, "bootstrap_project")
@@ -22,20 +22,45 @@ scribe_install_templates = load_script_module("scribe_install_templates")
 render_scribe_adapter = getattr(scribe_install_templates, "render_scribe_adapter")
 
 
+def plan(root: Path, *, classification: str, memory_action: str, project_changed: bool) -> SimpleNamespace:
+    return SimpleNamespace(
+        project_root=str(root.resolve()),
+        classification=classification,
+        memory_action=memory_action,
+        project_changed=project_changed,
+    )
+
+
 class ScribeBootstrapTests(unittest.TestCase):
-    def run_bootstrap(self, root: Path):
+    def run_bootstrap(self, root: Path, *, classification: str, memory_action: str, project_changed: bool):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            return bootstrap_project(root, agent="test-agent", agent_type="cli", skip_graphify=True)
+            return bootstrap_project(
+                root,
+                agent="test-agent",
+                agent_type="cli",
+                skip_graphify=True,
+                installation_plan=plan(
+                    root,
+                    classification=classification,
+                    memory_action=memory_action,
+                    project_changed=project_changed,
+                ),
+            )
 
     def test_bootstrap_initializes_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-
-            report = self.run_bootstrap(root)
+            report = self.run_bootstrap(
+                root,
+                classification="TENOR_INIT_NEW_INSTALLATION",
+                memory_action="SCRIBE_MEMORY_CREATE",
+                project_changed=True,
+            )
 
             self.assertTrue(report.new_project)
+            self.assertEqual(report.scribe_status, "created")
             self.assertEqual(report.doctor_code, 0)
             self.assertTrue(report.sync_repaired)
             self.assertTrue((root / ".agent" / "workflow" / "scribe" / "scribe").exists())
@@ -47,7 +72,7 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertTrue((root / ".agent" / ".gitignore").exists())
             self.assertTrue((root / ".graphifyignore").exists())
 
-    def test_bootstrap_detects_package_stack_when_scribe_missing(self) -> None:
+    def test_bootstrap_detects_package_stack_when_memory_creation_is_authorized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "package.json").write_text(
@@ -55,14 +80,19 @@ class ScribeBootstrapTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            report = self.run_bootstrap(root)
+            report = self.run_bootstrap(
+                root,
+                classification="TENOR_INIT_NEW_INSTALLATION",
+                memory_action="SCRIBE_MEMORY_CREATE",
+                project_changed=True,
+            )
             scribe = (root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").read_text(encoding="utf-8")
 
-            self.assertTrue(report.new_project)
+            self.assertEqual(report.scribe_status, "created")
             self.assertIn('project_name: "demo-chat"', scribe)
             self.assertIn('stack: "Node.js / Next.js / Express / Socket.IO / Prisma"', scribe)
 
-    def test_bootstrap_is_idempotent_on_existing_project(self) -> None:
+    def test_bootstrap_adopts_existing_memory_without_rewriting_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             scribe_path = create_scribe_from_template(root)
@@ -76,26 +106,47 @@ class ScribeBootstrapTests(unittest.TestCase):
             )
             before = scribe_path.read_text(encoding="utf-8")
 
-            report = self.run_bootstrap(root)
+            report = self.run_bootstrap(
+                root,
+                classification="TENOR_INIT_SAME_PROJECT",
+                memory_action="SCRIBE_MEMORY_ADOPT",
+                project_changed=False,
+            )
 
             self.assertFalse(report.new_project)
+            self.assertEqual(report.scribe_status, "adopted")
             self.assertEqual(report.doctor_code, 0)
             self.assertFalse(report.sync_repaired)
             self.assertEqual(scribe_path.read_text(encoding="utf-8"), before)
 
-    def test_installed_adapter_exposes_tenor_init(self) -> None:
-        adapter = render_scribe_adapter()
+    def test_bootstrap_refuses_to_infer_project_identity_without_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "TENOR_INIT_PLAN_REQUIRED"):
+                bootstrap_project(Path(tmp), agent="test-agent", agent_type="cli", skip_graphify=True)
 
+    def test_adopt_action_fails_closed_when_memory_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = self.run_bootstrap(
+                root,
+                classification="TENOR_INIT_SAME_PROJECT",
+                memory_action="SCRIBE_MEMORY_ADOPT",
+                project_changed=False,
+            )
+            self.assertEqual(report.scribe_status, "missing")
+            self.assertTrue(report.errors)
+            self.assertFalse((root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").exists())
+
+    def test_installed_adapter_exposes_v216_tenor_init(self) -> None:
+        adapter = render_scribe_adapter()
         self.assertIn('scribe tenor-init [--root PATH]', adapter)
-        self.assertIn('"tenor-init": "scribe_tenor_init.py"', adapter)
+        self.assertIn('"tenor-init": "scribe_tenor_init_v216.py"', adapter)
         self.assertIn('bootstrap, tenor-init, clean', adapter)
 
     def test_graphify_placeholder_is_info_on_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-
             status, infos, warnings, errors = ensure_graphify(root, lambda *_: None, skip_graphify=False)
-
             self.assertFalse(has_application_code(root))
             self.assertEqual(status, "placeholder")
             self.assertIn("Graphify: placeholder initialisé", infos[0])
