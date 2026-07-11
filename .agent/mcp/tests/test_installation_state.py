@@ -14,7 +14,6 @@ if str(MCP_DIR) not in sys.path:
 
 from runtime import installation_state, root_hygiene
 
-
 ENGINE_DIRS = ("mcp", "skills", "workflow", "scripts", "docs", "tests", "rules", "host_adapter")
 
 
@@ -61,6 +60,7 @@ class InstallationStateTest(unittest.TestCase):
         result = installation_state.ensure_fresh_installation_state(self.root)
         self.assertEqual(result["verdict"], installation_state.AGENT_INSTALLATION_MANIFEST_CREATED)
         self.assertTrue(self.manifest_path().is_file())
+        self.assertEqual(result["manifest"]["init_status"], installation_state.INSTALL_STATUS_PREPARING)
 
     def test_02_second_init_same_project_does_not_purge_state(self) -> None:
         installation_state.ensure_fresh_installation_state(self.root)
@@ -85,6 +85,7 @@ class InstallationStateTest(unittest.TestCase):
 
     def test_05_copying_old_state_to_new_project_triggers_relocation(self) -> None:
         installation_state.ensure_fresh_installation_state(self.root)
+        installation_state.finalize_installation_state(self.root)
         make_legacy_state(self.root)
         new_root = Path(self.tmp.name) / "new-project"
         new_root.mkdir()
@@ -95,6 +96,7 @@ class InstallationStateTest(unittest.TestCase):
 
     def test_06_relocation_purge_deletes_only_state(self) -> None:
         installation_state.ensure_fresh_installation_state(self.root)
+        installation_state.finalize_installation_state(self.root)
         make_legacy_state(self.root)
         new_root = Path(self.tmp.name) / "relocated"
         new_root.mkdir()
@@ -196,6 +198,48 @@ class InstallationStateTest(unittest.TestCase):
         report = root_hygiene.inspect_root_hygiene(self.root, max_parent_depth=0)
         self.assertIn(report["verdict"], {root_hygiene.ROOT_HYGIENE_OK, root_hygiene.ROOT_HYGIENE_WARN})
 
+    def test_26_server_gate_is_read_only_and_requires_tenor_init(self) -> None:
+        state = self.root / ".agent" / "state"
+        self.assertFalse(state.exists())
+        gate = installation_state.inspect_installation_state(self.root)
+        self.assertFalse(gate["ready"])
+        self.assertEqual(gate["verdict"], installation_state.TENOR_INIT_REQUIRED)
+        self.assertFalse(state.exists(), "read-only gate must not create state")
+
+    def test_27_preparing_manifest_does_not_enable_server(self) -> None:
+        installation_state.ensure_fresh_installation_state(self.root)
+        gate = installation_state.inspect_installation_state(self.root)
+        self.assertFalse(gate["ready"])
+        self.assertEqual(gate["detection"]["verdict"], installation_state.AGENT_INSTALLATION_INIT_INCOMPLETE)
+
+    def test_28_finalize_enables_server_gate(self) -> None:
+        installation_state.ensure_fresh_installation_state(self.root)
+        final = installation_state.finalize_installation_state(self.root)
+        self.assertTrue(final["ok"])
+        self.assertTrue(installation_state.inspect_installation_state(self.root)["ready"])
+
+    def test_29_relocation_inspection_never_purges_state(self) -> None:
+        installation_state.ensure_fresh_installation_state(self.root)
+        installation_state.finalize_installation_state(self.root)
+        new_root = self._relocate_from_current()
+        old = new_root / ".agent" / "state" / "runtime" / "must-survive-inspection.txt"
+        old.parent.mkdir(parents=True, exist_ok=True)
+        old.write_text("old\n", encoding="utf-8")
+        gate = installation_state.inspect_installation_state(new_root)
+        self.assertFalse(gate["ready"])
+        self.assertTrue(old.exists())
+
+    def test_30_finalize_refreshes_fingerprint_after_memory_creation(self) -> None:
+        (self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").unlink()
+        installation_state.ensure_fresh_installation_state(self.root)
+        (self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").write_text("created later\n", encoding="utf-8")
+        final = installation_state.finalize_installation_state(self.root)
+        self.assertTrue(final["ok"])
+        self.assertEqual(
+            json.loads(self.manifest_path().read_text(encoding="utf-8"))["project_markers"]["AGENT-MEMOIRE_PROJECT_STATUS.scribe"],
+            True,
+        )
+
     def _copy_agent(self, old_root: Path, new_root: Path) -> None:
         if (new_root / ".agent").exists():
             import shutil
@@ -205,6 +249,7 @@ class InstallationStateTest(unittest.TestCase):
 
     def _relocate_from_current(self) -> Path:
         installation_state.ensure_fresh_installation_state(self.root)
+        installation_state.finalize_installation_state(self.root)
         new_root = Path(self.tmp.name) / f"relocated-{len(list(Path(self.tmp.name).iterdir()))}"
         new_root.mkdir()
         make_project(new_root)
@@ -220,6 +265,7 @@ class InstallationStateTest(unittest.TestCase):
 
     def _old_sqlite_state(self) -> None:
         installation_state.ensure_fresh_installation_state(self.root)
+        installation_state.finalize_installation_state(self.root)
         runtime = self.root / ".agent" / "state" / "runtime"
         runtime.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(runtime / "coordination.sqlite")
