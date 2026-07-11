@@ -25,7 +25,9 @@ if str(_MCP_ROOT) not in sys.path:
 from runtime.tenor_init_orchestrator import (  # noqa: E402
     TENOR_INIT_ALREADY_RUNNING,
     TenorInitBusy,
+    finalize_tenor_init,
     prepare_tenor_init,
+    refresh_tenor_init_lock,
     tenor_init_lock,
 )
 
@@ -37,7 +39,8 @@ def _flush(message: str) -> None:
 def _wait_notice(lock: dict[str, object]) -> None:
     owner = lock.get("pid") or "unknown"
     started = lock.get("created_at") or "unknown"
-    _flush(f"TENOR_INIT_WAIT shared bootstrap already running pid={owner} since={started}")
+    stage = lock.get("stage") or "unknown"
+    _flush(f"TENOR_INIT_WAIT shared bootstrap running pid={owner} since={started} stage={stage}")
 
 
 def main() -> int:
@@ -48,12 +51,12 @@ def main() -> int:
         return 2
 
     agent_id = args.agent or os.environ.get("SCRIBE_AGENT_ID") or f"{args.agent_type}-{os.getpid()}-tenor-init"
-
     _flush(f"TENOR_INIT_START root={project_root} type={args.agent_type} agent={agent_id}")
     _flush("TENOR_INIT_STAGE acquire_shared_init_lock")
 
     try:
-        with tenor_init_lock(project_root, wait_timeout_seconds=180.0, on_wait=_wait_notice):
+        with tenor_init_lock(project_root, wait_timeout_seconds=180.0, on_wait=_wait_notice) as acquired_lock:
+            lock = refresh_tenor_init_lock(acquired_lock, stage="classify_installation")
             _flush("TENOR_INIT_STAGE classify_installation")
             installation = prepare_tenor_init(project_root)
             if not installation.ok:
@@ -72,37 +75,45 @@ def main() -> int:
                 f"purge_executed={str(installation.purge_executed).lower()}"
             )
             _flush(f"TENOR_INIT_MEMORY action={installation.memory_action}")
-            _flush("TENOR_INIT_STAGE bootstrap_project")
 
+            lock = refresh_tenor_init_lock(lock, stage="bootstrap_project")
+            _flush("TENOR_INIT_STAGE bootstrap_project")
             bootstrap_report = bootstrap_project(
                 project_root,
                 agent=agent_id,
                 agent_type=args.agent_type,
                 skip_graphify=args.skip_graphify,
+                installation_plan=installation,
             )
-            # The installation manifest, not SCRIBE existence, owns project identity.
-            # Keep the legacy report field aligned until BootstrapReport is replaced.
-            bootstrap_report.new_project = installation.project_changed
             print_report(bootstrap_report)
+            bootstrap_ok = bootstrap_report.doctor_code == 0 and not bootstrap_report.errors
+            if not bootstrap_ok:
+                print("TENOR_INIT_BOOTSTRAP_FAILED", file=sys.stderr, flush=True)
+                return 4
+
+            lock = refresh_tenor_init_lock(lock, stage="finalize_installation")
+            _flush("TENOR_INIT_STAGE finalize_installation")
+            finalized = finalize_tenor_init(project_root)
+            if not finalized.get("ok"):
+                print(
+                    f"TENOR_INIT_FINALIZE_FAILED verdict={finalized.get('verdict')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 5
     except TenorInitBusy as exc:
         owner = exc.lock.get("pid") or "unknown"
         started = exc.lock.get("created_at") or "unknown"
+        stage = exc.lock.get("stage") or "unknown"
         print(
-            f"{TENOR_INIT_ALREADY_RUNNING} pid={owner} since={started}",
+            f"{TENOR_INIT_ALREADY_RUNNING} pid={owner} since={started} stage={stage}",
             file=sys.stderr,
             flush=True,
         )
         return 75
 
-    bootstrap_ok = bootstrap_report.doctor_code == 0 and not bootstrap_report.errors
-
-    # Session-specific runtime state is created only after relocation/purge and
-    # shared bootstrap are complete. This prevents a copied bundle from writing
-    # a presence into state that TENOR INIT must immediately purge.
     _flush("TENOR_INIT_STAGE register_session_presence")
     write_presence(agent_id, args.agent_type, args.surface, DEFAULT_TTL_SECONDS, status="idle")
-
-    # Project-bound proof is issued after the project identity is final.
     proof_token = _issue_proof(project_root, agent_id)
 
     _flush("TENOR_INIT_STAGE load_scribe_and_graphify_context")
@@ -132,7 +143,7 @@ def main() -> int:
         agent_id=agent_id,
         agent_type=args.agent_type,
         graph=graph,
-        bootstrap_ok=bootstrap_ok,
+        bootstrap_ok=True,
         whoami=whoami,
         workflow_read=workflow_read,
         workflow_check=workflow_check,
