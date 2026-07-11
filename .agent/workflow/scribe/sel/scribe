@@ -64,7 +64,7 @@ def main() -> int:
         "guard": "scribe_guard.py",
         "install": "scribe_install.py",
         "bootstrap": "scribe_bootstrap.py",
-        "tenor-init": "scribe_tenor_init.py",
+        "tenor-init": "scribe_tenor_init_v216.py",
         "clean": "scribe_clean.py",
         "lock": "scribe_lock.py",
         "sync": "scribe_state.py",
