@@ -17,6 +17,9 @@ state/**/*.sqlite-shm
 state/**/*.lock
 state/**/*.backup-*
 
+# TENOR INIT serialisation lock (cross-platform, ephemeral)
+.tenor-init.lock
+
 # New canonical local runtime outputs
 state/outputs/
 
