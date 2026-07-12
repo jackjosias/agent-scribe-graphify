@@ -1,153 +1,266 @@
-# Multi-Agent Installation Procedure
+# Multi-Agent Installation and Operation — V2.16
 
-Purpose: install and operate the SCRIBE/TENOR local causal retrieval bundle in a host project so several coding agents can work asynchronously without creating competing roots, stale memory, or hidden regressions. Live session coordination is canonical in `docs/live-coordination.md`; do not create `.agent/workflow/multi-agent/`.
+## Purpose
 
-Stable baseline as of 2026-06-01: SEL `81 OK`, RAG `25 OK`, gate/eval `8/8`,
-doctor `0 error` plus cosmetic `W009`, PID identity fixed, TTL claims active,
-lock release owner-safe, and backup `~/backups/agent-scribe-stable-20260601.tar.gz`.
-The installation goal is now reuse, not adding features.
+Install, relocate and operate the `.agent` bundle in a host project so several agents can share one codebase without competing roots, stale state, hidden direct writes or ownership confusion.
 
-## Command Contract
+Live coordination details remain in `live-coordination.md`. Do not create a parallel `.agent/workflow/multi-agent/` root.
 
-From a host project root:
+## Canonical entry
+
+Every host-agent session starts from the project root with the human trigger:
+
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
+
+The deterministic command is:
+
+```bash
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+```
+
+`tenor-init` is the only public V2.16 installation/relocation/recovery authority. `bootstrap` is internal/legacy and must not be used as a normal startup or bypass.
+
+## Installation authority
+
+TENOR INIT resolves the current root, classifies the installation, purges only old project-bound state when relocation is proven, adopts or creates destination SCRIBE, verifies Graphify, finalizes the local manifest, registers a distinct session and emits machine proof.
+
+Classifications:
+
+```text
+TENOR_INIT_NEW_INSTALLATION
+TENOR_INIT_SAME_PROJECT
+TENOR_INIT_RELOCATED_PROJECT
+TENOR_INIT_LEGACY_INSTALLATION
+TENOR_INIT_CORRUPT_INSTALLATION
+```
+
+Memory actions:
+
+```text
+SCRIBE_MEMORY_ADOPT
+SCRIBE_MEMORY_CREATE
+```
+
+## Relocation rules
+
+When `.agent` is copied from project A to project B:
+
+- preserve B's `AGENT-MEMOIRE_PROJECT_STATUS.scribe` when present;
+- purge only copied `.agent/state/` bound to A;
+- reject A's sessions, proofs, claims, locks, outputs and root bindings;
+- preserve the portable engine;
+- write B's manifest in `preparing` then `ready` only after all local gates pass;
+- rebuild Graphify for B when required.
+
+Never mutate the source project to manufacture relocation proof.
+
+## Graphify
+
+Canonical outputs live under:
+
+```text
+.agent/state/outputs/graphify-out/
+```
+
+Real Graphify currently produces NetworkX node-link data with `nodes + links`; the historical supported representation is `nodes + edges`.
+
+If Graphify is not ready, run only the bounded action returned by TENOR INIT:
+
+```bash
+.agent/workflow/scribe/scribe graph --project-build --timeout 180
+```
+
+A larger bound may be supplied explicitly for a large codebase. Do not launch hidden or unbounded builds.
+
+## Local MCP gate
+
+After local readiness:
+
+```bash
+python .agent/mcp/server_entry.py --list-tools
+```
+
+This proves only the local server. It does not prove the host model sees the tools.
+
+## Host gate
+
+For the actual host:
+
+1. read the matching guide under `.agent/docs/hosts/`;
+2. prefer project-local configuration;
+3. reconnect/restart when required;
+4. prove tools visible in the host LLM interface;
+5. prove root binding with matching sentinel/hash;
+6. call `tenor_init_bridge` with the session proof;
+7. obtain `TENOR_INIT_READY`.
+
+Until then:
+
+```text
+HOST_MCP_UNBOUND
+LOCAL_INIT_READY_HOST_MCP_UNBOUND
+```
+
+## Six-terminal startup
+
+Each terminal independently runs TENOR INIT.
+
+Expected behavior:
+
+- one shared initialization transaction at a time;
+- six distinct `agent_id` values;
+- six distinct proof tokens;
+- six distinct leases;
+- one shared runtime SQLite;
+- one shared canonical SCRIBE;
+- one shared Graphify map;
+- `TENOR_INIT_SAME_PROJECT` never purges other active sessions.
+
+The init lock is nonce-owned, heartbeat-based and root-bound. A waiter may not delete a live owner's lock. Partial fresh lock files fall back to filesystem `mtime`, never epoch zero.
+
+## Task coordination
+
+Before a concrete task:
+
+```text
+workflow_next
+before_task
+targeted scribe_query
+targeted graphify_query
+```
+
+Before mutation:
+
+```text
+pre_action_guard
+resource_lock_claim
+claim_resource
+file_hash
+propose_patch
+apply_patch
+```
+
+Before closure:
+
+```text
+workspace_audit
+scribe_record or auditable causal skip
+release claim
+resource_lock_release
+finish_task
+workflow_next -> READY_FOR_NEXT_TASK
+```
+
+Rules:
+
+- semantic claims describe the work intent, not only filenames;
+- the same function/semantic claim, deletion, rename or global refactor is a conflict;
+- different claims may touch a shared file only with reread/rebase and correct locks;
+- one agent never uses another agent's lease, proof, claim or lock;
+- no agent reverts files it did not intentionally own;
+- closing an agent must leave no claim, lock or pending patch owned by it.
+
+## Direct-write protection
+
+Native host shell/edit/write paths are not valid substitutes for MCP.
+
+Test and control:
+
+```text
+shell/bash
+write_file/edit/apply_patch
+>, >>, tee
+sed -i/perl -pi
+rm/mv/cp
+```
+
+An unexpected mutation without the corresponding MCP path must yield:
+
+```text
+DIRECT_WRITE_BYPASS_DETECTED
+```
+
+## SCRIBE maintenance
+
+Normal retrieval uses `.agent/workflow/scribe/scribe-rag` or MCP `scribe_query`.
+
+For canonical memory mutation:
 
 ```bash
 SCRIBE=.agent/workflow/scribe/scribe
-SCRIBE_RAG=.agent/workflow/scribe/scribe-rag
-```
-
-Rules:
-- The bundle-local command above is the canonical CLI.
-- Root `./scribe` and root `scripts/` are not required for normal operation.
-- Generate root adapters only for a legacy project that explicitly needs them.
-- Do not store generated root adapters inside the bundle; the installer templates are the source of truth.
-- Generated doctor reports and bundle graphs belong under `.agent/state/outputs/scribe-out/`, never at repository root and never inside the bundle.
-- Structural app facts belong to Graphify; causal decisions belong to `AGENT-MEMOIRE_PROJECT_STATUS.scribe`.
-
-## Rootless Install
-
-Use this path for new projects and for multi-agent coding sessions:
-
-```bash
-$SCRIBE bootstrap
-$SCRIBE workflow read --agent "<agent-name>" --type "<extension|cli|api|unknown>"
-$SCRIBE workflow check --agent "<agent-name>"
-$SCRIBE_RAG context
-```
-
-Expected result:
-- `AGENTS.md` has a managed SCRIBE block pointing to the bundle-local command.
-- `.graphifyignore` excludes `.agent/`, legacy `scribe-out/`, and SCRIBE memory from the app graph.
-- `AGENT-MEMOIRE_PROJECT_STATUS.scribe` exists; if missing, it is created from the master template.
-- `.agent/state/outputs/scribe-out/state.json` exists and records the real bootstrap writer.
-- No root `scribe` file is created.
-- No root `scripts/` directory is created.
-- The active command remains `.agent/workflow/scribe/scribe`.
-
-## Legacy Adapter Install
-
-Use this only when an existing tool or editor cannot call the bundle-local path:
-
-```bash
-$SCRIBE install . --with-root-adapters --dry-run
-$SCRIBE install . --with-root-adapters
-```
-
-Rules:
-- Treat generated root adapters as compatibility bridges only.
-- Do not edit root adapters by hand.
-- Keep canonical code changes inside the bundle.
-- Do not copy generated adapters back into `.agent/workflow/scribe/sel/adapters/`.
-- If root adapters are no longer needed, remove them as a deliberate migration and rerun the rootless install.
-
-## Agent Bootstrap
-
-Every agent that joins the project should run this sequence before editing:
-
-```bash
-$SCRIBE bootstrap
-$SCRIBE workflow read --agent "<agent-name>" --type "<extension|cli|api|unknown>"
-$SCRIBE workflow check --agent "<agent-name>"
-sed -n '1,220p' graphify-out/GRAPH_REPORT.md
-$SCRIBE sync --agent "<agent-name>" --type "<extension|cli|api|unknown>"
-$SCRIBE whoami --agent "<agent-name>" --type "<extension|cli|api|unknown>" --surface idle
-$SCRIBE coordination status
-$SCRIBE_RAG context
-$SCRIBE worktree
-```
-
-Then the agent chooses the smallest safe workflow tier from `docs/friction-policy.md`.
-Use NANO (`$SCRIBE_RAG context`) for a one-file task under 30 minutes; reserve
-CRITICAL preflight for auth/data/public API, SCRIBE mutation, shared surfaces, or destructive work.
-
-For SCRIBE memory edits:
-
-```bash
-$SCRIBE workflow check --agent "<agent-name>"
-$SCRIBE lock acquire --agent "<agent-name>" --type "<extension|cli|api|unknown>" --session "JOURNAL-XXX"
-$SCRIBE sync --agent "<agent-name>" --type "<extension|cli|api|unknown>"
+$SCRIBE workflow read --agent <agent> --type <type>
+$SCRIBE workflow check --agent <agent>
+$SCRIBE sync --agent <agent> --type <type>
 $SCRIBE doctor --suggest-fix
-# edit AGENT-MEMOIRE_PROJECT_STATUS.scribe incrementally
+$SCRIBE lock acquire --agent <agent> --type <type> --session <JOURNAL-ID>
+# incremental memory update
 $SCRIBE doctor --suggest-fix
-$SCRIBE sync --repair --agent "<agent-name>" --type "<extension|cli|api|unknown>" --session "JOURNAL-XXX" --changed-id "JOURNAL-XXX" --write-kind "memory_append"
-$SCRIBE lock release --agent "<agent-name>"
+$SCRIBE sync --repair --agent <agent> --type <type> --session <JOURNAL-ID> --changed-id <ID> --write-kind <kind>
+$SCRIBE lock release --agent <agent>
 ```
 
-For long-lived ownership, set `SCRIBE_OWNER_PID` or pass `--owner-pid`; release
-now validates agent/surface before stale cleanup.
+Do not fabricate causal entries to silence dashboard warnings.
 
-## Async Coordination
+## Atomic shared-surface writes
 
-When several LLM agents work on the same repository:
-- Agents start as an idle pool; they only claim work after receiving a concrete task.
-- Work is claimed semantically, for example `indicator:X`, not only by filename.
-- Shared files are allowed across different semantic claims when the agent re-reads current files and rebases before delivery.
-- The same semantic claim, same exact function, deletion, rename, or global refactor requires explicit coordination.
-- Broad surfaces remain exclusive only when they are actually claimed as broad surfaces.
-- Each active agent must have a fresh `$SCRIBE workflow read` ack before SCRIBE writes or shared-surface locks.
-- `$SCRIBE workflow status` without `--required` shows the current acked agent pool; use `--required ... --strict` only when a human explicitly imposes a named gate.
-- SCRIBE memory is a locked surface: mutating commands and manual YAML edits require `$SCRIBE lock acquire` first.
-- Application code, SCRIBE bundle code, SCRIBE memory, and generated reports are separate surfaces.
-- Agents must run `$SCRIBE coordination status` before writing and `$SCRIBE coordination finish` when their semantic claim is delivered.
-- No agent reverts files it did not intentionally change.
-- Before changing shared behavior, run `$SCRIBE_RAG preflight --tier CRITICAL --strict "<plan>"`; do not use CRITICAL for routine NANO/QUICK tasks.
-- Before delivery, run `$SCRIBE worktree` and report tracked changes, untracked source candidates, generated noise, and other untracked files.
-- If the task changes bundle architecture, run `$SCRIBE graph --build`.
-- If the task changes retrieval ranking, tiers, or scoring, run `$SCRIBE_RAG eval --force` before and after the change.
+Shared metadata and generated host instructions must use exclusively created temporary files, `fsync` and atomic replacement. Timestamp-derived temporary names are not sufficient under concurrency.
 
-## Acceptance Checklist
+## Acceptance checklist
 
-A portable installation is accepted only when all checks pass:
+Local engine:
 
-```bash
-test -f .agent/workflow/scribe/scribe
-test -f .agent/workflow/scribe/scribe-rag
-test ! -e scribe
-test ! -e scripts
-$SCRIBE install . --dry-run
-$SCRIBE clean --dry-run
-$SCRIBE doctor --suggest-fix
-$SCRIBE workflow read --agent codex --type cli
-$SCRIBE workflow check --agent codex
-$SCRIBE_RAG preflight --tier STANDARD "installation acceptance"
-$SCRIBE_RAG eval --force
-$SCRIBE_RAG gate
-git diff --check
+```text
+installation classification correct
+manifest preparing -> ready
+SCRIBE preserved or created honestly
+Graphify real and root-bound
+second TENOR INIT idempotent
+local MCP tools listable
 ```
 
-Expected acceptance:
-- install dry-run reports `unchanged AGENTS.md` and `unchanged .graphifyignore`;
-- doctor reports zero errors;
-- scribe-rag preflight runs, prints proof, eval remains green, and gate passes locally plus through `.github/workflows/scribe-rag-gate.yml`;
-- no Python `__pycache__` or `.pyc` artifacts remain inside the bundle.
+Host terrain:
+
+```text
+tools visible to the host LLM
+root binding match
+tenor_init_bridge OK
+TENOR_INIT_READY
+complete MCP micro-write
+direct-write bypass refused/detected
+```
+
+Six-terminal terrain:
+
+```text
+six independent identities/proofs
+parallel reads
+independent writes on different resources
+conflict rejection on same resource
+cross-agent lease rejection
+interrupted-agent recovery
+zero orphan claims/locks/patches
+```
+
+Release:
+
+```text
+portable matrix green
+Linux deep validation green
+checkout clean after tests
+full diff reviewed
+docs and generators synchronized
+PR body current
+```
 
 ## Recovery
 
-If a project drifts:
-1. Run `$SCRIBE_RAG query "bundle identity drift"`.
-2. Verify whether root `scribe` or root `scripts/` exist.
-3. If they exist unintentionally, move their reusable contents under the bundle or remove generated adapters deliberately.
-4. Rerun `$SCRIBE install .`.
-5. Rerun the acceptance checklist.
+If the project drifts:
 
-If Graphify hook errors reappear, inspect `docs/AGENTS.md` under "Graphify hook compatibility" before reinstalling Graphify hooks.
+1. run TENOR INIT, never raw bootstrap as a public recovery shortcut;
+2. inspect the installation verdict and next action;
+3. rebuild Graphify only when requested;
+4. re-prove local MCP, host visibility and root binding;
+5. audit active agents, claims, locks and pending patches;
+6. follow `.agent/docs/DOCUMENTATION_SYNC_POLICY.md` when the drift is documentary.
