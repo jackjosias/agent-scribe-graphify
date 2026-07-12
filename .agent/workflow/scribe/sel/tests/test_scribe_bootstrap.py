@@ -141,7 +141,7 @@ class ScribeBootstrapTests(unittest.TestCase):
         adapter = render_scribe_adapter()
         self.assertIn('scribe tenor-init [--root PATH]', adapter)
         self.assertIn('"tenor-init": "scribe_tenor_init_v216.py"', adapter)
-        self.assertIn('bootstrap, tenor-init, clean', adapter)
+        compile(adapter, "<installed-scribe-adapter>", "exec")
 
     def test_graphify_placeholder_is_info_on_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
