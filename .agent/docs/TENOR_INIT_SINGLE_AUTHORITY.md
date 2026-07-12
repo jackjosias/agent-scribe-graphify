@@ -1,45 +1,64 @@
-# TENOR INIT V2.16 — Single Authority Rescue
+# TENOR INIT V2.16 — Single Authority
 
-## Statut
+## Status and proof categories
 
-Cette branche restaure TENOR INIT comme unique autorité d'installation, de
-relocation, de préparation Graphify et de reprise multi-agent.
+This document is the architectural authority for V2.16. It distinguishes:
 
-Ce document distingue toujours :
+- **implemented** — present in branch code;
+- **tested** — covered by an executable test;
+- **CI-proven** — passed on a referenced commit/matrix;
+- **terrain-proven** — observed in an isolated real project or host;
+- **not yet proven** — an explicit release gate.
 
-- **implémenté** : présent dans le code de la branche ;
-- **testé** : couvert par un test exécutable ;
-- **prouvé terrain** : observé dans un host réel et une codebase réelle.
+No category substitutes for another.
 
-Aucune de ces catégories ne remplace les deux autres.
+The current branch has already proved the local engine on Linux/macOS/Windows CI and on isolated projects, including a real codebase with more than 1,000 source files. The remaining global gate is the real host-LLM proof: tool visibility, root binding, session bridge, complete MCP micro-write and direct-write bypass test.
 
-## Finalité : LLM Experience
+## Canonical entry
 
-`.agent` n'est pas une collection de scripts. C'est une couche d'exploitation
-portable qui externalise des capacités cognitives et opérationnelles :
+Human/LLM trigger:
 
-- **Graphify** compresse la structure, les dépendances, la centralité et le blast
-  radius afin d'éviter la lecture massive de fichiers et la saturation du contexte ;
-- **SCRIBE** conserve la causalité, les douleurs, décisions, régressions,
-  interdictions, SCAR, GHOST et `ne_pas_reproposer` qui doivent influencer la
-  tâche actuelle ;
-- **TENOR** transforme le protocole en prochain geste mécanique et vérifiable ;
-- **runtime/MCP** donne une conscience partagée aux agents actifs : identité,
-  claims, resource locks, leases, patch queue et clôture.
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-Le but est qu'un petit LLM discipliné obtienne des réflexes proches d'un grand
-modèle sans dépendre de sa mémoire conversationnelle ni de sa fenêtre de contexte.
+Mechanical command from the current project root:
 
-## Autorité d'identité
+```bash
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+```
 
-L'identité du projet est décidée avant SCRIBE à partir de :
+Windows-compatible command:
 
-1. la racine réellement résolue ;
-2. `.agent/state/install/agent-installation.json` ;
-3. l'ancien root enregistré ;
-4. l'empreinte actuelle des marqueurs du projet.
+```powershell
+python .agent/workflow/scribe/scribe tenor-init --type cli
+```
 
-Classifications :
+The old `[[.agent/skills/init-tenor/SKILL.md]]` form is compatibility-only. New documentation and templates must emit the canonical trigger above.
+
+`bootstrap` is an internal/legacy primitive. It is not the public V2.16 authority for installation, relocation or recovery.
+
+## Purpose: LLM Experience
+
+`.agent` is not a script collection. It externalizes cognitive and operational capacities:
+
+- **Graphify** compresses structure, dependency, centrality, communities and blast radius;
+- **SCRIBE** retains causality, pain, decisions, regressions, prohibitions, SCAR, GHOST and `ne_pas_reproposer`;
+- **TENOR** turns the protocol into the next mechanically safe action;
+- **runtime/MCP** supplies shared live coordination: identity, claims, resource locks, leases, patch queue and closure.
+
+A disciplined small LLM should gain durable operational reflexes without relying on its conversation memory or reading the entire repository.
+
+## Installation identity authority
+
+Project identity is decided before SCRIBE from:
+
+1. the actually resolved project root;
+2. `.agent/state/install/agent-installation.json`;
+3. the previously recorded root;
+4. the current project marker fingerprint.
+
+Classifications:
 
 ```text
 TENOR_INIT_NEW_INSTALLATION
@@ -49,28 +68,23 @@ TENOR_INIT_LEGACY_INSTALLATION
 TENOR_INIT_CORRUPT_INSTALLATION
 ```
 
-Le fichier `AGENT-MEMOIRE_PROJECT_STATUS.scribe` ne décide jamais si le projet
-est nouveau. Il produit seulement, après classification :
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe` never decides whether the project is new. After classification, it produces only:
 
 ```text
 SCRIBE_MEMORY_ADOPT
 SCRIBE_MEMORY_CREATE
 ```
 
-## Transaction locale
+## Local transaction
 
-L'installation utilise deux états explicites :
+Installation states:
 
 ```text
 preparing
 ready
 ```
 
-`server_entry.py` est non destructif. Il inspecte l'installation et retourne
-l'exit code `78` avec `TENOR_INIT_REQUIRED` tant que le manifest n'est pas
-finalisé. Il ne purge, ne migre et ne crée aucun runtime caché.
-
-Ordre :
+Canonical order:
 
 ```text
 RESOLVE
@@ -82,56 +96,53 @@ VERIFY_GRAPH
 FINALIZE_INSTALLATION
 VERIFY_LOCAL_MCP
 CONFIGURE_AND_VERIFY_HOST
-REGISTER_SESSION
-READY
+PROVE_ROOT_BINDING
+BRIDGE_SESSION
+TENOR_INIT_READY
 ```
 
-Une erreur avant `FINALIZE_INSTALLATION` laisse le manifest en `preparing` et le
-serveur continue à refuser le démarrage.
+`server_entry.py` is non-destructive. If the manifest is not ready it returns exit code `78` with `TENOR_INIT_REQUIRED`. It does not purge, relocate or create hidden runtime state.
 
-## Relocation
+Any failure before finalization leaves the manifest in `preparing`.
 
-Une relocation A vers B :
+## Relocation contract
 
-- purge uniquement `.agent/state/` copié depuis A ;
-- conserve le moteur portable `.agent` ;
-- conserve la mémoire canonique déjà présente dans B ;
-- rejette les sessions, proofs, locks, outputs et bindings de A ;
-- écrit le manifest de B ;
-- reconstruit les états dérivés pour B.
+A relocation from A to B:
 
-Les chemins de purge sont validés, les symlinks externes sont refusés et les
-échecs transitoires de suppression utilisent un backoff borné.
+- purges only copied `.agent/state/` bound to A;
+- preserves the portable `.agent` engine;
+- preserves canonical SCRIBE memory already present in B;
+- rejects A's sessions, proofs, locks, outputs and bindings;
+- writes B's installation manifest;
+- rebuilds derived state for B.
 
-## Concurrence : six terminaux
+Purge paths are validated, external symlinks are rejected and transient deletion failures use bounded backoff.
 
-Le bootstrap partagé est protégé par `.agent/.tenor-init.lock`.
+## Multi-agent and six-terminal contract
 
-Le lock contient :
+Shared bootstrap is serialized by `.agent/.tenor-init.lock`.
 
-- nonce propriétaire ;
-- PID ;
-- hostname ;
-- root ;
-- étape courante ;
-- timestamps de création et heartbeat.
+The owned lock records nonce, PID, hostname, root, stage, creation time and heartbeat. A fresh partial lock must fall back to its filesystem `mtime`; it must never be interpreted as epoch zero. A waiter may remove only the exact stale nonce it re-observed.
 
-Un lock âgé n'est pas stale si son propriétaire local vit encore. Un waiter ne
-peut supprimer que le nonce exact qu'il a observé ; une relecture ferme la course
-TOCTOU entre libération et réacquisition.
+Each terminal then receives an independent session. Agents share runtime, SCRIBE, Graphify and coordination data, but never share:
 
-Après bootstrap, chaque terminal enregistre une session indépendante. Les agents
-partagent le runtime mais jamais :
+- `agent_id`;
+- proof token;
+- action lease;
+- claim ownership;
+- resource-lock ownership.
 
-- `agent_id` ;
-- proof token ;
-- action lease ;
-- claim propriétaire ;
-- resource lock propriétaire.
+Manifest finalization is an in-process transaction around write plus gate inspection; the TENOR file lock remains the inter-process authority.
+
+## Atomic file writes
+
+Portable atomic writes must use exclusively created temporary files in the destination directory, `fsync`, then `os.replace`.
+
+Timestamp-derived temporary names are forbidden as uniqueness guarantees. V2.16 uses `tempfile.mkstemp()` for installation manifests and host instruction updates. Tests cover concurrent finalization and concurrent host-instruction repair.
 
 ## Graphify readiness
 
-Les outputs canoniques sont :
+Canonical outputs:
 
 ```text
 .agent/state/outputs/graphify-out/graph.json
@@ -140,18 +151,22 @@ Les outputs canoniques sont :
 .agent/state/outputs/graphify-out/GRAPHIFY_READY.json
 ```
 
-Un fichier présent n'est pas une preuve. Le validateur vérifie :
+File presence is not proof. The validator checks:
 
-- JSON parseable avec listes `nodes` et `edges` ;
-- rapport et HTML non vides ;
-- manifest de readiness supporté ;
-- root lié égal au root courant ;
-- empreinte workspace courante égale à l'empreinte liée ;
-- absence de marqueur smoke/placeholder interdit ;
-- type de manifest autorisé ;
-- graphe réel non vide pour un projet avec code.
+- parseable JSON;
+- `nodes` as a list;
+- exactly one supported edge representation, or two equivalent non-contradictory representations:
+  - historical `edges` list;
+  - real NetworkX node-link `links` list;
+- non-empty report and HTML;
+- supported readiness manifest;
+- bound root equal to current root;
+- bound workspace fingerprint equal to current fingerprint;
+- no forbidden smoke/placeholder marker;
+- authorized manifest kind;
+- a real non-empty graph for a project containing application code.
 
-Verdicts principaux :
+Primary verdicts:
 
 ```text
 GRAPHIFY_READY
@@ -168,146 +183,157 @@ GRAPHIFY_FIXTURE_FORBIDDEN
 GRAPHIFY_MANIFEST_INVALID
 ```
 
-Une fixture smoke est marquée `smoke_fixture`, exige une autorisation de test
-explicite et est refusée par TENOR INIT terrain même si la variable fuit.
+Smoke fixtures have an explicit scoped lifecycle and are forbidden in terrain TENOR INIT.
 
-Le build projet est séparé et borné :
+Project build is explicit and bounded:
 
-```text
+```bash
 .agent/workflow/scribe/scribe graph --project-build --timeout 180
 ```
 
-Il construit, migre vers l'output canonique, lie le manifest et revalide.
-TENOR INIT ne lance plus silencieusement un build lourd.
+TENOR INIT never launches a hidden heavy build. A human may explicitly increase the bound for a large codebase.
 
-## SCRIBE opérationnel
+## SCRIBE operational contract
 
-SCRIBE doit être interrogé de manière ciblée avant toute tâche significative.
-Les résultats doivent influencer le plan :
+Before any significant task, retrieve targeted causal context. Results must influence the plan:
 
-- SCAR : ancienne blessure et test protecteur ;
-- GHOST : approche rejetée ou dérive détectée ;
-- `ne_pas_reproposer` : mémoire négative ;
-- décision/invariant : contrainte actuelle ;
-- dette : risque accepté mais actif.
+- SCAR — prior wound and protective test;
+- GHOST — rejected approach or detected drift;
+- `ne_pas_reproposer` — negative memory;
+- decision/invariant — current constraint;
+- debt — accepted active risk.
 
-Une requête exécutée puis ignorée n'est pas une exploitation de mémoire. Un
-`scribe_record` runtime n'est pas automatiquement une mémoire canonique.
+Executing a query and ignoring it is not memory use. A runtime `scribe_record` receipt is not automatically canonical memory.
 
-Le bridge Graphify/SCRIBE refuse désormais d'analyser la dérive structurelle sur
-un graphe manquant, stub, stale ou lié à un autre root. Les écritures GHOST sont
-atomiques et protégées par lock propriétaire.
+The Graphify/SCRIBE bridge refuses structural drift analysis on missing, stub, stale or wrong-root graphs.
+
+## Task write contract
+
+A mutation requires:
+
+```text
+workflow_next
+before_task
+targeted scribe_query
+targeted graphify_query
+pre_action_guard
+resource_lock_claim
+claim_resource
+file_hash
+propose_patch
+apply_patch
+workspace_audit
+scribe_record or auditable causal skip
+release claim and lock
+finish_task
+workflow_next -> READY_FOR_NEXT_TASK
+```
+
+Native host shell/edit/write/apply-patch paths are not accepted as equivalent.
 
 ## Host integration
 
-L'ordre correct est :
+Correct order:
 
-1. TENOR INIT local ;
-2. Graphify prêt ;
-3. serveur MCP local listable ;
-4. lecture du guide du host réel ;
-5. configuration workspace-local lorsque supportée ;
-6. redémarrage du host si nécessaire ;
-7. preuve que les tools sont visibles dans l'interface LLM ;
-8. preuve du root binding ;
-9. `tenor_init_bridge` ;
-10. `TENOR_INIT_READY`.
+1. local TENOR INIT;
+2. Graphify ready;
+3. local MCP server listable;
+4. read the actual host guide;
+5. configure workspace-local integration when supported;
+6. restart/reconnect the host if required;
+7. prove tools are visible in the LLM interface;
+8. prove root binding;
+9. call `tenor_init_bridge`;
+10. obtain `TENOR_INIT_READY`.
 
-`server_entry.py --list-tools` ne prouve jamais la visibilité host. Avant preuve :
+`server_entry.py --list-tools` never proves host visibility. Before host proof:
 
 ```text
 HOST_MCP_UNBOUND
 LOCAL_INIT_READY_HOST_MCP_UNBOUND
 ```
 
-Aucune configuration globale/utilisateur ni installation Chrome/DevTools n'est
-faite sans besoin réel et permission explicite.
+No global/user configuration and no Chrome/DevTools installation is performed without real need and explicit permission.
 
-## Retry et dégradation
+## Root binding
 
-Le launcher traite l'exit code `78` comme un verdict déterministe, jamais comme
-une panne réseau à retry. Les erreurs de policy, import, JSON ou arguments
-remontent immédiatement. Les retries exponentiels sont réservés aux erreurs
-transitoires explicitement identifiées et restent bornés.
-
-Si le binaire Graphify manque mais qu'un graphe valide, courant et lié existe, la
-lecture structurelle peut continuer ; toute reconstruction reste indisponible et
-est signalée. Si le graphe devient stale, les writes sont bloqués.
-
-## Portabilité
-
-Le noyau utilise :
-
-- `pathlib.Path` ;
-- listes d'arguments subprocess, `shell=False` ;
-- timeouts Python ;
-- fichiers atomiques `fsync + os.replace` ;
-- locks `O_EXCL` ;
-- séparateur `os.pathsep` ;
-- aucun `/tmp`, `grep`, `sed`, `timeout GNU`, `flock` ou chmod obligatoire dans
-  le chemin canonique.
-
-Le workflow `.github/workflows/v216-portability.yml` exécute le noyau sur :
+Host and MCP must hash the same stable sentinel in the current workspace. A mismatch yields:
 
 ```text
-ubuntu-latest
-macos-latest
-windows-latest
+INIT_BLOCKED_MCP_WRONG_ROOT
 ```
 
-La validation Linux profonde reste séparée car elle couvre aussi les scénarios
-intégration/red-team qui manipulent un runtime commun.
+No product write is allowed while root binding is unproven.
 
-## Tests ajoutés
+## Retry and degradation
 
-```text
-test_installation_state.py
-test_tenor_init_orchestrator.py
-test_graphify_readiness.py
-test_v216_cross_platform.py
-test_scribe_bootstrap.py
-test_host_adapter_autoguard.py
-test_graphify_scribe_bridge.py
-mcp_smoke.py
-validation_suite.py
-```
+Exit code `78` is a deterministic safety verdict, not a transient network error. Policy, import, JSON and argument failures surface immediately. Exponential retries are reserved for explicitly transient conditions and remain bounded.
 
-Ils couvrent notamment :
+If the Graphify binary is missing but a valid, current, bound graph exists, structural reads may continue while rebuild remains unavailable. If the graph becomes stale, writes are blocked.
 
-- manifest absent, preparing, ready et corrompu ;
-- relocation et purge limitée ;
-- mémoire cible préservée ;
-- six initialisations concurrentes ;
-- récupération prudente des locks stale ;
-- graphes absent, incomplet, stub, corrompu, legacy, wrong-root et stale ;
-- fixture smoke interdite sur terrain ;
-- projet vide ;
-- chemins espaces/Unicode et projet non-Git ;
-- instructions host atomiques/idempotentes ;
-- preflight local avant preuve host ;
-- workflow MCP write et tripwire.
+## Portability
 
-## Limites non masquées
+The canonical path uses:
 
-Cette branche ne peut pas prouver en CI que chaque UI propriétaire expose les
-MCP tools au modèle. Cette preuve exige un test terrain dans le host après sa
-configuration et son éventuel redémarrage.
+- `pathlib.Path`;
+- subprocess argument lists with `shell=False`;
+- Python timeouts;
+- exclusive temporary files plus `fsync + os.replace`;
+- owned `O_EXCL` locks;
+- `os.pathsep`;
+- no required `/tmp`, GNU `timeout`, `grep`, `sed`, `flock` or POSIX-only chmod behavior.
 
-La branche ne doit pas être fusionnée tant que :
+The portability workflow runs Ubuntu, macOS and Windows. Linux deep validation separately covers integration and red-team scenarios.
 
-- la matrice Linux/macOS/Windows n'est pas verte ;
-- la validation Linux profonde n'est pas verte ;
-- les artefacts de tests ne laissent pas le checkout sale ;
-- la diff complète n'a pas été auditée ;
-- la PR reste marquée draft si une preuve manque.
+## Terrain evidence acquired
 
-## Critère terminal
+Isolated minimal project:
 
-Le seul succès global autorisé est :
+- relocation detected and old state purged;
+- target SCRIBE created;
+- Graphify missing blocked false readiness;
+- real Graphify schema identified as `nodes + links`;
+- second TENOR INIT became `SAME_PROJECT` without repurge;
+- local MCP tools listed successfully.
+
+Isolated copy of `algowebsite`:
+
+- original branch/head/status and SCRIBE hash remained unchanged;
+- 18,760-line SCRIBE memory adopted byte-for-byte;
+- 1,025 files analyzed;
+- real graph built with 3,661 nodes and 5,714 links;
+- final installation manifest became `ready`;
+- second TENOR INIT was idempotent;
+- 51 local MCP tools listed.
+
+These are local/codebase proofs, not host-visibility proofs.
+
+## Remaining release gates
+
+The branch must remain draft until all are complete on the final head:
+
+- full portable matrix green;
+- Linux deep validation green;
+- post-test checkout clean;
+- complete diff audit;
+- real host LLM sees the tools;
+- correct root binding proved;
+- `TENOR_INIT_BRIDGE_OK` proved;
+- one complete MCP micro-write;
+- native direct-write bypass attempt refused or detected;
+- real six-terminal terrain replay;
+- docs, generators and PR body synchronized.
+
+## Terminal success criterion
+
+The only global success is:
 
 ```text
 TENOR_INIT_READY
 ```
 
-Il exige : installation prête, mémoire adoptée/créée, Graphify valide, serveur
-local prêt, tools visibles au host, root binding prouvé et session bridgée.
+It requires local installation ready, SCRIBE adopted/created, Graphify valid, local MCP ready, tools visible in the real host, root binding proved and the independent session bridged.
+
+## Documentation governance
+
+All future protocol changes must follow `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`. Code, tests, canonical docs, generated templates and PR description must move together.
