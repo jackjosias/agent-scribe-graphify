@@ -42,15 +42,12 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         root = self.base / "new-with-existing-memory"
         root.mkdir()
         make_project(root, memory="existing-project-history\n")
-
         plan = orchestrator.prepare_tenor_init(root)
-
         self.assertEqual(plan.classification, orchestrator.TENOR_INIT_NEW_INSTALLATION)
         self.assertTrue(plan.project_changed)
         self.assertEqual(plan.memory_action, orchestrator.SCRIBE_MEMORY_ADOPT)
         self.assertEqual((root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").read_text(encoding="utf-8"), "existing-project-history\n")
         self.assertFalse(installation_state.inspect_installation_state(root)["ready"])
-
         finalized = orchestrator.finalize_tenor_init(root)
         self.assertTrue(finalized["ok"])
         self.assertTrue(installation_state.inspect_installation_state(root)["ready"])
@@ -64,9 +61,7 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         sentinel = root / ".agent" / "state" / "runtime" / "active-agents.sentinel"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("six agents may coexist\n", encoding="utf-8")
-
         plan = orchestrator.prepare_tenor_init(root)
-
         self.assertEqual(plan.classification, orchestrator.TENOR_INIT_SAME_PROJECT)
         self.assertFalse(plan.project_changed)
         self.assertFalse(plan.purge_executed)
@@ -81,15 +76,12 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         old_state = source / ".agent" / "state" / "runtime" / "old-agent.txt"
         old_state.parent.mkdir(parents=True, exist_ok=True)
         old_state.write_text("agent-from-a\n", encoding="utf-8")
-
         target = self.base / "project-b"
         target.mkdir()
         make_project(target, memory="memory-b-must-survive\n")
         shutil.rmtree(target / ".agent")
         shutil.copytree(source / ".agent", target / ".agent")
-
         plan = orchestrator.prepare_tenor_init(target)
-
         self.assertEqual(plan.classification, orchestrator.TENOR_INIT_RELOCATED_PROJECT)
         self.assertTrue(plan.relocated)
         self.assertTrue(plan.purge_executed)
@@ -103,15 +95,12 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         make_project(source)
         orchestrator.prepare_tenor_init(source)
         orchestrator.finalize_tenor_init(source)
-
         target = self.base / "target-without-memory"
         target.mkdir()
         make_project(target, memory=None)
         shutil.rmtree(target / ".agent")
         shutil.copytree(source / ".agent", target / ".agent")
-
         plan = orchestrator.prepare_tenor_init(target)
-
         self.assertEqual(plan.classification, orchestrator.TENOR_INIT_RELOCATED_PROJECT)
         self.assertEqual(plan.memory_action, orchestrator.SCRIBE_MEMORY_CREATE)
         self.assertFalse((target / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").exists())
@@ -120,14 +109,17 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         root = self.base / "lock-project"
         root.mkdir()
         make_project(root)
-
         with orchestrator.tenor_init_lock(root, wait_timeout_seconds=0.0):
             with self.assertRaises(orchestrator.TenorInitBusy):
                 orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0)
-
         lock = orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0)
         orchestrator.release_tenor_init_lock(lock)
         self.assertFalse((root / orchestrator.LOCK_RELATIVE).exists())
+
+    def test_pid_probe_reports_current_process_alive_without_side_effects(self) -> None:
+        current_pid = os.getpid()
+        self.assertTrue(orchestrator._pid_is_alive(current_pid))
+        self.assertEqual(os.getpid(), current_pid)
 
     def test_live_owner_lock_is_not_stolen_even_when_old(self) -> None:
         root = self.base / "live-lock"
@@ -137,7 +129,6 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         payload = json.loads(lock.path.read_text(encoding="utf-8"))
         payload["updated_epoch"] = time.time() - 10_000
         lock.path.write_text(json.dumps(payload), encoding="utf-8")
-
         with self.assertRaises(orchestrator.TenorInitBusy):
             orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0, stale_after_seconds=1.0)
         self.assertTrue(lock.path.exists())
@@ -149,13 +140,8 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         make_project(root)
         lock_path = root / orchestrator.LOCK_RELATIVE
         lock_path.write_text("", encoding="utf-8")
-
         with self.assertRaises(orchestrator.TenorInitBusy):
-            orchestrator.acquire_tenor_init_lock(
-                root,
-                wait_timeout_seconds=0.0,
-                stale_after_seconds=30.0,
-            )
+            orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0, stale_after_seconds=30.0)
         self.assertTrue(lock_path.exists())
 
     def test_old_partial_lock_is_recovered_from_mtime(self) -> None:
@@ -166,12 +152,7 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         lock_path.write_text("", encoding="utf-8")
         old = time.time() - 10_000
         os.utime(lock_path, (old, old))
-
-        lock = orchestrator.acquire_tenor_init_lock(
-            root,
-            wait_timeout_seconds=0.0,
-            stale_after_seconds=1.0,
-        )
+        lock = orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0, stale_after_seconds=1.0)
         self.assertNotEqual(lock.nonce, "")
         orchestrator.release_tenor_init_lock(lock)
 
@@ -245,7 +226,6 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         self.assertEqual(first.classification, orchestrator.TENOR_INIT_NEW_INSTALLATION)
         self.assertEqual(first.memory_action, orchestrator.SCRIBE_MEMORY_CREATE)
         orchestrator.finalize_tenor_init(root)
-
         second = orchestrator.prepare_tenor_init(root)
         self.assertEqual(second.classification, orchestrator.TENOR_INIT_SAME_PROJECT)
         self.assertEqual(second.memory_action, orchestrator.SCRIBE_MEMORY_CREATE)
