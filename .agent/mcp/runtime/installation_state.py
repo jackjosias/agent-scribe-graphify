@@ -28,6 +28,8 @@ TENOR_INIT_FRESH_RUNTIME_READY = "TENOR_INIT_FRESH_RUNTIME_READY"
 TENOR_INIT_REQUIRED = "TENOR_INIT_REQUIRED"
 TENOR_INIT_GATE_READY = "TENOR_INIT_GATE_READY"
 
+_ATOMIC_REPLACE_ATTEMPTS = 10
+_ATOMIC_REPLACE_INITIAL_BACKOFF_SECONDS = 0.01
 _LEGACY_STATE_NAMES = {
     "runtime",
     "proof",
@@ -84,6 +86,25 @@ def _state_dir(project_root: Path) -> Path:
     return project_root.resolve() / ".agent" / "state"
 
 
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Replace atomically while tolerating short Windows sharing violations.
+
+    Windows may reject replacing a file while another thread or process has the
+    previous target open for reading. The retry is intentionally short and
+    bounded; all other errors fail immediately.
+    """
+    delay = _ATOMIC_REPLACE_INITIAL_BACKOFF_SECONDS
+    for attempt in range(_ATOMIC_REPLACE_ATTEMPTS):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt + 1 >= _ATOMIC_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.25)
+
+
 def _atomic_json_write(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
@@ -93,7 +114,7 @@ def _atomic_json_write(path: Path, data: dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
     finally:
         try:
             if tmp.exists():
