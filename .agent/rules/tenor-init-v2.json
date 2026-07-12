@@ -1,168 +1,167 @@
 {
-  "name": "TENOR_INIT_V2",
+  "name": "TENOR_INIT_V2_16",
   "human_trigger": "[[.agent/skills/init-tenor/SKILL.md]]",
   "entry_file": ".agent/skills/init-tenor/SKILL.md",
   "required_mcp": "agent-scribe-graphify",
   "mcp_entrypoint": ".agent/mcp/server_entry.py",
-  "stop_if_mcp_missing": "STOP: MCP agent-scribe-graphify indisponible. Configure le host MCP vers .agent/mcp/server_entry.py, redemarre le host, puis relance [[.agent/skills/init-tenor/SKILL.md]].",
   "first_files_to_read": [
     ".agent/skills/init-tenor/SKILL.md",
-    ".agent/rules/tenor-init-v2.json",
-    ".agent/docs/HOST_PROMPT.md"
+    ".agent/rules/tenor-init-v2.json"
   ],
-  "first_workflow_next": {
-    "request": "TENOR INIT V2 - init session, SCRIBE, Graphify, .scribe, -out, MCP",
-    "intent": "read",
-    "resource": ".agent/skills/init-tenor/SKILL.md"
-  },
+  "authority_order": [
+    "resolve_current_project_root",
+    "classify_installation_from_manifest_and_root",
+    "purge_old_project_bound_state_only_if_required",
+    "adopt_or_create_current_project_scribe",
+    "verify_or_build_project_bound_graphify",
+    "finalize_local_installation",
+    "list_local_mcp_tools",
+    "resolve_host_adapter",
+    "verify_tools_visible_to_host_llm",
+    "prove_mcp_root_binding",
+    "bridge_independent_agent_session",
+    "report_TENOR_INIT_READY"
+  ],
   "tenor_init_commands": {
     "cli": ".agent/workflow/scribe/scribe tenor-init --type cli",
-    "extension": ".agent/workflow/scribe/scribe tenor-init --type extension"
+    "extension": ".agent/workflow/scribe/scribe tenor-init --type extension",
+    "windows_python": "python .agent/workflow/scribe/scribe tenor-init --type cli",
+    "graphify_build": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
   },
+  "installation_classifications": [
+    "TENOR_INIT_NEW_INSTALLATION",
+    "TENOR_INIT_SAME_PROJECT",
+    "TENOR_INIT_RELOCATED_PROJECT",
+    "TENOR_INIT_LEGACY_INSTALLATION",
+    "TENOR_INIT_CORRUPT_INSTALLATION"
+  ],
+  "memory_actions": [
+    "SCRIBE_MEMORY_ADOPT",
+    "SCRIBE_MEMORY_CREATE"
+  ],
   "required_surfaces": [
-    ".scribe",
-    "scribe-out/",
-    "graphify-out/",
+    "AGENT-MEMOIRE_PROJECT_STATUS.scribe",
+    ".agent/state/install/agent-installation.json",
+    ".agent/state/outputs/scribe-out/",
+    ".agent/state/outputs/graphify-out/",
     ".agent/rules/scribe.md",
     ".graphifyignore"
   ],
   "required_tools": [
     "workflow_next",
-    "apply_patch",
-    "delete_resource",
+    "before_task",
+    "discipline_ping",
     "scribe_query",
     "graphify_query",
-    "scribe_record",
-    "before_task",
+    "pre_action_guard",
+    "resource_lock_claim",
+    "resource_lock_release",
+    "claim_resource",
+    "file_hash",
     "propose_patch",
-    "finish_task"
+    "apply_patch",
+    "delete_resource",
+    "workspace_audit",
+    "scribe_record",
+    "finish_task",
+    "tenor_init_bridge",
+    "portability_check",
+    "graphify_required_check"
   ],
-  "report_fields": [
-    "Init status",
-    "Verdict host",
-    "Direct shell/write/edit",
-    "MCP root binding",
-    "Host guide lu",
-    "MCP tools visibles au LLM",
-    "MCP local server",
-    "Host détecté",
-    "MCP disponible",
-    "Tools visibles",
-    "Agent ID MCP",
-    "TENOR status",
-    "Agent session",
-    "Whoami proof",
-    "Workflow ack",
-    ".scribe present",
-    "scribe-out present",
-    "Derniere entree SCRIBE",
-    "Resume SCRIBE",
-    "graphify-out present",
-    "Resume Graphify",
-    "Agents actifs",
-    "Claims actifs",
-    "Patches pending",
-    "Mode estime",
-    "Prochaine action"
-  ],
-  "loops": {
-    "generic_task": [
-      "workflow_next",
-      "execute_must_call",
-      "workflow_next_with_last_verdict",
-      "repeat_until_done"
+  "local_server_gate": {
+    "server_entry_is_non_destructive": true,
+    "not_ready_exit_code": 78,
+    "not_ready_verdict": "TENOR_INIT_REQUIRED",
+    "must_not_retry_as_transient_failure": true,
+    "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli"
+  },
+  "graphify_readiness": {
+    "manifest": ".agent/state/outputs/graphify-out/GRAPHIFY_READY.json",
+    "required_files": [
+      "graph.json",
+      "GRAPH_REPORT.md",
+      "graph.html",
+      "GRAPHIFY_READY.json"
     ],
+    "requires_project_root_match": true,
+    "requires_workspace_fingerprint_match": true,
+    "rejects_smoke_stub_on_terrain": true,
+    "rejects_legacy_unbound_graph": true,
+    "rejects_corrupt_or_partial_graph": true,
+    "empty_project_placeholder_allowed_only_while_no_application_code": true,
+    "bounded_build_command": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
+  },
+  "loops": {
     "read_or_research": [
       "workflow_next",
       "before_task",
       "targeted_scribe_query",
       "targeted_graphify_query_when_code_or_architecture",
       "host_synthesis",
-      "scribe_record_when_decision_or_summary_is_valuable",
-      "finish_task"
+      "scribe_record_when_causal_value_exists",
+      "finish_task",
+      "workflow_next_READY_FOR_NEXT_TASK"
     ],
     "write": [
       "workflow_next",
       "before_task",
       "targeted_scribe_query",
-      "targeted_graphify_query_when_code_or_architecture",
+      "targeted_graphify_query",
+      "resource_lock_claim",
       "claim_resource",
       "file_hash",
       "propose_patch",
-      "workflow_next",
       "apply_patch",
-      "workflow_next",
-      "release_claim",
-      "workflow_next",
-      "scribe_record_when_useful",
-      "workflow_next",
-      "finish_task"
+      "workspace_audit",
+      "release_claim_and_lock",
+      "scribe_record_or_canonical_skip_decision",
+      "finish_task",
+      "workflow_next_READY_FOR_NEXT_TASK"
     ],
     "delete": [
       "workflow_next",
       "before_task",
       "targeted_scribe_query",
-      "targeted_graphify_query_when_code_or_architecture",
+      "targeted_graphify_query",
+      "resource_lock_claim",
       "claim_resource",
       "file_hash",
-      "ask_user_exact_confirmation",
+      "ask_user_exact_DELETE_confirmation",
       "delete_resource",
-      "workflow_next",
-      "release_claim",
-      "workflow_next",
-      "scribe_record_when_useful",
-      "workflow_next",
-      "finish_task"
+      "workspace_audit",
+      "release_claim_and_lock",
+      "scribe_record",
+      "finish_task",
+      "workflow_next_READY_FOR_NEXT_TASK"
     ]
   },
-  "delete_confirmation_template": "DELETE {project_relative_resource}",
   "multi_agent_rules": [
-    "each agent runs its own init",
-    "each agent uses its own agent_id",
-    "reads are free",
-    "writes require claim",
-    "same file requires claim or patch queue",
-    "do not force conflicts",
-    "do not finish with active claims or pending patches"
+    "each terminal runs its own TENOR INIT",
+    "shared bootstrap is serialized by an owned nonce lock",
+    "same project never purges active shared runtime",
+    "each agent uses a distinct agent_id and proof token",
+    "reads are concurrent",
+    "writes require resource lock, claim, action lease and patch queue",
+    "one agent cannot use another agent lease",
+    "do not finish with active claims, locks or pending patches"
   ],
   "memory_policy": {
-    "scribe_query_policy": {
-      "mode": "targeted_rag_only",
-      "never_full_read_by_default": true,
+    "scribe_query": {
+      "targeted_only": true,
       "default_limit": 5,
-      "query_must_include": [
-        "user_request",
-        "intent",
-        "resource_if_known"
-      ],
-      "add_error_terms_when_error": true,
-      "add_scar_terms_when_debugging": true
+      "must_include_request_intent_and_resource_when_known": true,
+      "result_must_change_plan_or_be_explicitly_challenged": true,
+      "false_success_forbidden": true
     },
-    "graphify_query_policy": {
-      "mode": "targeted_structure_or_impact_only",
-      "trigger_when": [
-        "code",
-        "architecture",
-        "bug",
-        "refactor",
-        "test",
-        "api",
-        "database",
-        "migration",
-        "security",
-        "production",
-        "multi_file_change"
-      ],
-      "query_must_include": [
-        "resource_if_known",
-        "impact_or_dependency_question"
-      ]
+    "graphify_query": {
+      "targeted_structure_and_impact_only": true,
+      "use_to_avoid_mass_file_reads": true,
+      "must_consider_dependencies_blast_radius_and_god_nodes": true
     },
-    "scribe_record_policy": {
-      "not_only_after_task": true,
+    "scribe_record": {
+      "runtime_receipt_is_not_canonical_memory": true,
       "record_when": [
         "write_applied",
-        "delete_applied",
         "important_decision",
         "root_cause_found",
         "error_pattern_found",
@@ -171,126 +170,39 @@
         "debt_created",
         "conflict_detected",
         "forbidden_approach_discovered"
-      ],
-      "record_types": [
-        "task_summary",
-        "scar",
-        "pattern",
-        "decision",
-        "regression",
-        "debt",
-        "invariant",
-        "conflict",
-        "forbidden_approach"
       ]
     }
   },
   "host_mcp_preflight": {
-    "must_run_before_tenor_init": true,
-    "host_detection_values": [
-      "Codex CLI",
-      "OpenCode",
-      "Claude Code",
-      "VS Code / Copilot",
-      "Cursor",
-      "Cline",
-      "Kilo Code",
-      "Roo Code",
-      "Windsurf",
-      "autre / unknown"
-    ],
-    "local_server_check": {
-      "command": "python3 .agent/mcp/server_entry.py --list-tools",
-      "meaning": "proves only that the local MCP server exists and can list its tools",
-      "does_not_prove": "tools are visible to the LLM host interface"
+    "must_run_before_tenor_init": false,
+    "local_tenor_init_must_run_first": true,
+    "local_server_check_after_init": {
+      "command": "python .agent/mcp/server_entry.py --list-tools",
+      "meaning": "proves only that the project-local MCP server can start and list tools",
+      "does_not_prove": "tools are visible in the host LLM interface"
     },
-    "llm_visible_required_tools": [
-      "workflow_next",
-      "before_task",
-      "scribe_query",
-      "graphify_query",
-      "propose_patch",
-      "apply_patch",
-      "delete_resource",
-      "scribe_promote_record",
-      "finish_task"
-    ],
-    "do_not_confuse_states": [
-      "server_entry.py --list-tools OK means MCP local server OK only",
-      "MCP tools visibles au LLM host must be verified in the host tool interface separately"
-    ],
-    "when_tools_not_visible": {
-      "status": "HOST_MCP_UNBOUND",
-      "verdict_host": "UNSAFE",
-      "must_read": [
-        ".agent/docs/hosts/AGENT_MCP_INSTALL_MATRIX.md",
-        ".agent/docs/hosts/<HOST>_MCP.md"
-      ],
-      "must_ask_user_permission_to_configure_mcp": true,
-      "must_warn_restart_required": true,
-      "forbidden_claims": [
-        "TENOR INIT terminé",
-        "INIT_CONFORME"
-      ],
-      "project_writes_allowed": "only with explicit user order",
-      "default_init_status": "INIT_BLOCKED_HOST_MCP_UNBOUND",
-      "must_stop_before_filesystem_bootstrap": true,
-      "forbidden_commands_without_explicit_unsafe_bootstrap_permission": [
-        ".agent/workflow/scribe/scribe bootstrap",
-        ".agent/workflow/scribe/scribe tenor-init --type cli"
-      ],
-      "must_ask_user_choice": [
-        "configure MCP .agent in this host",
-        "explicit filesystem bootstrap despite UNSAFE host"
-      ]
+    "host_visibility_check": {
+      "must_be_verified_in_real_host_interface": true,
+      "unproven_verdict": "HOST_MCP_UNBOUND",
+      "unproven_status": "LOCAL_INIT_READY_HOST_MCP_UNBOUND",
+      "project_writes_allowed": false
     },
-    "filesystem_bootstrap_despite_unsafe_host": {
-      "allowed_only_if_user_explicitly_requests": true,
-      "final_status": "FILESYSTEM_INIT_OK_MCP_UNBOUND",
-      "forbidden_claims": [
-        "TENOR INIT terminé",
-        "INIT_CONFORME"
-      ],
-      "requires_explicit_user_phrase": true,
-      "explicit_user_phrase": "oui, bootstrap filesystem malgré host UNSAFE",
-      "tenor_init_trigger_is_not_permission": true
+    "root_binding": {
+      "requires_host_and_mcp_sentinel_hash_match": true,
+      "wrong_root_status": "INIT_BLOCKED_MCP_WRONG_ROOT"
     },
-    "when_tools_visible": {
-      "continue_normal_init": true,
-      "run_command": ".agent/workflow/scribe/scribe tenor-init --type cli",
-      "copy_raw_output": true,
-      "required_output_fields": [
-        "Agent session",
-        "Whoami proof",
-        "Workflow ack",
-        "Status init"
-      ]
-    },
-    "final_report_fields": [
-      "Host détecté",
-      "MCP local server",
-      "MCP tools visibles au LLM",
-      "MCP root binding",
-      "Host guide lu",
-      "Direct shell/write/edit",
-      "Verdict host",
-      "Init status"
-    ],
-    "init_status_values": [
-      "INIT_CONFORME",
-      "FILESYSTEM_INIT_OK_MCP_UNBOUND",
-      "INIT_BLOCKED_HOST_MCP_UNBOUND",
-      "INIT_BLOCKED_MCP_WRONG_ROOT"
-    ],
-    "tenor_init_is_not_explicit_unsafe_filesystem_bootstrap_permission": true,
-    "default_when_unbound": "INIT_BLOCKED_HOST_MCP_UNBOUND",
-    "required_question_when_unbound": "Veux-tu que je configure le MCP .agent dans ce host ? Ou veux-tu explicitement un bootstrap filesystem malgré host UNSAFE ?",
-    "explicit_unsafe_bootstrap_phrase": "oui, bootstrap filesystem malgré host UNSAFE"
+    "when_tools_visible_and_root_bound": {
+      "run_tenor_init_bridge": true,
+      "required_bridge_verdict": "TENOR_INIT_BRIDGE_OK",
+      "final_status": "TENOR_INIT_READY"
+    }
   },
   "host_adapter_resolution": {
-    "applies_to_all_hosts": true,
-    "do_not_hardcode_opencode": true,
-    "do_not_use_one_host_strategy_for_another_host": true,
+    "prefer_workspace_local_configuration": true,
+    "global_or_user_config_requires_explicit_permission": true,
+    "absolute_path_to_another_project_forbidden": true,
+    "restart_requirement_must_be_reported": true,
+    "chrome_or_devtools_only_when_required_by_host_or_task": true,
     "host_to_guide": {
       "OpenCode": ".agent/docs/hosts/OPENCODE_MCP.md",
       "Codex CLI": ".agent/docs/hosts/OPENAI_CODEX_MCP.md",
@@ -302,101 +214,41 @@
       "Roo Code": ".agent/docs/hosts/ROO_CODE_MCP.md",
       "Kilo Code": ".agent/docs/hosts/KCODE_MCP.md",
       "Windsurf": ".agent/docs/hosts/WINDSURF_MCP.md",
-      "autre / unknown": ".agent/docs/hosts/README.md"
-    },
-    "universal_invariants": [
-      "MCP tools visible to LLM host must be verified separately from local server list-tools",
-      "MCP root binding must be proven with sentinel hash on host side and MCP side",
-      "host-specific config strategy must be read from the corresponding host guide",
-      "absolute paths to another project are forbidden",
-      "global/user config writes require explicit user permission"
-    ],
-    "when_host_guide_missing_or_incomplete": {
-      "status": "HOST_GUIDE_INCOMPLETE",
-      "init_status": "INIT_BLOCKED_HOST_GUIDE_INCOMPLETE",
-      "must_ask_user_for_host_config_details": true,
-      "must_not_guess_config": true
+      "unknown": ".agent/docs/hosts/README.md"
     }
   },
   "direct_tool_neutralization": {
-    "applies_to_all_hosts": true,
-    "direct_shell_write_edit_yes_prevents_safe_verdict": true,
-    "status_values": {
-      "UNSAFE": "MCP absent or not visible, wrong root, or direct project writes are free",
-      "ACCEPTABLE": "MCP visible and root bound with MCP workflow used, but direct shell/write/edit paths remain accessible",
-      "SAFE_CANDIDATE": "MCP visible and root bound, native write/edit disabled or permission-gated, shell writes blocked, sandboxed, or permission-gated",
-      "SAFE": "MCP visible and root bound, with no project write path outside MCP or verified sandbox preventing direct writes"
-    },
-    "safe_requires": [
-      "MCP tools visible to LLM host",
-      "MCP root binding proven",
-      "native write/edit/apply_patch disabled or permission-gated",
-      "shell writes disabled, sandboxed, or permission-gated",
-      "dirty-write detector clean"
-    ],
-    "direct_write_vectors": [
-      "shell/bash direct",
-      "native host write/edit",
-      "native apply_patch outside MCP",
-      "shell redirections > and >>",
-      "tee writing project files",
-      "rm mv cp that mutate project files",
-      "sed -i and perl -pi",
-      "Python/Node/Bash scripts writing project files"
-    ],
+    "direct_shell_write_edit_forbidden": true,
+    "native_host_write_edit_must_be_disabled_permission_gated_or_detected": true,
     "defense_layers": [
-      "host permissions deny or ask for native dangerous tools",
-      "project-local host config when supported",
-      "OS sandbox with project read-only outside MCP when possible",
-      "MCP workflow gate via propose_patch apply_patch delete_resource",
-      "dirty-write detector comparing git status file hashes and MCP patch logs",
-      "policy stop on bypass and ask user for rollback or explicit approval"
-    ],
-    "bypass_status": "DIRECT_WRITE_BYPASS_DETECTED",
-    "when_bypass_detected": [
-      "stop",
-      "report changed files",
-      "do not continue task",
-      "ask user for rollback or explicit approval"
+      "host permissions",
+      "project-local instructions",
+      "resource locks and claims",
+      "action leases",
+      "patch queue",
+      "direct filesystem tripwire",
+      "workspace audit",
+      "canonical memory finish gate"
     ]
   },
-  "mcp_root_binding_check": {
-    "applies_to_all_hosts": true,
-    "mcp_visible_is_not_enough": true,
-    "required_status": "MCP_BOUND_TO_CURRENT_PROJECT",
-    "visible_status": "MCP_VISIBLE",
-    "unbound_status": "MCP_UNBOUND",
-    "wrong_root_status": "MCP_WRONG_ROOT",
-    "wrong_root_init_status": "INIT_BLOCKED_MCP_WRONG_ROOT",
-    "must_not_run_tenor_init_when_wrong_root": true,
-    "sentinel_candidates": [
-      "AGENTS.md",
-      ".agent/skills/init-tenor/SKILL.md",
-      ".agent/rules/tenor-init-v2.json"
-    ],
-    "host_side_hash_method": "python hashlib sha256 for cross-platform portability",
-    "host_side_hash_command": "python3 - <<'PY'\nfrom pathlib import Path\nimport hashlib\ncandidates = [\n    Path(\"AGENTS.md\"),\n    Path(\".agent/skills/init-tenor/SKILL.md\"),\n    Path(\".agent/rules/tenor-init-v2.json\"),\n]\nfor p in candidates:\n    if p.exists() and p.is_file():\n        print(str(p))\n        print(hashlib.sha256(p.read_bytes()).hexdigest())\n        break\nelse:\n    print(\"__NO_SENTINEL__\")\nPY",
-    "mcp_side_hash_tool": "file_hash",
-    "mcp_side_hash_args": {
-      "resource": "<sentinel_file>"
-    },
-    "hash_must_match": true,
-    "wrong_root_when": [
-      "host hash and MCP hash mismatch",
-      "MCP file_hash returns __new_file__ for existing host sentinel",
-      "MCP file_hash returns missing file for existing host sentinel",
-      "MCP file_hash returns error for existing host sentinel"
-    ],
-    "when_mismatch": [
-      "stop",
-      "read host guide",
-      "ask permission to fix host MCP binding",
-      "warn restart may be required"
-    ],
-    "forbidden_commands_when_wrong_root": [
-      ".agent/workflow/scribe/scribe bootstrap",
-      ".agent/workflow/scribe/scribe tenor-init --type cli"
-    ],
-    "configuration_policy": "read the corresponding .agent/docs/hosts/ guide and apply that host strategy; do not invent a universal config"
+  "report_fields": [
+    "Installation classification",
+    "Project root",
+    "SCRIBE action",
+    "Graphify readiness verdict",
+    "MCP local server",
+    "MCP tools visible to host LLM",
+    "MCP root binding",
+    "Host guide",
+    "Agent session",
+    "Proof token",
+    "Active agents",
+    "Active claims and locks",
+    "Init status",
+    "Next action"
+  ],
+  "terminal_success": {
+    "verdict": "TENOR_INIT_READY",
+    "requires_all_report_fields_proven": true
   }
 }
