@@ -20,6 +20,8 @@ update_state_after_write = getattr(scribe_state, "update_state_after_write")
 
 scribe_install_templates = load_script_module("scribe_install_templates")
 render_scribe_adapter = getattr(scribe_install_templates, "render_scribe_adapter")
+render_scribe_rule = getattr(scribe_install_templates, "render_scribe_rule")
+render_agents_block = getattr(scribe_install_templates, "render_agents_block")
 
 
 def plan(root: Path, *, classification: str, memory_action: str, project_changed: bool) -> SimpleNamespace:
@@ -156,7 +158,18 @@ class ScribeBootstrapTests(unittest.TestCase):
         adapter = render_scribe_adapter()
         self.assertIn('scribe tenor-init [--root PATH]', adapter)
         self.assertIn('"tenor-init": "scribe_tenor_init_v216.py"', adapter)
+        self.assertIn("internal/legacy primitive", adapter)
         compile(adapter, "<installed-scribe-adapter>", "exec")
+
+    def test_generated_surfaces_use_only_canonical_v216_entry(self) -> None:
+        trigger = "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]"
+        for rendered in (render_scribe_rule(), render_agents_block()):
+            self.assertIn(trigger, rendered)
+            self.assertIn("tenor-init --type", rendered)
+            self.assertIn("bootstrap", rendered)
+            self.assertIn("internal/legacy", rendered)
+            self.assertNotIn("[[.agent/skills/init-tenor/SKILL.md]]", rendered)
+            self.assertIn("DOCUMENTATION_SYNC_POLICY.md", rendered)
 
     def test_graphify_placeholder_is_project_bound_on_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
