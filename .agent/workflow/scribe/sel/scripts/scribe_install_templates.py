@@ -33,6 +33,10 @@ BUNDLE_RELATIVE_PATH = PORTABLE_RELATIVE_PATH
 BUNDLE_COMMAND = f"{PORTABLE_RELATIVE_PATH}/scribe"
 RAG_COMMAND = f"{PORTABLE_RELATIVE_PATH}/scribe-rag"
 SCRIBE_RULE_PATH = ".agent/rules/scribe.md"
+TENOR_TRIGGER = "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]"
+TENOR_SKILL_PATH = ".agent/skills/init-tenor/SKILL.md"
+TENOR_RULE_PATH = ".agent/rules/tenor-init-v2.json"
+DOC_SYNC_PATH = ".agent/docs/DOCUMENTATION_SYNC_POLICY.md"
 
 
 def _text(value: str) -> str:
@@ -46,53 +50,72 @@ def render_scribe_rule() -> str:
         trigger: always_on
         ---
 
-        # SCRIBE/TENOR — règle always-on
+        # SCRIBE/TENOR — règle always-on V2.16
 
         `.agent` est la couche d'exploitation portable des agents LLM. TENOR
         décide l'ordre sûr, Graphify compresse le contexte structurel, SCRIBE
-        fournit la mémoire causale, et le runtime coordonne les agents actifs.
+        fournit la mémoire causale et le runtime coordonne les agents actifs.
 
         ## Entrée canonique
 
-        Depuis la racine du projet, toute session commence par :
+        Déclencheur humain/LLM :
+
+        ```text
+        {TENOR_TRIGGER}
+        ```
+
+        Commande mécanique depuis la racine du projet :
 
         ```bash
         {BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown>
         ```
 
-        `tenor-init` est l'unique autorité d'installation. Un serveur MCP qui
-        retourne `TENOR_INIT_REQUIRED` ne doit pas être contourné : exécuter
-        l'action indiquée, puis reconnecter le host si nécessaire.
+        `tenor-init` est l'unique autorité publique d'installation, relocation et
+        reprise. `bootstrap` est interne/legacy et ne doit pas être présenté comme
+        le démarrage normal V2.16.
+
+        ## Autorité
+
+        Ordre obligatoire : résoudre le root, classifier l'installation, purger
+        seulement l'état ancien prouvé, adopter/créer SCRIBE, vérifier Graphify,
+        finaliser localement, vérifier le MCP local, prouver la visibilité host,
+        prouver le root binding, bridger la session, puis seulement
+        `TENOR_INIT_READY`.
+
+        `server_entry.py --list-tools` ne prouve jamais la visibilité des tools
+        dans le host LLM.
 
         ## Mémoire et graphe
 
-        - Lecture agent : `{RAG_COMMAND}`.
+        - Lecture agent : `{RAG_COMMAND}` ou MCP `scribe_query`.
         - Maintenance : `{BUNDLE_COMMAND}`.
+        - Skill init : `{TENOR_SKILL_PATH}`.
+        - Règles machine : `{TENOR_RULE_PATH}`.
         - Protocole complet : `{SEL_RELATIVE_PATH}/docs/scribe.md`.
         - Coordination : `{SEL_RELATIVE_PATH}/docs/live-coordination.md`.
-        - Skill d'init : `.agent/skills/init-tenor/SKILL.md`.
 
-        Graphify répond à « quoi, où, comment et quel blast radius ? » sans
-        obliger le LLM à lire une masse de fichiers. SCRIBE répond à « pourquoi,
-        quelle douleur a déjà été payée, que ne faut-il pas répéter ? ».
+        Graphify répond à « quoi, où, comment, dépendances et blast radius ».
+        SCRIBE répond à « pourquoi, quelle douleur, quelle décision et que ne faut-il
+        pas répéter ». Le graphe réel accepte `nodes + links`; le format historique
+        supporté est `nodes + edges`.
 
-        Une requête SCRIBE n'est pas une checkbox : les SCAR, GHOST,
-        `ne_pas_reproposer`, décisions et tests retrouvés doivent modifier le plan
-        ou produire une contradiction explicitement auditée.
+        Une requête SCRIBE n'est pas une checkbox : les résultats doivent modifier
+        le plan ou être explicitement contestés.
 
-        ## Multi-agent
+        ## Multi-agent et writes
 
-        Plusieurs terminaux peuvent lancer TENOR INIT dans le même projet. Le
-        bootstrap partagé est sérialisé, puis chaque terminal reçoit une session
-        distincte. `SAME_PROJECT` ne doit jamais purger la coordination active.
-        Claims, resource locks et leases sont obligatoires avant write.
+        Chaque terminal obtient une session, un proof et des leases distincts. Le
+        bootstrap commun est sérialisé ; `SAME_PROJECT` ne purge jamais la
+        coordination active.
 
-        ## Preuve de fin
+        Toute mutation exige `pre_action_guard`, lock, claim, action lease, hash,
+        patch queue, workspace audit, libération et `finish_task`. Les writes natifs
+        shell/edit/write/apply-patch hors MCP sont interdits.
 
-        Une tâche non triviale n'est terminée que si les verdicts MCP terminaux
-        sont présents, le workspace est audité, les claims sont libérés et la
-        mémoire canonique est promue ou explicitement ignorée avec une raison
-        précise et auditable.
+        ## Documentation
+
+        Toute évolution synchronise code, tests, surfaces canoniques, générateurs et
+        PR selon `{DOC_SYNC_PATH}`. Les anciens baselines datés sont historiques.
         """
     )
 
@@ -122,7 +145,7 @@ def render_scribe_adapter() -> str:
             if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
                 print("Usage:")
                 print("  scribe tenor-init [--root PATH] [--agent NAME] [--type cli|extension|api|unknown]")
-                print("  scribe bootstrap [--root PATH]")
+                print("  scribe bootstrap [--root PATH]  # internal/legacy primitive")
                 print("  scribe doctor|guard|install|clean|lock|sync|whoami|workflow|coordination")
                 print("  scribe hot|context|stats|explain|related|query|challenge|eval|compact|review-hot|promote|export|archive|dashboard")
                 print("  scribe graph|graphify-hooks|benchmark|worktree")
@@ -265,24 +288,36 @@ def render_agents_block() -> str:
     return _text(
         f"""
         {AGENTS_START}
-        ## SCRIBE/TENOR portable operating layer
+        ## AGENT-SCRIBE-GRAPHIFY — V2.16 operating layer
+
+        Canonical human/LLM trigger:
+
+        ```text
+        {TENOR_TRIGGER}
+        ```
 
         Canonical commands:
         - Init: `{BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown>`
         - Maintenance/write engine: `{BUNDLE_COMMAND}`
         - Causal retrieval: `{RAG_COMMAND}`
         - Always-on rule: `{SCRIBE_RULE_PATH}`
+        - Skill: `{TENOR_SKILL_PATH}`
+        - Machine contract: `{TENOR_RULE_PATH}`
         - Full protocol: `{SEL_RELATIVE_PATH}/docs/scribe.md`
         - Multi-agent contract: `{SEL_RELATIVE_PATH}/docs/multi-agent-installation.md`
 
         Rules:
-        - TENOR INIT is the only installation/relocation authority.
-        - Never treat MCP `--list-tools` as proof that the host model sees tools.
-        - Never treat SCRIBE query execution as proof that its result influenced the task.
-        - Read Graphify context before architectural or broad code changes.
-        - Use resource locks, claims, leases and patch queue for writes.
+        - TENOR INIT is the only public installation/relocation/recovery authority.
+        - `bootstrap` is internal/legacy, never the normal V2.16 start.
+        - Local MCP `--list-tools` is not host visibility proof.
+        - Do not work before host tools, root binding and bridge produce `TENOR_INIT_READY`.
+        - SCRIBE retrieval must influence the plan; Graphify is used for structure/blast radius.
+        - Graphify supports explicit `nodes + links` and historical `nodes + edges` only.
+        - Every write uses guard, lease, lock, claim, hash, patch queue, audit and finish.
+        - Native direct shell/edit/write paths outside MCP are forbidden.
         - A prose-only “done” without terminal MCP proof is not completion.
-        - Keep generated outputs under `.agent/state/outputs/` and out of product commits.
+        - Generated outputs stay under `.agent/state/outputs/` and out of product commits by default.
+        - Documentation and generators move together under `{DOC_SYNC_PATH}`.
         {AGENTS_END}
         """
     )
