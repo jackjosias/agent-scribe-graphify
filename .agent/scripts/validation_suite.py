@@ -15,6 +15,8 @@ STEPS = (
     ("validation_runtime_lock", [sys.executable, ".agent/mcp/tests/test_validation_runtime_lock.py"]),
     ("installation_state", [sys.executable, ".agent/mcp/tests/test_installation_state.py"]),
     ("tenor_init_orchestrator", [sys.executable, ".agent/mcp/tests/test_tenor_init_orchestrator.py"]),
+    ("graphify_readiness", [sys.executable, ".agent/mcp/tests/test_graphify_readiness.py"]),
+    ("graphify_scribe_bridge", [sys.executable, ".agent/tests/test_graphify_scribe_bridge.py"]),
     ("scribe_bootstrap", [sys.executable, ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"]),
     ("agent_runtime_sync", [sys.executable, ".agent/tests/test_agent_runtime_sync.py"]),
     ("mcp_smoke", [sys.executable, ".agent/scripts/mcp_smoke.py"]),
