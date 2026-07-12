@@ -1,35 +1,17 @@
-"""launcher.py — Host adapter launcher with full V2.14 support.
-
-Additions over V2.13:
-  - run_lease_extend()        : renew an active lease mid-operation (prevents
-                                ACTION_LEASE_EXPIRED in high-latency environments).
-  - run_guard_auto_follow()   : auto-execute safe must_call steps until
-                                PRE_ACTION_GUARD_OK is reached, returning the
-                                final lease to the caller.
-  - run_preflight()           : now also checks instruction block presence and
-                                triggers auto-repair when the block is missing.
-  - run_portability_check()   : verifies .agent is at the git root.
-  - run_resource_lock_*()     : multi-agent resource locking helpers.
-"""
+"""Portable host adapter for the V2.16 TENOR operating layer."""
 from __future__ import annotations
 
-import os
-import sys
 import json
-import time
+import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
+from . import instructions as _instructions
 from .policy import HostPolicy, HostVerdict
-from . import instructions as _instr
 
-
-# ─────────────────────────────────────────────────────────────
-# Safe must_call steps that guard --auto-follow may execute
-# automatically without human approval.
-# These are read-only or idempotent setup tools — never write tools.
-# ─────────────────────────────────────────────────────────────
 _SAFE_MUST_CALL_TOOLS = frozenset({
     "before_task",
     "resume_task_context",
@@ -39,19 +21,13 @@ _SAFE_MUST_CALL_TOOLS = frozenset({
     "portability_check",
     "resource_lock_status",
 })
-
-# Maximum auto-follow iterations to prevent infinite loops.
 _MAX_AUTO_FOLLOW_ITERATIONS = 8
-
-# Default retry settings for transient subprocess failures.
 _CALL_RETRY_COUNT = 3
-_CALL_RETRY_BASE_DELAY = 0.5   # seconds — doubles each retry (exp backoff)
+_CALL_RETRY_BASE_DELAY = 0.5
 _CALL_RETRY_MAX_DELAY = 8.0
+TENOR_INIT_REQUIRED = "TENOR_INIT_REQUIRED"
+HOST_MCP_UNBOUND = "HOST_MCP_UNBOUND"
 
-
-# ─────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────
 
 class HostLaunchConfig:
     def __init__(
@@ -66,11 +42,7 @@ class HostLaunchConfig:
         self.host_type = host_type or os.environ.get("HOST_TYPE", "unknown")
         self.task_id = task_id or os.environ.get("TASK_ID", "")
         self.context_token = context_token or os.environ.get("CONTEXT_TOKEN", "")
-
-        if workspace_root is None:
-            self.workspace_root = Path(os.getcwd()).resolve()
-        else:
-            self.workspace_root = Path(workspace_root).resolve()
+        self.workspace_root = Path(workspace_root or os.getcwd()).resolve()
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -82,24 +54,105 @@ class HostLaunchConfig:
         }
 
 
-# ─────────────────────────────────────────────────────────────
-# Environment helpers
-# ─────────────────────────────────────────────────────────────
-
 def build_guarded_environment(config: HostLaunchConfig) -> dict[str, str]:
     env = dict(os.environ)
-    env["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(config.workspace_root)
-    env["AGENT_ID"] = config.agent_id
-    env["HOST_TYPE"] = config.host_type
-    env["TASK_ID"] = config.task_id
-    env["CONTEXT_TOKEN"] = config.context_token
-    env["SCRIBE_OWNER_PID"] = str(os.getpid())
+    env.update({
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": str(config.workspace_root),
+        "AGENT_ID": config.agent_id,
+        "HOST_TYPE": config.host_type,
+        "TASK_ID": config.task_id,
+        "CONTEXT_TOKEN": config.context_token,
+        "SCRIBE_OWNER_PID": str(os.getpid()),
+    })
     return env
 
 
-# ─────────────────────────────────────────────────────────────
-# Core subprocess call with exponential-backoff retry
-# ─────────────────────────────────────────────────────────────
+def _runtime_modules(workspace_root: Path):
+    mcp_dir = workspace_root / ".agent" / "mcp"
+    if str(mcp_dir) not in sys.path:
+        sys.path.insert(0, str(mcp_dir))
+    from runtime import installation_state
+    return installation_state
+
+
+def inspect_local_tenor_state(config: HostLaunchConfig) -> dict[str, Any]:
+    try:
+        installation_state = _runtime_modules(config.workspace_root)
+        return installation_state.inspect_installation_state(config.workspace_root)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "ready": False,
+            "verdict": TENOR_INIT_REQUIRED,
+            "reason": f"Cannot inspect local TENOR state: {exc}",
+            "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli",
+        }
+
+
+def run_local_tenor_init(
+    config: HostLaunchConfig,
+    *,
+    agent_type: str = "cli",
+    timeout: float = 240.0,
+) -> dict[str, Any]:
+    command = config.workspace_root / ".agent" / "workflow" / "scribe" / "scribe"
+    if not command.is_file():
+        return {"ok": False, "verdict": TENOR_INIT_REQUIRED, "reason": f"Missing TENOR CLI: {command}"}
+    try:
+        result = subprocess.run(
+            [sys.executable, str(command), "tenor-init", "--root", str(config.workspace_root), "--type", agent_type],
+            cwd=str(config.workspace_root),
+            env=build_guarded_environment(config),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False,
+            "verdict": "TENOR_INIT_TIMEOUT",
+            "reason": f"TENOR INIT exceeded {timeout}s",
+            "stdout": exc.stdout if isinstance(exc.stdout, str) else "",
+            "stderr": exc.stderr if isinstance(exc.stderr, str) else "",
+        }
+    except (FileNotFoundError, OSError) as exc:
+        return {"ok": False, "verdict": "TENOR_INIT_LAUNCH_FAILED", "reason": str(exc)}
+    state = inspect_local_tenor_state(config)
+    ready = result.returncode == 0 and bool(state.get("ready"))
+    return {
+        "ok": ready,
+        "verdict": "TENOR_INIT_LOCAL_READY" if ready else "TENOR_INIT_LOCAL_FAILED",
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "state": state,
+    }
+
+
+def _decode_tool_output(stdout: str, stderr: str) -> dict[str, Any]:
+    raw = stdout.strip()
+    try:
+        outer = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error": "JSON_DECODE_FAILED",
+            "reason": f"Could not parse tool output as JSON: {exc}",
+            "stdout": raw,
+            "stderr": stderr.strip(),
+        }
+    if isinstance(outer, dict) and "content" in outer:
+        content = outer.get("content")
+        if isinstance(content, list) and content and isinstance(content[0], dict):
+            text = str(content[0].get("text", ""))
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return {"ok": True, "text": text}
+    return outer if isinstance(outer, dict) else {"ok": True, "value": outer}
+
 
 def call_mcp_tool(
     tool_name: str,
@@ -108,274 +161,147 @@ def call_mcp_tool(
     timeout: float = 30.0,
     retries: int = _CALL_RETRY_COUNT,
 ) -> dict[str, Any]:
-    """Invoke a single MCP tool via server_entry.py --call.
+    entry = workspace_root / ".agent" / "mcp" / "server_entry.py"
+    if not entry.is_file():
+        return {"ok": False, "error": "ENTRY_SCRIPT_NOT_FOUND", "reason": f"MCP entry script not found at {entry}"}
 
-    Retry logic with exponential backoff guards against transient process
-    failures (e.g. OS loader contention under heavy concurrent load).
-
-    Invariants:
-      - Never raises; always returns a dict with at least {"ok": bool}.
-      - Uses subprocess.run (not Popen) — no zombie risk.
-      - shell=False — no shell-injection surface.
-    """
-    entry_script = workspace_root / ".agent" / "mcp" / "server_entry.py"
-    if not entry_script.exists():
-        return {
-            "ok": False,
-            "error": "ENTRY_SCRIPT_NOT_FOUND",
-            "reason": f"MCP entry script not found at {entry_script}",
-        }
-
-    env = dict(os.environ)
-    env["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(workspace_root)
+    config = HostLaunchConfig(agent_id=str(args.get("agent_id") or ""), workspace_root=workspace_root)
+    env = build_guarded_environment(config)
     mcp_dir = str(workspace_root / ".agent" / "mcp")
-    existing_pp = env.get("PYTHONPATH", "")
-    parent_paths = [str(p) for p in sys.path if p and Path(p).is_dir()]
-    all_mcp_pp = os.pathsep.join([mcp_dir] + parent_paths)
-    env["PYTHONPATH"] = f"{all_mcp_pp}{os.pathsep}{existing_pp}" if existing_pp else all_mcp_pp
-    if "agent_id" in args:
-        env["AGENT_ID"] = str(args["agent_id"])
-
-    last_error: dict[str, Any] = {}
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = mcp_dir if not existing else f"{mcp_dir}{os.pathsep}{existing}"
+    command = [sys.executable, str(entry), "--call", tool_name, "--args", json.dumps(args)]
     delay = _CALL_RETRY_BASE_DELAY
+    attempts = max(1, retries)
+    last_error: dict[str, Any] = {}
 
-    for attempt in range(max(1, retries)):
+    for attempt in range(attempts):
         try:
-            proc = subprocess.run(
-                [
-                    sys.executable,
-                    str(entry_script),
-                    "--call",
-                    tool_name,
-                    "--args",
-                    json.dumps(args),
-                ],
+            process = subprocess.run(
+                command,
                 cwd=str(workspace_root),
                 env=env,
                 text=True,
                 capture_output=True,
                 timeout=timeout,
                 shell=False,
+                check=False,
             )
         except subprocess.TimeoutExpired:
-            last_error = {
-                "ok": False,
-                "error": "TIMEOUT",
-                "reason": f"Tool call '{tool_name}' timed out after {timeout}s (attempt {attempt + 1}/{retries}).",
-            }
-            # Timeout is not retriable — the subprocess is already dead.
-            break
-        except Exception as exc:
-            last_error = {
-                "ok": False,
-                "error": "SUBPROCESS_FAILED",
-                "reason": str(exc),
-                "attempt": attempt + 1,
-            }
-            if attempt < retries - 1:
+            return {"ok": False, "error": "TIMEOUT", "reason": f"Tool call '{tool_name}' timed out after {timeout}s."}
+        except (FileNotFoundError, OSError) as exc:
+            last_error = {"ok": False, "error": "SUBPROCESS_FAILED", "reason": str(exc), "attempt": attempt + 1}
+            if attempt + 1 < attempts:
                 time.sleep(min(delay, _CALL_RETRY_MAX_DELAY))
                 delay *= 2
-            continue
+                continue
+            return last_error
 
-        if proc.returncode != 0:
+        if process.returncode == 78:
+            try:
+                payload = json.loads(process.stderr.strip() or process.stdout.strip())
+            except json.JSONDecodeError:
+                payload = {"reason": process.stderr.strip() or process.stdout.strip()}
+            return {
+                "ok": False,
+                "error": TENOR_INIT_REQUIRED,
+                "verdict": TENOR_INIT_REQUIRED,
+                "returncode": 78,
+                **payload,
+            }
+        if process.returncode != 0:
             last_error = {
                 "ok": False,
                 "error": "NON_ZERO_EXIT_CODE",
-                "exit_code": proc.returncode,
-                "stdout": proc.stdout.strip(),
-                "stderr": proc.stderr.strip(),
-                "reason": f"Tool call exited with status {proc.returncode}.",
+                "returncode": process.returncode,
+                "stdout": process.stdout.strip(),
+                "stderr": process.stderr.strip(),
+                "reason": f"Tool call exited with status {process.returncode}.",
             }
-            # Non-zero exit may be retriable (e.g. import error under load).
-            if attempt < retries - 1:
+            if process.returncode == 75 and attempt + 1 < attempts:
                 time.sleep(min(delay, _CALL_RETRY_MAX_DELAY))
                 delay *= 2
-            continue
-
-        raw_output = proc.stdout.strip()
-        try:
-            outer = json.loads(raw_output)
-        except json.JSONDecodeError as exc:
-            last_error = {
-                "ok": False,
-                "error": "JSON_DECODE_FAILED",
-                "stdout": raw_output,
-                "stderr": proc.stderr.strip(),
-                "reason": f"Could not parse tool output as JSON: {exc}",
-            }
-            # JSON decode failure is not retriable — deterministic bug.
-            break
-
-        # Unwrap standard MCP content envelope.
-        if isinstance(outer, dict) and "content" in outer:
-            content_list = outer["content"]
-            if content_list and isinstance(content_list, list):
-                text_val = content_list[0].get("text", "")
-                try:
-                    return json.loads(text_val)
-                except json.JSONDecodeError:
-                    return {"ok": True, "text": text_val}
-
-        return outer
-
+                continue
+            return last_error
+        return _decode_tool_output(process.stdout, process.stderr)
     return last_error
 
-
-# ─────────────────────────────────────────────────────────────
-# Preflight — now with instruction-block auto-repair check
-# ─────────────────────────────────────────────────────────────
 
 def run_preflight(
     config: HostLaunchConfig,
     agents_md_path: Path | str | None = None,
     auto_repair_instructions: bool = True,
 ) -> dict[str, Any]:
-    """Run preflight checks and optionally auto-repair missing instruction block.
-
-    New in V2.14:
-      - Verifies instruction block is still present in AGENTS.md (or supplied file).
-      - If missing AND auto_repair_instructions=True → re-installs automatically.
-      - If missing AND auto_repair_instructions=False → returns ACCEPTABLE verdict
-        instead of SAFE_CANDIDATE (block missing = reduced confidence).
-      - SAFE verdict hardened: never granted on simple /tmp probe alone.
-        See policy.py for the full SAFE requirements matrix.
-    """
     agent_dir = config.workspace_root / ".agent"
-    if not agent_dir.exists():
+    entry = agent_dir / "mcp" / "server_entry.py"
+    if not agent_dir.is_dir() or not entry.is_file():
+        return {"ok": False, "verdict": HostVerdict.UNSAFE, "reason": "Missing project-local .agent MCP entrypoint."}
+
+    local_state = inspect_local_tenor_state(config)
+    if not local_state.get("ready"):
         return {
             "ok": False,
-            "verdict": HostVerdict.UNSAFE,
-            "reason": "Missing .agent directory at workspace root.",
+            "verdict": TENOR_INIT_REQUIRED,
+            "state": "LOCAL_INIT_REQUIRED",
+            "local_state": local_state,
+            "next_action": local_state.get("next_action") or ".agent/workflow/scribe/scribe tenor-init --type cli",
         }
 
-    entry_script = agent_dir / "mcp" / "server_entry.py"
-    if not entry_script.exists():
-        return {
-            "ok": False,
-            "verdict": HostVerdict.UNSAFE,
-            "reason": f"Missing server_entry.py at {entry_script}.",
-        }
-
-    # --- List available MCP tools ---
     try:
-        proc = subprocess.run(
-            [sys.executable, str(entry_script), "--list-tools"],
+        process = subprocess.run(
+            [sys.executable, str(entry), "--list-tools"],
             cwd=str(config.workspace_root),
+            env=build_guarded_environment(config),
             text=True,
             capture_output=True,
             timeout=20,
             shell=False,
+            check=False,
         )
-    except Exception as exc:
-        return {
-            "ok": False,
-            "verdict": HostVerdict.UNSAFE,
-            "reason": f"Failed to list MCP tools: {exc}",
-        }
-
-    if proc.returncode != 0:
-        return {
-            "ok": False,
-            "verdict": HostVerdict.UNSAFE,
-            "reason": f"List tools failed: {proc.stderr.strip() or proc.stdout.strip()}",
-        }
-
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "verdict": HostVerdict.UNSAFE, "reason": f"Failed to list local MCP tools: {exc}"}
+    if process.returncode != 0:
+        return {"ok": False, "verdict": HostVerdict.UNSAFE, "reason": process.stderr.strip() or process.stdout.strip(), "returncode": process.returncode}
     try:
-        data = json.loads(proc.stdout)
-        tools_list = [t.get("name") for t in data.get("tools", [])]
-    except Exception as exc:
-        return {
-            "ok": False,
-            "verdict": HostVerdict.UNSAFE,
-            "reason": f"Failed to parse tools JSON: {exc}",
-        }
+        data = json.loads(process.stdout)
+        tools = [str(item.get("name")) for item in data.get("tools", []) if isinstance(item, dict) and item.get("name")]
+    except (json.JSONDecodeError, AttributeError, TypeError) as exc:
+        return {"ok": False, "verdict": HostVerdict.UNSAFE, "reason": f"Failed to parse local tools JSON: {exc}"}
 
-    # --- Classify host capabilities & decide safety verdict ---
     policy = HostPolicy(config.workspace_root)
+    missing = policy.get_missing_tools(tools)
     capabilities = policy.classify_host_capabilities()
-    verdict = policy.decide_host_safety_level(tools_list, capabilities)
-
-    # --- Instruction block presence check ---
-    instruction_block_ok: bool | None = None
-    instruction_repair_result: dict[str, Any] | None = None
-    _agents_md = agents_md_path or (config.workspace_root / "AGENTS.md")
-    agents_md = Path(_agents_md)
-
-    if agents_md.exists():
-        instruction_block_ok = _instr.verify_instruction_installation(agents_md)
-        if not instruction_block_ok:
-            if auto_repair_instructions:
-                instruction_repair_result = _instr.install_host_instructions(
-                    target_file=agents_md,
-                    host_type=config.host_type,
-                    workspace_root=config.workspace_root,
-                )
-                if instruction_repair_result.get("ok"):
-                    instruction_block_ok = True
-            else:
-                # Block missing without auto-repair: downgrade verdict confidence.
-                if verdict == HostVerdict.SAFE_CANDIDATE:
-                    verdict = HostVerdict.ACCEPTABLE
-    else:
-        # AGENTS.md doesn't exist yet — install it.
-        if auto_repair_instructions:
-            instruction_repair_result = _instr.install_host_instructions(
-                target_file=agents_md,
-                host_type=config.host_type,
-                workspace_root=config.workspace_root,
-            )
-            instruction_block_ok = bool(instruction_repair_result and instruction_repair_result.get("ok"))
-        else:
-            instruction_block_ok = False
-
-    if instruction_block_ok is True:
-        verdict = policy.decide_host_safety_level(
-            tools_list, capabilities, instructions_installed=True,
-        )
-
+    target = Path(agents_md_path) if agents_md_path is not None else config.workspace_root / "AGENTS.md"
+    instruction_result: dict[str, Any] | None = None
+    installed = _instructions.verify_instruction_installation(target)
+    if not installed and auto_repair_instructions:
+        instruction_result = _instructions.install_host_instructions(target, config.host_type, config.workspace_root)
+        installed = bool(instruction_result.get("ok"))
+    verdict = policy.decide_host_safety_level(tools, capabilities, installed)
     return {
-        "ok": True,
+        "ok": not missing,
         "verdict": verdict,
-        "available_tools": tools_list,
+        "state": "LOCAL_MCP_READY_HOST_VISIBILITY_UNPROVEN",
+        "local_server_ready": True,
+        "host_tools_visible_to_llm": None,
+        "host_visibility_verdict": HOST_MCP_UNBOUND,
+        "available_tools": tools,
+        "missing_tools": missing,
         "capabilities": capabilities,
-        "instruction_block_ok": instruction_block_ok,
-        "instruction_repair_result": instruction_repair_result,
+        "instruction_block_ok": installed,
+        "instruction_repair_result": instruction_result,
+        "local_state": local_state,
+        "next_action": "Verify these tools in the host LLM tool interface and prove the MCP root binding.",
     }
 
 
-# ─────────────────────────────────────────────────────────────
-# Portability check
-# ─────────────────────────────────────────────────────────────
-
 def run_portability_check(config: HostLaunchConfig) -> dict[str, Any]:
-    """Verify .agent is at the git root. Fail-fast if not."""
-    return call_mcp_tool(
-        "portability_check",
-        {"workspace_root": str(config.workspace_root)},
-        config.workspace_root,
-        timeout=15.0,
-    )
+    return call_mcp_tool("portability_check", {"workspace_root": str(config.workspace_root)}, config.workspace_root, timeout=15.0)
 
 
-# ─────────────────────────────────────────────────────────────
-# Discipline ping
-# ─────────────────────────────────────────────────────────────
+def run_discipline_ping(config: HostLaunchConfig, phase: str = "", resource: str = "") -> dict[str, Any]:
+    return call_mcp_tool("discipline_ping", {"agent_id": config.agent_id, "phase": phase, "resource": resource}, config.workspace_root)
 
-def run_discipline_ping(
-    config: HostLaunchConfig,
-    phase: str = "",
-    resource: str = "",
-) -> dict[str, Any]:
-    return call_mcp_tool(
-        "discipline_ping",
-        {"agent_id": config.agent_id, "phase": phase, "resource": resource},
-        config.workspace_root,
-    )
-
-
-# ─────────────────────────────────────────────────────────────
-# Pre-action guard + auto-follow
-# ─────────────────────────────────────────────────────────────
 
 def run_pre_action_guard(
     config: HostLaunchConfig,
@@ -386,17 +312,19 @@ def run_pre_action_guard(
     task_id: str = "",
     context_token: str = "",
 ) -> dict[str, Any]:
-    """Call pre_action_guard once and return the raw result."""
-    args = {
-        "agent_id": config.agent_id,
-        "request": request,
-        "intent": intent,
-        "resource": resource,
-        "planned_action": planned_action,
-        "task_id": task_id or config.task_id,
-        "context_token": context_token or config.context_token,
-    }
-    return call_mcp_tool("pre_action_guard", args, config.workspace_root)
+    return call_mcp_tool(
+        "pre_action_guard",
+        {
+            "agent_id": config.agent_id,
+            "request": request,
+            "intent": intent,
+            "resource": resource,
+            "planned_action": planned_action,
+            "task_id": task_id or config.task_id,
+            "context_token": context_token or config.context_token,
+        },
+        config.workspace_root,
+    )
 
 
 def run_guard_auto_follow(
@@ -409,223 +337,87 @@ def run_guard_auto_follow(
     context_token: str = "",
     max_iterations: int = _MAX_AUTO_FOLLOW_ITERATIONS,
 ) -> dict[str, Any]:
-    """Run pre_action_guard and auto-execute safe must_call steps.
-
-    Design rationale:
-      A small LLM may see 'must_call: ["before_task", "discipline_ping"]' and
-      not execute them, leaving the guard loop stuck. This function closes the
-      loop autonomously: it calls the guard, checks the must_call list, executes
-      each *safe* tool automatically, then re-calls the guard until:
-        - verdict == PRE_ACTION_GUARD_OK  → return the lease + full trace, OR
-        - a must_call tool is NOT in _SAFE_MUST_CALL_TOOLS → stop and return the
-          result for the human / large LLM to handle, OR
-        - max_iterations exceeded → return a clear error.
-
-    Anti infinite-loop guarantees:
-      1. max_iterations hard cap (default 8).
-      2. Only tools in _SAFE_MUST_CALL_TOOLS are auto-executed.
-      3. Any tool call that returns ok=False immediately aborts.
-      4. We track the set of tools already called; if must_call contains a
-         tool we already called, we stop (idempotency assumption failed).
-
-    Returns:
-      dict with "verdict" in {"PRE_ACTION_GUARD_OK", "MANUAL_INTERVENTION_REQUIRED",
-      "AUTO_FOLLOW_MAX_ITERATIONS", "AUTO_FOLLOW_TOOL_FAILED"} plus "trace" list
-      of all steps taken.
-    """
-    if max_iterations < 1:
-        max_iterations = 1
-
     trace: list[dict[str, Any]] = []
-    already_called: set[str] = set()
-    _task_id = task_id or config.task_id
-    _ctx = context_token or config.context_token
-
-    for iteration in range(max_iterations):
-        guard_result = run_pre_action_guard(
-            config=config,
-            request=request,
-            intent=intent,
-            resource=resource,
-            planned_action=planned_action,
-            task_id=_task_id,
-            context_token=_ctx,
-        )
-        trace.append({"step": f"guard_{iteration}", "result": guard_result})
-
-        if not guard_result.get("ok"):
-            return {
-                "ok": False,
-                "verdict": "AUTO_FOLLOW_GUARD_FAILED",
-                "reason": guard_result.get("reason") or guard_result.get("error"),
-                "guard_result": guard_result,
-                "trace": trace,
-            }
-
-        guard_verdict = guard_result.get("verdict", "")
-
-        if guard_verdict == "PRE_ACTION_GUARD_OK":
+    called: set[str] = set()
+    current_task = task_id or config.task_id
+    current_context = context_token or config.context_token
+    for iteration in range(max(1, max_iterations)):
+        guard = run_pre_action_guard(config, request, intent, resource, planned_action, current_task, current_context)
+        trace.append({"step": f"guard_{iteration}", "result": guard})
+        if not guard.get("ok"):
+            return {"ok": False, "verdict": "AUTO_FOLLOW_GUARD_FAILED", "guard_result": guard, "trace": trace}
+        if guard.get("verdict") == "PRE_ACTION_GUARD_OK":
+            lease = guard.get("action_lease") if isinstance(guard.get("action_lease"), dict) else guard.get("lease", {})
             return {
                 "ok": True,
                 "verdict": "PRE_ACTION_GUARD_OK",
-                "action_lease_id": guard_result.get("action_lease_id", ""),
-                "lease": guard_result.get("lease", {}),
+                "action_lease_id": guard.get("action_lease_id") or (lease or {}).get("lease_id", ""),
+                "lease": lease or {},
                 "iterations": iteration + 1,
                 "trace": trace,
             }
-
-        must_call: list[str] = guard_result.get("must_call", []) or []
+        raw_must_call = guard.get("must_call") or []
+        if isinstance(raw_must_call, dict):
+            raw_must_call = [raw_must_call.get("tool")]
+        must_call = [str(tool) for tool in raw_must_call if tool]
         if not must_call:
-            # Guard rejected but gave no must_call — needs human decision.
-            return {
-                "ok": False,
-                "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                "reason": f"Guard returned '{guard_verdict}' with no must_call steps.",
-                "guard_result": guard_result,
-                "trace": trace,
-            }
-
-        # Execute each must_call step if safe.
+            return {"ok": False, "verdict": "MANUAL_INTERVENTION_REQUIRED", "guard_result": guard, "trace": trace}
         for tool in must_call:
             if tool not in _SAFE_MUST_CALL_TOOLS:
-                return {
-                    "ok": False,
-                    "verdict": "MANUAL_INTERVENTION_REQUIRED",
-                    "reason": f"must_call tool '{tool}' requires manual execution (not in auto-follow safe list).",
-                    "guard_result": guard_result,
-                    "trace": trace,
-                }
-
-            if tool in already_called:
-                return {
-                    "ok": False,
-                    "verdict": "AUTO_FOLLOW_CYCLE_DETECTED",
-                    "reason": f"Tool '{tool}' was already auto-called in this session — aborting to prevent loop.",
-                    "trace": trace,
-                }
-
-            # Build minimal args for each safe tool.
-            tool_args: dict[str, Any] = {"agent_id": config.agent_id}
-            if _task_id:
-                tool_args["task_id"] = _task_id
+                return {"ok": False, "verdict": "MANUAL_INTERVENTION_REQUIRED", "reason": f"{tool} is not auto-follow safe", "trace": trace}
+            if tool in called:
+                return {"ok": False, "verdict": "AUTO_FOLLOW_CYCLE_DETECTED", "reason": f"{tool} repeated", "trace": trace}
+            arguments: dict[str, Any] = {"agent_id": config.agent_id}
+            if current_task:
+                arguments["task_id"] = current_task
+            if current_context:
+                arguments["context_token"] = current_context
             if resource:
-                tool_args["resource"] = resource
-            if _ctx and tool in {"resume_task_context", "before_task"}:
-                tool_args["context_token"] = _ctx
-
-            step_result = call_mcp_tool(tool, tool_args, config.workspace_root)
-            already_called.add(tool)
-            trace.append({"step": f"auto_{tool}", "result": step_result})
-
-            if not step_result.get("ok"):
-                return {
-                    "ok": False,
-                    "verdict": "AUTO_FOLLOW_TOOL_FAILED",
-                    "failed_tool": tool,
-                    "tool_result": step_result,
-                    "trace": trace,
-                }
-
-    return {
-        "ok": False,
-        "verdict": "AUTO_FOLLOW_MAX_ITERATIONS",
-        "reason": f"Reached max {max_iterations} iterations without PRE_ACTION_GUARD_OK.",
-        "trace": trace,
-    }
+                arguments["resource"] = resource
+            if tool == "before_task":
+                arguments.update({"request": request, "intent": intent})
+            result = call_mcp_tool(tool, arguments, config.workspace_root)
+            called.add(tool)
+            trace.append({"step": f"auto_{tool}", "result": result})
+            if not result.get("ok"):
+                return {"ok": False, "verdict": "AUTO_FOLLOW_TOOL_FAILED", "failed_tool": tool, "tool_result": result, "trace": trace}
+            current_task = str(result.get("task_id") or current_task)
+            current_context = str(result.get("context_token") or current_context)
+    return {"ok": False, "verdict": "AUTO_FOLLOW_MAX_ITERATIONS", "trace": trace}
 
 
-# ─────────────────────────────────────────────────────────────
-# Lease extend — prevents ACTION_LEASE_EXPIRED mid-operation
-# ─────────────────────────────────────────────────────────────
-
-def run_lease_extend(
-    config: HostLaunchConfig,
-    lease_id: str,
-    extend_seconds: int | None = None,
-) -> dict[str, Any]:
-    """Extend an active action lease TTL.
-
-    Call BEFORE the lease expires when an operation takes longer than expected
-    (large file writes, slow tool calls, African-latency conditions, etc.).
-
-    Prevents the agent from being blocked mid-operation and forced to restart
-    from workflow_next. The discipline module enforces hard caps on total
-    extension count and cumulative TTL to prevent infinite-loop via extends.
-    """
+def run_lease_extend(config: HostLaunchConfig, lease_id: str, extend_seconds: int | None = None) -> dict[str, Any]:
     if not lease_id:
-        return {"ok": False, "error": "LEASE_ID_REQUIRED", "reason": "lease_id must be provided."}
-
-    args: dict[str, Any] = {
-        "lease_id": lease_id,
-        "agent_id": config.agent_id,
-    }
+        return {"ok": False, "error": "LEASE_ID_REQUIRED"}
+    args: dict[str, Any] = {"lease_id": lease_id, "agent_id": config.agent_id}
     if extend_seconds is not None:
         args["extend_seconds"] = int(extend_seconds)
-
     return call_mcp_tool("lease_extend", args, config.workspace_root)
 
 
-# ─────────────────────────────────────────────────────────────
-# Resource locks — multi-agent concurrency guard
-# ─────────────────────────────────────────────────────────────
-
-def run_resource_lock_claim(
-    config: HostLaunchConfig,
-    resource: str,
-    task_id: str = "",
-    ttl_seconds: int | None = None,
-) -> dict[str, Any]:
-    """Claim an exclusive resource lock for this agent.
-
-    Prevents N orchestrator agents from writing to the same resource
-    concurrently. Lock is separate from action leases so it can be held across
-    multiple apply_patch calls within a single task.
-    """
+def run_resource_lock_claim(config: HostLaunchConfig, resource: str, task_id: str = "", ttl_seconds: int | None = None) -> dict[str, Any]:
     if not resource:
-        return {"ok": False, "error": "RESOURCE_REQUIRED", "reason": "resource must be provided."}
-
-    args: dict[str, Any] = {
-        "agent_id": config.agent_id,
-        "resource": resource,
-        "task_id": task_id or config.task_id,
-    }
+        return {"ok": False, "error": "RESOURCE_REQUIRED"}
+    args: dict[str, Any] = {"agent_id": config.agent_id, "resource": resource, "task_id": task_id or config.task_id}
     if ttl_seconds is not None:
         args["ttl_seconds"] = int(ttl_seconds)
-
     return call_mcp_tool("resource_lock_claim", args, config.workspace_root)
 
 
-def run_resource_lock_release(
-    config: HostLaunchConfig,
-    resource: str,
-) -> dict[str, Any]:
-    """Release a previously claimed resource lock."""
+def run_resource_lock_release(config: HostLaunchConfig, resource: str, lock_id: str = "") -> dict[str, Any]:
     if not resource:
-        return {"ok": False, "error": "RESOURCE_REQUIRED", "reason": "resource must be provided."}
-    return call_mcp_tool(
-        "resource_lock_release",
-        {"agent_id": config.agent_id, "resource": resource},
-        config.workspace_root,
-    )
+        return {"ok": False, "error": "RESOURCE_REQUIRED"}
+    args = {"agent_id": config.agent_id, "resource": resource}
+    if lock_id:
+        args["lock_id"] = lock_id
+    return call_mcp_tool("resource_lock_release", args, config.workspace_root)
 
 
-def run_resource_lock_status(
-    config: HostLaunchConfig,
-    resource: str,
-) -> dict[str, Any]:
-    """Query lock status for a resource without mutating anything."""
+def run_resource_lock_status(config: HostLaunchConfig, resource: str) -> dict[str, Any]:
     if not resource:
-        return {"ok": False, "error": "RESOURCE_REQUIRED", "reason": "resource must be provided."}
-    return call_mcp_tool(
-        "resource_lock_status",
-        {"resource": resource},
-        config.workspace_root,
-    )
+        return {"ok": False, "error": "RESOURCE_REQUIRED"}
+    return call_mcp_tool("resource_lock_status", {"resource": resource}, config.workspace_root)
 
-
-# ─────────────────────────────────────────────────────────────
-# TENOR init bridge — register SCRIBE agent session in MCP (V2.15.5)
-# ─────────────────────────────────────────────────────────────
 
 def run_tenor_init_bridge(
     config: HostLaunchConfig,
@@ -635,45 +427,20 @@ def run_tenor_init_bridge(
     proof_token: str = "",
 ) -> dict[str, Any]:
     if not agent_session_id:
-        return {
-            "ok": False,
-            "verdict": "TENOR_INIT_BRIDGE_INVALID",
-            "reason": "agent_session_id from TENOR INIT is required.",
-        }
-
-    params: dict[str, Any] = {
+        return {"ok": False, "verdict": "TENOR_INIT_BRIDGE_INVALID", "reason": "agent_session_id is required"}
+    args: dict[str, Any] = {
         "agent_session_id": agent_session_id,
         "host_tool": host_tool or config.host_type or "unknown",
-        "model_name": model_name or "",
+        "model_name": model_name,
     }
     if proof_token:
-        params["proof_token"] = proof_token
-
-    result = call_mcp_tool(
-        "tenor_init_bridge",
-        params,
-        config.workspace_root,
-        timeout=30.0,
-    )
-    return result
+        args["proof_token"] = proof_token
+    return call_mcp_tool("tenor_init_bridge", args, config.workspace_root)
 
 
-# ─────────────────────────────────────────────────────────────
-# Workspace audit
-# ─────────────────────────────────────────────────────────────
-
-def run_workspace_audit(
-    config: HostLaunchConfig,
-    task_id: str = "",
-    resource: str = "",
-) -> dict[str, Any]:
-    """Audit workspace for direct-write bypasses (tracked + untracked files)."""
+def run_workspace_audit(config: HostLaunchConfig, task_id: str = "", resource: str = "") -> dict[str, Any]:
     return call_mcp_tool(
         "workspace_audit",
-        {
-            "agent_id": config.agent_id,
-            "task_id": task_id or config.task_id,
-            "resource": resource,
-        },
+        {"agent_id": config.agent_id, "task_id": task_id or config.task_id, "resource": resource},
         config.workspace_root,
     )
