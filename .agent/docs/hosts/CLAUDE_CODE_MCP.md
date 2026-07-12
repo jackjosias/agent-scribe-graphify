@@ -1,68 +1,69 @@
-# Claude Code MCP
+# Claude Code MCP — V2.16 Terrain Guide
 
-Recherche web: 2026-06-21.
+## Canonical TENOR entry
 
-## Source officielle
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-https://docs.anthropic.com/en/docs/claude-code/mcp
+Mechanical local initialization:
 
-## Fichier de config
+```bash
+.agent/workflow/scribe/scribe tenor-init --type cli
+```
 
-`.mcp.json`
+`bootstrap` is internal/legacy, not the public start.
 
-## Commande `.agent`
+## Host configuration
+
+The historical project-local candidate is `.mcp.json`. Verify the current official Claude Code schema and installed version before editing. Configure the current project's STDIO server only:
 
 ```bash
 python3 .agent/mcp/server_entry.py
 ```
 
-## Validation des tools
+Do not use an absolute path to another `.agent` checkout and do not edit user/global configuration without explicit permission.
 
-Verifier que le host expose au minimum:
+## Required V2.16 proof
 
-- `workflow_next`
-- `before_task`
-- `scribe_query`
-- `graphify_query`
-- `propose_patch`
-- `apply_patch`
-- `delete_resource`
-- `finish_task`
+Inside Claude Code, prove the complete MCP tool surface is visible to the model. Local `--list-tools` is not host proof.
 
-Commande locale de controle hors host:
+Then:
 
-```bash
-python3 .agent/mcp/server_entry.py --list-tools
-```
+1. compare a sentinel hash from the host workspace and MCP `file_hash`;
+2. require matching root;
+3. call `tenor_init_bridge` with the TENOR session/proof;
+4. obtain `TENOR_INIT_BRIDGE_OK`;
+5. execute one complete MCP micro-write;
+6. audit native shell/edit bypass paths.
 
-## Permissions a verifier
-
-- Shell direct: verifier si Claude Code expose bash/shell au modele.
-- Edit direct: verifier si Claude Code expose edition directe du workspace hors MCP.
-- Desactivation: verifier si les permissions Claude Code permettent de refuser shell/edit directs et de conserver le MCP `.agent`.
-- Sandbox: verifier si Claude Code peut etre lance via `.agent/scripts/agent_sandbox.py`.
-
-## Direct Tool Neutralization
-
-Avant de classer ce host `SAFE`, verifier explicitement:
-
-1. Les tools natifs write/edit/apply_patch sont desactives, refuses, ou soumis a permission ask stricte.
-2. Le shell ne peut pas ecrire dans le projet, ou toute ecriture shell demande approbation.
-3. Les redirections `>`, `>>`, `tee`, `sed -i`, `perl -pi`, `rm`, `mv`, `cp` et scripts qui ecrivent sont bloques, sandboxes, ou detectes.
-4. Une detection dirty-write compare les fichiers modifies avant/apres la tache.
-5. Si une modification apparait sans trace MCP attendue: `DIRECT_WRITE_BYPASS_DETECTED`, STOP, rapport utilisateur.
-
-Si un seul point est inconnu, le verdict maximal est `ACCEPTABLE` ou `UNKNOWN`, pas `SAFE`.
-
-## Verdict terrain
+Wrong root:
 
 ```text
-MCP visible: UNKNOWN
-MCP tools visibles: UNKNOWN
-Shell direct: UNKNOWN
-Edit/write_file direct: UNKNOWN
-Desactivation shell/edit possible: UNKNOWN
-Sandbox agent_sandbox.py possible: UNKNOWN
-Direct FS test: NOT_TESTED
-Verdict: UNKNOWN
+INIT_BLOCKED_MCP_WRONG_ROOT
 ```
+
+Unproven host:
+
+```text
+HOST_MCP_UNBOUND
+LOCAL_INIT_READY_HOST_MCP_UNBOUND
+```
+
+## Direct-write audit
+
+Verify Claude Code permissions for shell, native edits, redirects, `tee`, `sed -i`, `rm`, `mv`, `cp` and custom scripts. A mutation outside the MCP receipts must yield `DIRECT_WRITE_BYPASS_DETECTED`.
+
+## Terrain verdict
+
+```text
+MCP configuration on final head: NOT_TESTED
+MCP tools visible to Claude Code LLM: UNKNOWN
+Root binding: UNKNOWN
+TENOR_INIT_BRIDGE_OK: NOT_TESTED
+Complete MCP micro-write: NOT_TESTED
+Direct-write bypass: NOT_TESTED
+Final verdict: UNKNOWN
+```
+
+Update this evidence only under `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
