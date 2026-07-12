@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -21,11 +23,21 @@ class GraphifyReadinessTest(unittest.TestCase):
         (self.root / ".agent" / "state" / "outputs" / "graphify-out").mkdir(parents=True)
 
     def tearDown(self) -> None:
+        os.environ.pop(readiness.FIXTURE_ENV, None)
         self.tmp.cleanup()
 
     @property
     def out(self) -> Path:
         return self.root / ".agent" / "state" / "outputs" / "graphify-out"
+
+    def snapshot_out(self) -> dict[str, bytes]:
+        if not self.out.exists():
+            return {}
+        return {
+            path.relative_to(self.out).as_posix(): path.read_bytes()
+            for path in sorted(self.out.rglob("*"))
+            if path.is_file()
+        }
 
     def write_graph(self, graph: dict[str, object]) -> None:
         (self.root / "app.py").write_text("print('ok')\n", encoding="utf-8")
@@ -143,6 +155,44 @@ class GraphifyReadinessTest(unittest.TestCase):
         result = readiness.inspect_graphify_readiness(self.root, allow_fixture=True)
         self.assertTrue(result.ok)
         self.assertEqual(result.verdict, readiness.GRAPHIFY_TEST_FIXTURE_READY)
+
+    def test_smoke_fixture_scope_removes_fixture_when_output_was_absent(self) -> None:
+        shutil.rmtree(self.out)
+        self.assertNotIn(readiness.FIXTURE_ENV, os.environ)
+        with readiness.smoke_fixture_scope(self.root):
+            self.assertTrue(self.out.is_dir())
+            self.assertEqual(os.environ.get(readiness.FIXTURE_ENV), "1")
+            self.assertEqual(
+                readiness.inspect_graphify_readiness(self.root).verdict,
+                readiness.GRAPHIFY_TEST_FIXTURE_READY,
+            )
+        self.assertFalse(self.out.exists())
+        self.assertNotIn(readiness.FIXTURE_ENV, os.environ)
+
+    def test_smoke_fixture_scope_restores_real_graph_exactly(self) -> None:
+        self.write_node_link_real()
+        self.assertTrue(readiness.write_graphify_manifest(self.root)["ok"])
+        (self.out / "cache" / "ast").mkdir(parents=True)
+        (self.out / "cache" / "ast" / "sentinel.bin").write_bytes(b"real-cache\x00\xff")
+        before = self.snapshot_out()
+        with readiness.smoke_fixture_scope(self.root):
+            self.assertEqual(
+                readiness.inspect_graphify_readiness(self.root).verdict,
+                readiness.GRAPHIFY_TEST_FIXTURE_READY,
+            )
+        self.assertEqual(self.snapshot_out(), before)
+        self.assertEqual(readiness.inspect_graphify_readiness(self.root).verdict, readiness.GRAPHIFY_READY)
+
+    def test_smoke_fixture_scope_restores_state_and_env_after_exception(self) -> None:
+        self.write_real()
+        self.assertTrue(readiness.write_graphify_manifest(self.root)["ok"])
+        before = self.snapshot_out()
+        os.environ[readiness.FIXTURE_ENV] = "previous-value"
+        with self.assertRaisesRegex(RuntimeError, "intentional smoke failure"):
+            with readiness.smoke_fixture_scope(self.root):
+                raise RuntimeError("intentional smoke failure")
+        self.assertEqual(os.environ.get(readiness.FIXTURE_ENV), "previous-value")
+        self.assertEqual(self.snapshot_out(), before)
 
     def test_empty_project_placeholder_can_be_bound(self) -> None:
         (self.out / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
