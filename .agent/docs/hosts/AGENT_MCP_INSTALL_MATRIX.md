@@ -1,36 +1,82 @@
-# Agent MCP Install Matrix
+# Agent MCP Install Matrix — V2.16
 
-Derniere recherche web: 2026-06-21.
+## Canonical entry
 
-Commande locale commune: `python3 .agent/mcp/server_entry.py`.
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-Root binding check obligatoire pour tous les hosts: MCP visible ne suffit pas; `MCP_BOUND_TO_CURRENT_PROJECT` doit etre prouve par hash sentinelle cote host et cote MCP.
+Local command:
 
-Host guide obligatoire avant correction config: detecter le host, lire sa
-fiche dans `.agent/docs/hosts/`, puis appliquer uniquement cette strategie. Ne
-pas transposer la strategie OpenCode, Cursor, Codex CLI ou Gemini CLI vers un
-autre host.
+```bash
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+```
 
-| Host | MCP visible possible | Root binding possible | Shell direct désactivable | Write/edit natif désactivable | Permission ask/deny possible | Sandbox possible | Config projet-local possible | Verdict cible possible | Fiche host |
+STDIO MCP command after local readiness:
+
+```bash
+python3 .agent/mcp/server_entry.py
+```
+
+Local `--list-tools` is not host visibility proof.
+
+## Universal gates
+
+Every host must prove, in order:
+
+```text
+local TENOR installation ready
+real Graphify bound
+local MCP server ready
+tools visible to the host LLM
+correct root binding
+tenor_init_bridge OK
+TENOR_INIT_READY
+complete MCP micro-write
+direct-write bypass refused or detected
+```
+
+## Capability matrix
+
+`YES` means supported in principle or documented by the host; it does not mean terrain-proven for this project. `UNKNOWN` remains an open gate.
+
+| Host | Local MCP configurable | Project-local config | Tools visible terrain | Root binding terrain | Bridge terrain | Micro-write terrain | Direct-write audit | Current `.agent` verdict | Guide |
 |---|---|---|---|---|---|---|---|---|---|
-| OpenCode | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | ACCEPTABLE, SAFE_CANDIDATE si permissions/sandbox prouvées | `OPENCODE_MCP.md` |
-| Codex CLI | YES | YES | UNKNOWN | UNKNOWN | YES via approvals partielles | UNKNOWN | UNKNOWN | ACCEPTABLE, SAFE_CANDIDATE si sandbox/deny prouvé | `OPENAI_CODEX_MCP.md` |
-| Claude Code | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CLAUDE_CODE_MCP.md` |
-| Cursor | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CURSOR_MCP.md` |
-| Gemini CLI | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `GEMINI_CLI_MCP.md` |
-| VS Code / Copilot | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `VSCODE_COPILOT_MCP.md` |
-| Cline | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `CLINE_MCP.md` |
-| Roo Code | YES | YES | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | YES | UNKNOWN puis ACCEPTABLE/SAFE_CANDIDATE selon audit | `ROO_CODE_MCP.md` |
-| Kilo Code | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `KCODE_MCP.md` |
-| Windsurf | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `WINDSURF_MCP.md` |
-| unknown | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | `README.md` |
+| OpenCode | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `OPENCODE_MCP.md` |
+| Codex CLI | YES | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `OPENAI_CODEX_MCP.md` |
+| Claude Code | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `CLAUDE_CODE_MCP.md` |
+| Cursor | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `CURSOR_MCP.md` |
+| Gemini CLI | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `GEMINI_CLI_MCP.md` |
+| VS Code / Copilot | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `VSCODE_COPILOT_MCP.md` |
+| Cline | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `CLINE_MCP.md` |
+| Roo Code | YES | YES | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `ROO_CODE_MCP.md` |
+| Kilo Code | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `KCODE_MCP.md` |
+| Windsurf | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `WINDSURF_MCP.md` |
+| Unknown host | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | NOT_TESTED | NOT_TESTED | NOT_TESTED | `UNKNOWN` | `README.md` |
 
-Validation minimale par host:
+## Verdict rules
 
-1. Brancher le serveur STDIO avec `python3 .agent/mcp/server_entry.py`.
-2. Verifier que les tools critiques sont visibles: `workflow_next`, `before_task`, `scribe_query`, `graphify_query`, `propose_patch`, `apply_patch`, `delete_resource`, `finish_task`.
-3. Verifier si shell/bash direct est expose.
-4. Verifier si edit/write_file direct est expose.
-5. Verifier si shell/edit peuvent etre desactives ou si `agent_sandbox.py` peut lancer le host avec projet read-only.
-6. Classer le host: UNSAFE, ACCEPTABLE, SAFE_CANDIDATE, SAFE ou UNKNOWN.
-7. Si un fichier change sans trace MCP attendue, déclarer `DIRECT_WRITE_BYPASS_DETECTED` et stopper.
+- `UNSAFE` — MCP unavailable/non-visible, wrong root, or uncontrolled direct mutation.
+- `ACCEPTABLE` — tools visible/root-bound and workflow usable, but native write paths remain accessible.
+- `SAFE_CANDIDATE` — complete MCP path works and native writes are strict-deny/ask, but full sandbox/bypass evidence is incomplete.
+- `SAFE` — complete host proof, correct root, bridge, micro-write and no uncontrolled mutation path.
+- `UNKNOWN` — missing terrain evidence.
+
+No host may be promoted by documentation assumption.
+
+## Minimum terrain script per host
+
+1. Start with the canonical TENOR trigger.
+2. Complete local init and real Graphify binding.
+3. Configure only the detected host using its guide.
+4. Restart/reconnect the host when required.
+5. Capture evidence that the LLM sees the required MCP tools.
+6. Hash one sentinel from host and MCP to prove the root.
+7. Call `tenor_init_bridge` and require `TENOR_INIT_BRIDGE_OK`.
+8. Execute one complete MCP micro-write.
+9. Attempt a native direct write and prove denial/approval gate or `DIRECT_WRITE_BYPASS_DETECTED`.
+10. Update this matrix and the host guide with actual evidence.
+
+## Maintenance
+
+Follow `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`. When a host guide changes, update this matrix, the active guide, host templates, tests, machine rules and PR body in the same lot.
