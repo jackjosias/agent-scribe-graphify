@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ TENOR_INIT_GATE_READY = "TENOR_INIT_GATE_READY"
 
 _ATOMIC_REPLACE_ATTEMPTS = 10
 _ATOMIC_REPLACE_INITIAL_BACKOFF_SECONDS = 0.01
+_MANIFEST_TRANSACTION_LOCK = threading.RLock()
 _LEGACY_STATE_NAMES = {
     "runtime",
     "proof",
@@ -88,12 +90,8 @@ def _state_dir(project_root: Path) -> Path:
 
 
 def _replace_with_retry(source: Path, target: Path) -> None:
-    """Replace atomically while tolerating short Windows sharing violations.
+    """Replace atomically while tolerating short Windows sharing violations."""
 
-    Windows may reject replacing a file while another thread or process has the
-    previous target open for reading. The retry is intentionally short and
-    bounded; all other errors fail immediately.
-    """
     delay = _ATOMIC_REPLACE_INITIAL_BACKOFF_SECONDS
     for attempt in range(_ATOMIC_REPLACE_ATTEMPTS):
         try:
@@ -157,7 +155,6 @@ def _validate_project_bound_state_dir(project_root: Path) -> tuple[bool, str]:
     root = project_root.resolve()
     agent_dir = root / ".agent"
     state_dir = agent_dir / "state"
-
     if agent_dir.name != ".agent" or state_dir.name != "state":
         return False, "state path must be <project_root>/.agent/state"
     if state_dir.parent != agent_dir:
@@ -216,27 +213,28 @@ def current_installation_fingerprint(project_root: Path) -> dict[str, Any]:
 def write_installation_manifest(project_root: Path, *, init_status: str = INSTALL_STATUS_READY) -> dict[str, Any]:
     if init_status not in {INSTALL_STATUS_PREPARING, INSTALL_STATUS_READY}:
         raise ValueError(f"invalid installation init_status: {init_status}")
-    now = _utc_now()
-    fingerprint = current_installation_fingerprint(project_root)
-    try:
-        existing = load_installation_manifest(project_root)
-    except (OSError, ValueError, json.JSONDecodeError):
-        existing = None
-    data = {
-        "schema": INSTALL_SCHEMA,
-        "project_root": fingerprint["project_root"],
-        "git_root": fingerprint["git_root"],
-        "agent_dir": fingerprint["agent_dir"],
-        "project_name": fingerprint["project_name"],
-        "project_markers": fingerprint["markers"],
-        "project_fingerprint": fingerprint["project_fingerprint"],
-        "init_status": init_status,
-        "created_at": (existing or {}).get("created_at") or now,
-        "last_seen_at": now,
-        "ready_at": now if init_status == INSTALL_STATUS_READY else (existing or {}).get("ready_at") or "",
-    }
-    _atomic_json_write(_manifest_path(project_root), data)
-    return data
+    with _MANIFEST_TRANSACTION_LOCK:
+        now = _utc_now()
+        fingerprint = current_installation_fingerprint(project_root)
+        try:
+            existing = load_installation_manifest(project_root)
+        except (OSError, ValueError, json.JSONDecodeError):
+            existing = None
+        data = {
+            "schema": INSTALL_SCHEMA,
+            "project_root": fingerprint["project_root"],
+            "git_root": fingerprint["git_root"],
+            "agent_dir": fingerprint["agent_dir"],
+            "project_name": fingerprint["project_name"],
+            "project_markers": fingerprint["markers"],
+            "project_fingerprint": fingerprint["project_fingerprint"],
+            "init_status": init_status,
+            "created_at": (existing or {}).get("created_at") or now,
+            "last_seen_at": now,
+            "ready_at": now if init_status == INSTALL_STATUS_READY else (existing or {}).get("ready_at") or "",
+        }
+        _atomic_json_write(_manifest_path(project_root), data)
+        return data
 
 
 def detect_agent_relocation(project_root: Path) -> dict[str, Any]:
@@ -253,7 +251,6 @@ def detect_agent_relocation(project_root: Path) -> dict[str, Any]:
             "purge_required": True,
             "state_dir": str(state_dir),
         }
-
     if manifest is None:
         legacy_state = _state_contains_project_bound_data(state_dir)
         return {
@@ -263,7 +260,6 @@ def detect_agent_relocation(project_root: Path) -> dict[str, Any]:
             "purge_required": legacy_state,
             "state_dir": str(state_dir),
         }
-
     fingerprint = current_installation_fingerprint(root)
     if str(manifest.get("project_root") or "") != fingerprint["project_root"]:
         return {
@@ -325,7 +321,6 @@ def purge_project_bound_state(project_root: Path, *, attempts: int = 5, initial_
             "reason": reason,
             "state_dir": str(state_dir),
         }
-
     last_error = ""
     for attempt in range(max(1, attempts)):
         try:
@@ -343,7 +338,6 @@ def purge_project_bound_state(project_root: Path, *, attempts: int = 5, initial_
             last_error = f"{type(exc).__name__}: {exc}"
             if attempt + 1 < max(1, attempts):
                 time.sleep(initial_backoff_seconds * (2**attempt))
-
     return {
         "ok": False,
         "verdict": PROJECT_BOUND_STATE_PURGE_REFUSED,
@@ -357,7 +351,6 @@ def ensure_fresh_installation_state(project_root: Path, *, allow_purge: bool = T
     root = project_root.resolve()
     detection = detect_agent_relocation(root)
     purge_report: dict[str, Any] | None = None
-
     if detection.get("purge_required"):
         if not allow_purge:
             return {
@@ -368,7 +361,6 @@ def ensure_fresh_installation_state(project_root: Path, *, allow_purge: bool = T
         purge_report = purge_project_bound_state(root)
         if not purge_report.get("ok"):
             return {**purge_report, "detection": detection}
-
     manifest = write_installation_manifest(root, init_status=INSTALL_STATUS_PREPARING)
     initial_verdict = str(detection.get("verdict") or "")
     if purge_report is not None:
@@ -382,7 +374,6 @@ def ensure_fresh_installation_state(project_root: Path, *, allow_purge: bool = T
         verdict = AGENT_INSTALLATION_MANIFEST_CREATED
     else:
         verdict = AGENT_INSTALLATION_CURRENT
-
     return {
         "ok": True,
         "verdict": verdict,
@@ -396,19 +387,20 @@ def ensure_fresh_installation_state(project_root: Path, *, allow_purge: bool = T
 
 def finalize_installation_state(project_root: Path) -> dict[str, Any]:
     root = project_root.resolve()
-    manifest = write_installation_manifest(root, init_status=INSTALL_STATUS_READY)
-    gate = inspect_installation_state(root)
-    if not gate.get("ready"):
+    with _MANIFEST_TRANSACTION_LOCK:
+        manifest = write_installation_manifest(root, init_status=INSTALL_STATUS_READY)
+        gate = inspect_installation_state(root)
+        if not gate.get("ready"):
+            return {
+                "ok": False,
+                "verdict": TENOR_INIT_REQUIRED,
+                "manifest": manifest,
+                "gate": gate,
+            }
         return {
-            "ok": False,
-            "verdict": TENOR_INIT_REQUIRED,
+            "ok": True,
+            "verdict": TENOR_INIT_GATE_READY,
+            "manifest_path": str(_manifest_path(root)),
             "manifest": manifest,
             "gate": gate,
         }
-    return {
-        "ok": True,
-        "verdict": TENOR_INIT_GATE_READY,
-        "manifest_path": str(_manifest_path(root)),
-        "manifest": manifest,
-        "gate": gate,
-    }
