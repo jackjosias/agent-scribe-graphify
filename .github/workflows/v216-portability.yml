@@ -30,8 +30,6 @@ jobs:
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    env:
-      V216_LOG_DIR: ${{ runner.temp }}/v216-core-${{ matrix.os }}-py${{ matrix.python }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +64,8 @@ jobs:
 
       - name: Run portable core tests with structured logs
         shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/v216-core-${{ matrix.os }}-py${{ matrix.python }}
         run: |
           import json
           import os
@@ -141,13 +141,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v216-core-${{ matrix.os }}-py${{ matrix.python }}
-          path: ${{ env.V216_LOG_DIR }}
+          path: ${{ runner.temp }}/v216-core-${{ matrix.os }}-py${{ matrix.python }}
           if-no-files-found: error
           retention-days: 14
 
       - name: Enforce portable test results
         if: always()
         shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/v216-core-${{ matrix.os }}-py${{ matrix.python }}
         run: |
           import json
           import os
@@ -167,8 +169,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: portable-core
-    env:
-      V216_LOG_DIR: ${{ runner.temp }}/v216-linux-deep-validation
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -183,6 +183,8 @@ jobs:
 
       - name: Run sequential validation suite with hard timeout
         shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/v216-linux-deep-validation
         run: |
           import os
           import subprocess
@@ -219,12 +221,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v216-linux-deep-validation
-          path: ${{ env.V216_LOG_DIR }}
+          path: ${{ runner.temp }}/v216-linux-deep-validation
           if-no-files-found: error
           retention-days: 14
 
       - name: Enforce deep validation result
         shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/v216-linux-deep-validation
         run: |
           import os
           from pathlib import Path
