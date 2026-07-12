@@ -13,6 +13,7 @@ from typing import Any
 MCP_DIR_FOR_LOCK = Path(__file__).resolve().parents[1] / "mcp"
 if str(MCP_DIR_FOR_LOCK) not in sys.path:
     sys.path.insert(0, str(MCP_DIR_FOR_LOCK))
+from runtime import installation_state
 from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_busy_message, validation_runtime_lock
 from runtime.state_paths import prepare_state_dirs
 
@@ -24,6 +25,24 @@ def fail(message: str) -> None:
     raise SystemExit(f"SMOKE_FAIL: {message}")
 
 
+def prepare_tenor_gate(root: Path) -> None:
+    """Explicitly prepare the project before starting the MCP server.
+
+    server_entry is intentionally non-destructive and must never initialize or
+    purge state as a side effect. Integration fixtures therefore prepare and
+    finalize their own installation state before the first server process.
+    """
+    prepared = installation_state.ensure_fresh_installation_state(root)
+    if not prepared.get("ok"):
+        fail(f"TENOR fixture prepare failed for {root}: {prepared}")
+    finalized = installation_state.finalize_installation_state(root)
+    if not finalized.get("ok"):
+        fail(f"TENOR fixture finalize failed for {root}: {finalized}")
+    gate = installation_state.inspect_installation_state(root)
+    if not gate.get("ready"):
+        fail(f"TENOR fixture gate not ready for {root}: {gate}")
+
+
 def clean_runtime(root: Path = ROOT) -> None:
     runtime = root / ".agent" / "state" / "runtime"
     for suffix in ("", "-wal", "-shm"):
@@ -33,9 +52,7 @@ def clean_runtime(root: Path = ROOT) -> None:
 
 
 def _smoke_env() -> dict[str, str]:
-    """Return env without AGENT_SCRIBE_GRAPHIFY_ROOT so subprocess DB path
-    is determined by the entry file location (SOURCE_ROOT) regardless of
-    parent process leakage."""
+    """Remove root overrides so each entry binds to its own copied project."""
     return {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
 
 
@@ -47,6 +64,7 @@ def call_tool(name: str, args: dict[str, Any], entry: Path = ENTRY, cwd: Path | 
         text=True,
         capture_output=True,
         timeout=30,
+        check=False,
     )
     if proc.returncode != 0:
         try:
@@ -80,7 +98,14 @@ def task_context_args(before: dict[str, Any]) -> dict[str, str]:
     return {"task_id": before["task_id"], "context_token": before["context_token"]}
 
 
-def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None, resource: str = "", task_id: str = "", context_token: str = "") -> str:
+def acquire_lease(
+    agent_id: str,
+    action: str,
+    ctx: dict[str, str] | None = None,
+    resource: str = "",
+    task_id: str = "",
+    context_token: str = "",
+) -> str:
     args: dict[str, Any] = {"agent_id": agent_id, "planned_action": action, "intent": "write"}
     if ctx:
         args["task_id"] = ctx.get("task_id", "")
@@ -100,6 +125,7 @@ def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None,
 def _scoped_query(request: str, resource: str) -> str:
     return f"{request} resource:{resource}" if resource else request
 
+
 def establish_context(agent_id: str, request: str, intent: str, resource: str) -> dict[str, str]:
     before = call_tool("before_task", {"agent_id": agent_id, "request": request, "intent": intent, "resource": resource})
     if before.get("verdict") != "BEFORE_TASK_OK":
@@ -115,10 +141,7 @@ def establish_context(agent_id: str, request: str, intent: str, resource: str) -
 
 
 def _ensure_graphify_stubs() -> None:
-    """Create minimal canonical graphify stubs so the Graphify Mandatory Guard
-    does not block write operations during the smoke test.
-
-    Never overwrites existing files — real graphify outputs are preserved."""
+    """Create canonical smoke-only graph artifacts without overwriting real outputs."""
     gdir = prepare_state_dirs(ROOT)["graphify_out"]
     gdir.mkdir(parents=True, exist_ok=True)
     for fname, content in [
@@ -209,7 +232,14 @@ def smoke_nominal_workflow() -> None:
         fail(f"resource_lock_claim should acquire hard write lock: {hard_lock}")
     lock_id = hard_lock["lock_id"]
 
-    claim = call_tool("claim_resource", {"agent_id": agent_id, "resource": "tmp-smoke-workflow/file.txt", "mode": "write", "ttl_seconds": 600, **ctx, "action_lease_id": acquire_lease(agent_id, "claim_resource", ctx, resource="tmp-smoke-workflow/file.txt")})
+    claim = call_tool("claim_resource", {
+        "agent_id": agent_id,
+        "resource": "tmp-smoke-workflow/file.txt",
+        "mode": "write",
+        "ttl_seconds": 600,
+        **ctx,
+        "action_lease_id": acquire_lease(agent_id, "claim_resource", ctx, resource="tmp-smoke-workflow/file.txt"),
+    })
     if claim.get("verdict") != "CLAIM_GRANTED" or claim.get("mode") != "patch_queue":
         fail(f"claim should be granted as patch_queue write-gate: {claim}")
     claim_id = claim["claim_id"]
@@ -263,11 +293,21 @@ def smoke_nominal_workflow() -> None:
     if "direct_file_edit" not in next_apply.get("forbidden", []):
         fail(f"workflow_next must forbid direct writes before apply_patch: {next_apply}")
 
-    finish_pending = call_tool("finish_task", {"agent_id": agent_id, "summary": "should be refused", **ctx, "action_lease_id": acquire_lease(agent_id, "finish_task", ctx)})
+    finish_pending = call_tool("finish_task", {
+        "agent_id": agent_id,
+        "summary": "should be refused",
+        **ctx,
+        "action_lease_id": acquire_lease(agent_id, "finish_task", ctx),
+    })
     if finish_pending.get("verdict") != "FINISH_REFUSED_PENDING_PATCHES":
         fail(f"finish should be refused before apply_patch: {finish_pending}")
 
-    applied = call_tool("apply_patch", {"agent_id": agent_id, "patch_id": patch_id, **ctx, "action_lease_id": acquire_lease(agent_id, "apply_patch", ctx)})
+    applied = call_tool("apply_patch", {
+        "agent_id": agent_id,
+        "patch_id": patch_id,
+        **ctx,
+        "action_lease_id": acquire_lease(agent_id, "apply_patch", ctx),
+    })
     if applied.get("verdict") != "PATCH_APPLIED":
         fail(f"apply_patch failed: {applied}")
     if target.read_text(encoding="utf-8") != "line2\n":
@@ -281,11 +321,7 @@ def smoke_nominal_workflow() -> None:
     if applied_list.get("status") != "PATCHES_LISTED" or applied_list.get("count") != 1:
         fail(f"applied patch should be listed: {applied_list}")
 
-    expect_next_tool({
-        "agent_id": agent_id,
-        "intent": "finish",
-        "last_verdict": "PATCH_APPLIED",
-    }, "release_claim")
+    expect_next_tool({"agent_id": agent_id, "intent": "finish", "last_verdict": "PATCH_APPLIED"}, "release_claim")
 
     released = call_tool("release_claim", {"agent_id": agent_id, "claim_id": claim_id, "summary": "smoke cleanup"})
     if released.get("verdict") != "CLAIM_RELEASED":
@@ -309,11 +345,7 @@ def smoke_nominal_workflow() -> None:
     if record.get("verdict") != "SCRIBE_RECORD_STAGED_ONLY":
         fail(f"scribe_record failed: {record}")
 
-    expect_next_tool({
-        "agent_id": agent_id,
-        "intent": "finish",
-        "last_verdict": "SCRIBE_RECORD_STAGED_ONLY",
-    }, "finish_task")
+    expect_next_tool({"agent_id": agent_id, "intent": "finish", "last_verdict": "SCRIBE_RECORD_STAGED_ONLY"}, "finish_task")
 
     canonical_skip_reason = (
         "This smoke only verifies runtime MCP gates and a transient workflow mutation; "
@@ -422,8 +454,14 @@ def smoke_portable_copy() -> None:
         if not (new_agent / "mcp" / "runtime" / "db.py").is_file():
             fail("portable copy lost source module .agent/mcp/runtime/db.py")
 
+        prepare_tenor_gate(new_root)
         entry = new_agent / "mcp" / "server_entry.py"
-        boot = call_tool("bootstrap", {"host_tool": "portable-copy-smoke", "model_name": "test", "run_legacy_bootstrap": False}, entry=entry, cwd=tempfile.gettempdir())
+        boot = call_tool(
+            "bootstrap",
+            {"host_tool": "portable-copy-smoke", "model_name": "test", "run_legacy_bootstrap": False},
+            entry=entry,
+            cwd=new_root,
+        )
         if boot.get("verdict") != "BOOT_OK_MCP":
             fail(f"portable bootstrap failed: {boot}")
         if str(new_root) not in boot["runtime"]["db"]:
@@ -436,7 +474,15 @@ def smoke_portable_copy() -> None:
 
 
 def smoke_tool_listing() -> None:
-    proc = subprocess.run([sys.executable, str(ENTRY), "--list-tools"], cwd=str(ROOT), env=_smoke_env(), text=True, capture_output=True, timeout=30)
+    proc = subprocess.run(
+        [sys.executable, str(ENTRY), "--list-tools"],
+        cwd=str(ROOT),
+        env=_smoke_env(),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
     if proc.returncode != 0:
         fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
     for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "scribe_commit_gate_status", "scribe_commit_gate_resolve", "apply_patch", "delete_resource"):
@@ -447,6 +493,7 @@ def smoke_tool_listing() -> None:
 def main() -> int:
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
+    prepare_tenor_gate(ROOT)
     clean_runtime()
     _ensure_graphify_stubs()
     smoke_nominal_workflow()
