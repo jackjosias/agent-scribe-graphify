@@ -30,6 +30,8 @@ jobs:
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      V216_LOG_DIR: ${{ runner.temp }}/v216-core-${{ matrix.os }}-py${{ matrix.python }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,6 +68,7 @@ jobs:
         shell: python
         run: |
           import json
+          import os
           import subprocess
           import sys
           import traceback
@@ -83,7 +86,7 @@ jobs:
               ("scribe_bootstrap", ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"),
               ("host_adapter", ".agent/mcp/tests/test_host_adapter_autoguard.py"),
           ]
-          output_dir = Path("ci-logs")
+          output_dir = Path(os.environ["V216_LOG_DIR"])
           output_dir.mkdir(parents=True, exist_ok=True)
           results_path = output_dir / "results.json"
           results = []
@@ -138,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: v216-core-${{ matrix.os }}-py${{ matrix.python }}
-          path: ci-logs
+          path: ${{ env.V216_LOG_DIR }}
           if-no-files-found: error
           retention-days: 14
 
@@ -147,9 +150,10 @@ jobs:
         shell: python
         run: |
           import json
+          import os
           from pathlib import Path
 
-          results_path = Path("ci-logs/results.json")
+          results_path = Path(os.environ["V216_LOG_DIR"]) / "results.json"
           if not results_path.is_file():
               raise SystemExit("PORTABLE_RESULTS_MISSING")
           results = json.loads(results_path.read_text(encoding="utf-8"))
@@ -163,6 +167,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: portable-core
+    env:
+      V216_LOG_DIR: ${{ runner.temp }}/v216-linux-deep-validation
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -178,11 +184,13 @@ jobs:
       - name: Run sequential validation suite with hard timeout
         shell: python
         run: |
+          import os
           import subprocess
           import sys
           from pathlib import Path
 
-          Path("ci-logs").mkdir(parents=True, exist_ok=True)
+          output_dir = Path(os.environ["V216_LOG_DIR"])
+          output_dir.mkdir(parents=True, exist_ok=True)
           try:
               completed = subprocess.run(
                   [sys.executable, ".agent/scripts/validation_suite.py"],
@@ -202,25 +210,30 @@ jobs:
               stderr += "\nVALIDATION_SUITE_TIMEOUT_600S\n"
               returncode = 124
           combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
-          Path("ci-logs/deep-validation.log").write_text(combined, encoding="utf-8")
+          (output_dir / "deep-validation.log").write_text(combined, encoding="utf-8")
           print("\n".join(combined.splitlines()[-120:]), flush=True)
-          Path("ci-logs/deep-validation-exit.txt").write_text(f"{returncode}\n", encoding="utf-8")
+          (output_dir / "deep-validation-exit.txt").write_text(f"{returncode}\n", encoding="utf-8")
 
       - name: Upload deep validation logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: v216-linux-deep-validation
-          path: ci-logs
+          path: ${{ env.V216_LOG_DIR }}
           if-no-files-found: error
           retention-days: 14
 
       - name: Enforce deep validation result
         shell: python
         run: |
+          import os
           from pathlib import Path
 
-          returncode = int(Path("ci-logs/deep-validation-exit.txt").read_text(encoding="utf-8").strip())
+          returncode = int(
+              (Path(os.environ["V216_LOG_DIR"]) / "deep-validation-exit.txt")
+              .read_text(encoding="utf-8")
+              .strip()
+          )
           if returncode != 0:
               raise SystemExit(f"VALIDATION_SUITE_FAILED rc={returncode}")
           print("VALIDATION_SUITE_OK")
