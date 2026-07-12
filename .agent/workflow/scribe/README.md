@@ -1,149 +1,173 @@
-# SCRIBE Portable Workflow Bundle
+# SCRIBE Portable Workflow Bundle — V2.16
 
-`.agent/workflow/scribe/` is the single portable SCRIBE workflow root.
+`.agent/workflow/scribe/` is the single portable SCRIBE/TENOR workflow root.
 
-## Stabilized Baseline 2026-06-01
+## Canonical entry
 
-This bundle is stable. Do not keep improving SCRIBE infrastructure unless a real
-SCRIBE bug, red test, or documentation drift is observed.
-
-- SEL tests: `81 OK`.
-- RAG tests: `25 OK`.
-- `scribe-rag gate`: green at `8/8`.
-- `scribe doctor --suggest-fix`: `0 error`; `W009` legacy pre-V3.2 is cosmetic.
-- Identity/presence: unique session IDs, `os.getpid()` PIDs, stale PID cleanup.
-- Coordination: claims have `ttl_seconds` and `expires_at`; expired or legacy no-TTL claims are stale.
-- Lock release: validates agent/surface before stale cleanup; use `SCRIBE_OWNER_PID` or `--owner-pid` for long-lived ownership.
-- Causal ratio last measured around `17.5%`; target is `35%`, improved only by real future SCAR/GHOST evidence.
-- Pain capture reflex: do not chase the ratio, but every resolved bug after >2 attempts, regression, costly rollback, or broken browser/visual smoke must become a SCAR with `cause_racine`, `resolution`, and `test_binding`, then be retrieved before similar work.
-- Reference backup: `~/backups/agent-scribe-stable-20260601.tar.gz`.
-
-Final operating rule: STOP `.agent`. Return to product work; use SCRIBE only as
-memory and guardrail until a real SCRIBE defect appears.
-
-## Canonical Commands
-
-When the full `.agent/` directory has been copied into a project, the first host-agent prompt should be:
+For a host LLM session, the human prompt is:
 
 ```text
 TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 ```
 
-That prompt must make the agent read the project skill first, not global OpenCode/Codex/Gemini configs. The skill then runs the deterministic init proof. If operating manually after copying only the workflow directory, run:
+The project-local skill is read first. The deterministic command is:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
 ```
 
-`tenor-init` runs bootstrap internally, records agent presence, acknowledges workflow, queries SCRIBE through `scribe-rag`, and prints `SCRIBE-CHECK TENOR V4 — MACHINE PROOF`. For very old bundles without `tenor-init`, fall back to `scribe bootstrap` plus `scribe-rag context`.
+Windows:
 
-Choose the smallest safe tier from `sel/docs/friction-policy.md`:
+```powershell
+python .agent/workflow/scribe/scribe tenor-init --type cli
+```
+
+`tenor-init` is the public authority for installation, relocation and recovery. It classifies the project before touching SCRIBE, verifies Graphify, finalizes the installation, records a session and prints a machine proof.
+
+`bootstrap` remains an internal/legacy command. It must not be documented as the normal V2.16 start and must not be used to bypass `TENOR_INIT_REQUIRED`.
+
+## Local versus host readiness
+
+After local init:
 
 ```bash
-# NANO: < 30 min, one file, no shared surface
-.agent/workflow/scribe/scribe-rag context
-
-# STANDARD: significant implementation
-.agent/workflow/scribe/scribe-rag build
-.agent/workflow/scribe/scribe-rag context
-.agent/workflow/scribe/scribe-rag challenge "<plan>"
-
-# CRITICAL or SCRIBE/shared-surface mutation
-.agent/workflow/scribe/scribe workflow read --agent <name> --type <extension|cli|api|unknown>
-.agent/workflow/scribe/scribe workflow check --agent <name>
-.agent/workflow/scribe/scribe-rag preflight --tier CRITICAL --strict "<plan>"
+python .agent/mcp/server_entry.py --list-tools
 ```
 
-Run the gate for bundle changes:
+This proves only the project-local MCP server can start. It does not prove the tools are visible to OpenCode, Codex, Cline, Cursor or another host.
+
+Global readiness requires:
+
+```text
+local installation ready
+real Graphify bound
+local MCP listable
+host tools visible
+root binding proved
+tenor_init_bridge OK
+TENOR_INIT_READY
+```
+
+## Graphify contract
+
+Canonical application outputs:
+
+```text
+.agent/state/outputs/graphify-out/graph.json
+.agent/state/outputs/graphify-out/GRAPH_REPORT.md
+.agent/state/outputs/graphify-out/graph.html
+.agent/state/outputs/graphify-out/GRAPHIFY_READY.json
+```
+
+Supported explicit edge representations:
+
+```text
+nodes + edges
+nodes + links
+```
+
+Real Graphify currently produces NetworkX node-link data with `links`. Missing, stale, wrong-root, stub, invalid or contradictory graphs block writes.
+
+Bounded project build:
 
 ```bash
-.agent/workflow/scribe/scribe-rag gate
+.agent/workflow/scribe/scribe graph --project-build --timeout 180
 ```
+
+A human may explicitly increase the timeout for a large codebase.
 
 ## Layout
 
-- `scribe`: maintenance, `tenor-init`, bootstrap, doctor, lock, sync, graph, worktree, and SCRIBE writes.
-- `scribe-rag`: canonical read/retrieval interface for agents.
-- `sel/`: internal SCRIBE engineering local causal retrieval engine.
-- `rag/`: BM25 retrieval layer that calls the local SEL engine.
-- `sel/docs/friction-policy.md`: tier selector, including NANO.
-- `sel/docs/live-coordination.md`: canonical agent-pool live coordination workflow.
+- `scribe` — canonical maintenance and TENOR CLI.
+- `scribe-rag` — canonical agent memory retrieval interface.
+- `sel/` — internal SCRIBE engine and manuals.
+- `rag/` — BM25/hybrid retrieval implementation.
+- `sel/docs/friction-policy.md` — smallest-safe-tier selector.
+- `sel/docs/live-coordination.md` — agent-pool live coordination.
+- `sel/docs/multi-agent-installation.md` — installation and six-terminal contract.
 
-## Retrieval Policy
+Root `./scribe`, root `scripts/` and root `graphify-out/` are legacy compatibility surfaces, not canonical V2.16 paths.
 
-BM25 is the canonical scribe-rag mode while it retrieves the right SCRIBE
-memories. Hybrid embeddings are tested only after recall-loss evidence: eval
-below `7/8`, a query missing a known relevant SCRIBE entry, challenge missing a
-directly related SCAR/VAC/GHOST, or repeated off-topic results for normal project
-wording. A local `all-MiniLM-L6-v2` model or installed `sentence-transformers`
-package is not enough reason to switch.
+## Retrieval policy
 
-## Canonical Surface Sync
+Agents retrieve through `scribe-rag` or MCP `scribe_query`, not by reading `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly.
 
-After any SCRIBE workflow evolution, update and verify the canonical surfaces as
-one set: `AGENTS.md`, `.agent/rules/scribe.md`,
-`.agent/skills/init-tenor/SKILL.md`, `.agent/workflow/scribe/README.md`,
-`.agent/workflow/scribe/rag/README.md`,
-`.agent/workflow/scribe/sel/docs/AGENTS.md`,
-`.agent/workflow/scribe/sel/docs/friction-policy.md`,
-`.agent/workflow/scribe/sel/docs/scribe.md`, and
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe`. Archive `.old` files are historical and
-non-canonical.
+SCRIBE answers why, what pain occurred, what was rejected and what must not be repeated. Graphify answers what exists, where it lives, how it connects and what the blast radius is.
 
-## AutoDream Post-Implementation
+A memory query is valid only when its result changes the plan or is explicitly challenged.
 
-Agents cannot detect real user idle time. After a real implementation has been
-delivered and locally validated, the agent may ask whether the user wants to run
-AutoDream. The executable command is:
+## Task workflow
 
-```bash
-.agent/workflow/scribe/scribe-rag autodream --read-only
+A product mutation requires:
+
+```text
+workflow_next
+before_task
+targeted scribe_query
+targeted graphify_query
+pre_action_guard
+resource_lock_claim
+claim_resource
+file_hash
+propose_patch
+apply_patch
+workspace_audit
+scribe_record or auditable causal skip
+release claim and lock
+finish_task
+workflow_next -> READY_FOR_NEXT_TASK
 ```
 
-AutoDream is a bounded read-only review: it digests current diff surfaces,
-compacts session context from the existing RAG index, detects contradictions
-across docs/SCRIBE rules, and proposes causal memory candidates. It proves that
-protected memory/runtime files stayed unchanged. It must not edit source, mutate
-SCRIBE, touch generated artifacts, start background daemons, or commit. Any write
-discovered by AutoDream becomes a separate user-approved task with workflow ack,
-doctor, lock, sync, and focused validation.
+Direct native writes are not an equivalent fallback.
 
-No legacy sibling workflow directory is part of the portable bundle. New projects
-should copy this directory as one unit and use the root commands above. A sibling
-`.agent/workflow/multi-agent/` directory is non-canonical; migrate its content
-under `.agent/workflow/scribe/`.
+## Multi-agent startup
 
-## CI / Pre-Commit Gate
+Every terminal runs its own TENOR INIT. The shared bootstrap is serialized; each terminal receives a separate identity and proof.
+
+Agents share runtime SQLite, SCRIBE, Graphify, claims, locks and patch queue, but never share `agent_id`, proof token, lease or ownership credentials.
+
+`TENOR_INIT_SAME_PROJECT` must never purge active coordination.
+
+## CI and validation
+
+Primary gates:
 
 ```bash
 .agent/workflow/scribe/scribe-rag gate
+python .agent/scripts/validation_suite.py
 ```
 
-The gate exits non-zero unless the SCRIBE-RAG protocol eval is fully green and at
-least `8/8`.
+The V2.16 portability workflow covers Ubuntu, macOS and Windows. Linux deep validation covers integration/red-team scenarios and Git hygiene.
 
-Portable pre-commit hook:
+A green CI run does not replace host-UI terrain proof.
 
-```bash
-.agent/workflow/scribe/hooks/pre-commit
+## Documentation synchronization
+
+After every protocol evolution, update code, tests, generated templates, canonical docs and the PR body as one set.
+
+Mandatory policy:
+
+```text
+.agent/docs/DOCUMENTATION_SYNC_POLICY.md
 ```
 
-A repository may symlink or copy that file to `.git/hooks/pre-commit`; CI can
-call the same script directly. This repo also ships `.github/workflows/scribe-rag-gate.yml`,
-which runs `.agent/workflow/scribe/scribe-rag gate` on push and pull request.
+Canonical surfaces include:
 
-## Multi-Agent Agent-Pool Startup
-
-```bash
-.agent/workflow/scribe/scribe whoami --type cli --surface idle
-.agent/workflow/scribe/scribe workflow read --agent <session-id> --type cli
-.agent/workflow/scribe/scribe workflow status
-.agent/workflow/scribe/scribe coordination status
+```text
+README.md
+AGENTS.md
+.agent/rules/scribe.md
+.agent/rules/tenor-init-v2.json
+.agent/skills/init-tenor/SKILL.md
+.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md
+.agent/docs/V2.16_TERRAIN_FINDINGS.md
+.agent/docs/hosts/README.md
+.agent/workflow/scribe/README.md
+.agent/workflow/scribe/sel/docs/AGENTS.md
+.agent/workflow/scribe/sel/docs/scribe.md
+.agent/workflow/scribe/sel/docs/multi-agent-installation.md
+.agent/host_adapter/templates.py
+.agent/workflow/scribe/sel/scripts/scribe_install_templates.py
 ```
 
-Use `workflow status --required ... --strict` only when a human explicitly
-imposes a named gate. Otherwise the pool is dynamic: each terminal starts idle,
-then claims semantic work such as `indicator:X` when a concrete task arrives.
-
-`scribe lock acquire` refuses SCRIBE writes or named shared-surface locks when
-the requesting agent has no fresh workflow ack for the current docs digest.
+Dated baselines and `.old` files are historical and non-authoritative.
