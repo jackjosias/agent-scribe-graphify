@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import time
@@ -148,9 +149,13 @@ def _read_lock(path: Path) -> dict[str, Any]:
 
 
 def _payload_age_seconds(path: Path, payload: dict[str, Any]) -> float:
-    raw = payload.get("updated_epoch", payload.get("created_epoch", 0.0))
+    raw = payload.get("updated_epoch")
+    if raw is None:
+        raw = payload.get("created_epoch")
     try:
         epoch = float(raw)
+        if not math.isfinite(epoch) or epoch <= 0.0:
+            raise ValueError("invalid lock epoch")
     except (TypeError, ValueError):
         try:
             epoch = path.stat().st_mtime
