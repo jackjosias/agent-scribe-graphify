@@ -54,6 +54,38 @@ class HostLaunchConfig:
         }
 
 
+def _build_pythonpath(workspace_root: Path) -> str:
+    """Build a deterministic import path without inheriting an implicit CWD.
+
+    Host adapters may execute a workspace-local entrypoint that delegates to a
+    source checkout during tests or development. Preserve absolute, existing
+    interpreter paths while rejecting empty/relative entries that would make
+    imports depend on the caller's current directory.
+    """
+    candidates: list[str] = [str((workspace_root / ".agent" / "mcp").resolve())]
+    candidates.extend(str(item) for item in sys.path if item)
+    existing_env = os.environ.get("PYTHONPATH", "")
+    if existing_env:
+        candidates.extend(part for part in existing_env.split(os.pathsep) if part)
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        try:
+            path = Path(raw).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError):
+            continue
+        if not path.exists():
+            continue
+        value = str(path)
+        key = os.path.normcase(value)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(value)
+    return os.pathsep.join(normalized)
+
+
 def build_guarded_environment(config: HostLaunchConfig) -> dict[str, str]:
     env = dict(os.environ)
     env.update({
@@ -63,6 +95,7 @@ def build_guarded_environment(config: HostLaunchConfig) -> dict[str, str]:
         "TASK_ID": config.task_id,
         "CONTEXT_TOKEN": config.context_token,
         "SCRIBE_OWNER_PID": str(os.getpid()),
+        "PYTHONPATH": _build_pythonpath(config.workspace_root),
     })
     return env
 
@@ -167,9 +200,6 @@ def call_mcp_tool(
 
     config = HostLaunchConfig(agent_id=str(args.get("agent_id") or ""), workspace_root=workspace_root)
     env = build_guarded_environment(config)
-    mcp_dir = str(workspace_root / ".agent" / "mcp")
-    existing = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = mcp_dir if not existing else f"{mcp_dir}{os.pathsep}{existing}"
     command = [sys.executable, str(entry), "--call", tool_name, "--args", json.dumps(args)]
     delay = _CALL_RETRY_BASE_DELAY
     attempts = max(1, retries)
