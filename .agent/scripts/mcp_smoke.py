@@ -13,9 +13,8 @@ from typing import Any
 MCP_DIR_FOR_LOCK = Path(__file__).resolve().parents[1] / "mcp"
 if str(MCP_DIR_FOR_LOCK) not in sys.path:
     sys.path.insert(0, str(MCP_DIR_FOR_LOCK))
-from runtime import installation_state
+from runtime import graphify_readiness, installation_state
 from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_busy_message, validation_runtime_lock
-from runtime.state_paths import prepare_state_dirs
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
@@ -26,12 +25,7 @@ def fail(message: str) -> None:
 
 
 def prepare_tenor_gate(root: Path) -> None:
-    """Explicitly prepare the project before starting the MCP server.
-
-    server_entry is intentionally non-destructive and must never initialize or
-    purge state as a side effect. Integration fixtures therefore prepare and
-    finalize their own installation state before the first server process.
-    """
+    """Prepare a fixture explicitly; server startup is intentionally read-only."""
     prepared = installation_state.ensure_fresh_installation_state(root)
     if not prepared.get("ok"):
         fail(f"TENOR fixture prepare failed for {root}: {prepared}")
@@ -52,8 +46,10 @@ def clean_runtime(root: Path = ROOT) -> None:
 
 
 def _smoke_env() -> dict[str, str]:
-    """Remove root overrides so each entry binds to its own copied project."""
-    return {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
+    """Bind each entry to its project and explicitly authorize smoke fixtures."""
+    env = {key: value for key, value in os.environ.items() if key != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
+    env[graphify_readiness.FIXTURE_ENV] = "1"
+    return env
 
 
 def call_tool(name: str, args: dict[str, Any], entry: Path = ENTRY, cwd: Path | str = ROOT) -> dict[str, Any]:
@@ -140,20 +136,14 @@ def establish_context(agent_id: str, request: str, intent: str, resource: str) -
     return ctx
 
 
-def _ensure_graphify_stubs() -> None:
-    """Create canonical smoke-only graph artifacts without overwriting real outputs."""
-    gdir = prepare_state_dirs(ROOT)["graphify_out"]
-    gdir.mkdir(parents=True, exist_ok=True)
-    for fname, content in [
-        ("graph.json", '{"nodes":[],"edges":[]}'),
-        ("GRAPH_REPORT.md", "# Smoke stub Graph Report\n"),
-        ("graph.html", "<html><body></body></html>\n"),
-    ]:
-        path = gdir / fname
-        if not path.exists():
-            path.write_text(content, encoding="utf-8")
-    (gdir / "cache").mkdir(parents=True, exist_ok=True)
-    (gdir / "cache" / "ast").mkdir(parents=True, exist_ok=True)
+def _ensure_graphify_stubs(root: Path = ROOT) -> None:
+    """Create an explicitly marked fixture; never masquerade as terrain readiness."""
+    result = graphify_readiness.write_smoke_fixture(root)
+    if not result.get("ok"):
+        fail(f"cannot create Graphify smoke fixture for {root}: {result}")
+    verified = graphify_readiness.inspect_graphify_readiness(root, allow_fixture=True)
+    if not verified.ok or verified.verdict != graphify_readiness.GRAPHIFY_TEST_FIXTURE_READY:
+        fail(f"Graphify smoke fixture failed readiness verification: {verified.to_dict()}")
 
 
 def smoke_nominal_workflow() -> None:
@@ -220,7 +210,6 @@ def smoke_nominal_workflow() -> None:
 
     expect_next_tool({
         "agent_id": agent_id,
-        "request": "modify smoke workflow file",
         "intent": "write",
         "resource": "tmp-smoke-workflow/file.txt",
         "last_verdict": graphify["verdict"],
@@ -455,6 +444,7 @@ def smoke_portable_copy() -> None:
             fail("portable copy lost source module .agent/mcp/runtime/db.py")
 
         prepare_tenor_gate(new_root)
+        _ensure_graphify_stubs(new_root)
         entry = new_agent / "mcp" / "server_entry.py"
         boot = call_tool(
             "bootstrap",
