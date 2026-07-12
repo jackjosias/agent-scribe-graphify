@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -139,6 +140,24 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertTrue(second["ok"])
         self.assertFalse(second["changed"])
         self.assertEqual(content, target.read_text(encoding="utf-8"))
+        self.assertTrue(verify_instruction_installation(target))
+        self.assertEqual(list(target.parent.glob(f".{target.name}.*.tmp")), [])
+
+    def test_concurrent_install_instructions_is_collision_proof(self) -> None:
+        target = self.root / "AGENTS.md"
+        target.write_text("Manual project rule.\n", encoding="utf-8")
+
+        def install(_: int) -> dict[str, Any]:
+            return install_host_instructions(target, "opencode", self.root)
+
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(install, range(64)))
+
+        self.assertTrue(all(result.get("ok") for result in results), results)
+        content = target.read_text(encoding="utf-8")
+        self.assertTrue(content.startswith("Manual project rule."))
+        self.assertEqual(content.count("auto-guard:start"), 1)
+        self.assertEqual(content.count("auto-guard:end"), 1)
         self.assertTrue(verify_instruction_installation(target))
         self.assertEqual(list(target.parent.glob(f".{target.name}.*.tmp")), [])
 
