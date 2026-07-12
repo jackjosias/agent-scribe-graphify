@@ -97,6 +97,10 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
             os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         shutil.rmtree(self.root, ignore_errors=True)
 
+    def assert_no_instruction_residue(self, target: Path) -> None:
+        self.assertEqual(list(target.parent.glob(f".{target.name}.*.tmp")), [])
+        self.assertFalse(target.with_name(f".{target.name}.agent-instructions.lock").exists())
+
     def test_policy_requires_complete_v216_surface(self) -> None:
         required = HostPolicy(self.root).get_required_tools()
         for tool in (
@@ -141,7 +145,7 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertFalse(second["changed"])
         self.assertEqual(content, target.read_text(encoding="utf-8"))
         self.assertTrue(verify_instruction_installation(target))
-        self.assertEqual(list(target.parent.glob(f".{target.name}.*.tmp")), [])
+        self.assert_no_instruction_residue(target)
 
     def test_concurrent_install_instructions_is_collision_proof(self) -> None:
         target = self.root / "AGENTS.md"
@@ -159,7 +163,51 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertEqual(content.count("auto-guard:start"), 1)
         self.assertEqual(content.count("auto-guard:end"), 1)
         self.assertTrue(verify_instruction_installation(target))
-        self.assertEqual(list(target.parent.glob(f".{target.name}.*.tmp")), [])
+        self.assert_no_instruction_residue(target)
+
+    def test_multi_process_install_instructions_is_collision_proof(self) -> None:
+        target = self.root / "AGENTS.md"
+        target.write_text("Manual project rule.\n", encoding="utf-8")
+        script = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "from host_adapter.instructions import install_host_instructions\n"
+            "target = Path(sys.argv[1])\n"
+            "root = Path(sys.argv[2])\n"
+            "result = install_host_instructions(target, 'opencode', root)\n"
+            "print(json.dumps(result, sort_keys=True))\n"
+            "raise SystemExit(0 if result.get('ok') else 1)\n"
+        )
+        environment = dict(os.environ)
+        python_paths = [str(ROOT_DIR), str(MCP_DIR)]
+        existing = environment.get("PYTHONPATH", "")
+        if existing:
+            python_paths.append(existing)
+        environment["PYTHONPATH"] = os.pathsep.join(python_paths)
+
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, str(target), str(self.root)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+            )
+            for _ in range(12)
+        ]
+        failures: list[dict[str, Any]] = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=45)
+            if process.returncode != 0:
+                failures.append({"returncode": process.returncode, "stdout": stdout, "stderr": stderr})
+
+        self.assertEqual(failures, [])
+        content = target.read_text(encoding="utf-8")
+        self.assertTrue(content.startswith("Manual project rule."))
+        self.assertEqual(content.count("auto-guard:start"), 1)
+        self.assertEqual(content.count("auto-guard:end"), 1)
+        self.assertTrue(verify_instruction_installation(target))
+        self.assert_no_instruction_residue(target)
 
     def test_install_instructions_preserves_existing_content(self) -> None:
         target = self.root / "AGENTS.md"
