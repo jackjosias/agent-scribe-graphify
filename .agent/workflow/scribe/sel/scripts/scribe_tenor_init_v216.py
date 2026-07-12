@@ -22,6 +22,7 @@ _MCP_ROOT = Path(__file__).resolve().parents[4] / "mcp"
 if str(_MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(_MCP_ROOT))
 
+from runtime import graphify_readiness  # noqa: E402
 from runtime.tenor_init_orchestrator import (  # noqa: E402
     TENOR_INIT_ALREADY_RUNNING,
     TenorInitBusy,
@@ -43,11 +44,28 @@ def _wait_notice(lock: dict[str, object]) -> None:
     _flush(f"TENOR_INIT_WAIT shared bootstrap running pid={owner} since={started} stage={stage}")
 
 
+def _graph_machine_summary(project_root: Path) -> tuple[dict[str, str], graphify_readiness.Readiness]:
+    readiness = graphify_readiness.inspect_graphify_readiness(project_root, allow_fixture=False)
+    graph = parse_graph_report(graphify_out_dir(project_root) / "GRAPH_REPORT.md")
+    graph["status"] = readiness.verdict
+    graph["nodes"] = str(readiness.node_count)
+    graph["edges"] = str(readiness.edge_count)
+    return graph, readiness
+
+
 def main() -> int:
     args = build_parser().parse_args()
     project_root = Path(args.root).resolve()
     if not (project_root / SKILL_PATH).exists():
         print(f"TENOR INIT ERROR: missing {SKILL_PATH}", file=sys.stderr, flush=True)
+        return 2
+    if args.skip_graphify:
+        print(
+            "TENOR INIT ERROR: --skip-graphify is forbidden on the canonical init path; "
+            "use bounded `scribe graph --project-build` or an isolated test fixture.",
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
 
     agent_id = args.agent or os.environ.get("SCRIBE_AGENT_ID") or f"{args.agent_type}-{os.getpid()}-tenor-init"
@@ -82,7 +100,7 @@ def main() -> int:
                 project_root,
                 agent=agent_id,
                 agent_type=args.agent_type,
-                skip_graphify=args.skip_graphify,
+                skip_graphify=False,
                 installation_plan=installation,
             )
             print_report(bootstrap_report)
@@ -90,6 +108,23 @@ def main() -> int:
             if not bootstrap_ok:
                 print("TENOR_INIT_BOOTSTRAP_FAILED", file=sys.stderr, flush=True)
                 return 4
+
+            lock = refresh_tenor_init_lock(lock, stage="verify_graphify_readiness")
+            _flush("TENOR_INIT_STAGE verify_graphify_readiness")
+            graph, graph_ready = _graph_machine_summary(project_root)
+            if not graph_ready.ok:
+                print(
+                    f"TENOR_INIT_GRAPHIFY_INVALID verdict={graph_ready.verdict} "
+                    f"reason={graph_ready.reason} next={graph_ready.next_action}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 4
+            _flush(
+                f"TENOR_INIT_GRAPHIFY verdict={graph_ready.verdict} "
+                f"nodes={graph_ready.node_count} edges={graph_ready.edge_count} "
+                f"sources={graph_ready.source_file_count}"
+            )
 
             lock = refresh_tenor_init_lock(lock, stage="finalize_installation")
             _flush("TENOR_INIT_STAGE finalize_installation")
@@ -135,7 +170,6 @@ def main() -> int:
     rag_journal = run_command((rag, "query", "dernier JOURNAL session recente", "--limit", "3"), project_root)
     rag_scars = run_command((rag, "query", "SCAR TIER hot bug regression test_binding", "--limit", "5"), project_root)
     rag_ne_pas = run_command((rag, "query", "ne_pas_reproposer alternatives rejetees ghost", "--limit", "5"), project_root)
-    graph = parse_graph_report(graphify_out_dir(project_root) / "GRAPH_REPORT.md")
 
     _flush("TENOR_INIT_STAGE emit_machine_proof")
     return emit_report(
