@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from .state_paths import prepare_state_dirs
@@ -316,3 +319,46 @@ def write_smoke_fixture(project_root: Path | str) -> dict[str, Any]:
     (out / "graph.html").write_text("<html><body>fixture-only graph</body></html>\n", encoding="utf-8")
     (out / "cache" / "ast").mkdir(parents=True, exist_ok=True)
     return write_graphify_manifest(root, kind="smoke_fixture", purpose="mcp_smoke")
+
+
+@contextmanager
+def smoke_fixture_scope(project_root: Path | str) -> Iterator[dict[str, Any]]:
+    """Install an authorized smoke fixture and restore the exact prior graph state.
+
+    The scope owns both the fixture files and the environment authorization. It
+    never leaves a smoke manifest behind and never destroys a pre-existing real
+    graph, even when the smoke raises an exception.
+    """
+
+    root = Path(project_root).resolve()
+    out = root / ".agent" / "state" / "outputs" / "graphify-out"
+    if out.is_symlink():
+        raise RuntimeError(f"refusing Graphify smoke fixture on symlinked output: {out}")
+
+    previous_env = os.environ.get(FIXTURE_ENV)
+    existed_before = out.exists()
+    with tempfile.TemporaryDirectory(prefix="graphify-smoke-backup-") as temp_dir:
+        backup = Path(temp_dir) / "graphify-out"
+        if existed_before:
+            shutil.copytree(out, backup, symlinks=True)
+        try:
+            if out.exists():
+                shutil.rmtree(out)
+            os.environ[FIXTURE_ENV] = "1"
+            result = write_smoke_fixture(root)
+            if not result.get("ok"):
+                raise RuntimeError(f"cannot create Graphify smoke fixture: {result}")
+            verified = inspect_graphify_readiness(root, allow_fixture=True)
+            if not verified.ok or verified.verdict != GRAPHIFY_TEST_FIXTURE_READY:
+                raise RuntimeError(f"Graphify smoke fixture failed readiness verification: {verified.to_dict()}")
+            yield result
+        finally:
+            if previous_env is None:
+                os.environ.pop(FIXTURE_ENV, None)
+            else:
+                os.environ[FIXTURE_ENV] = previous_env
+            if out.exists():
+                shutil.rmtree(out)
+            if existed_before:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(backup, out, symlinks=True)
