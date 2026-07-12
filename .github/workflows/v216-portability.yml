@@ -62,20 +62,73 @@ jobs:
           .agent/workflow/scribe/sel/scripts/scribe_tenor_init_v216.py
           .agent/workflow/scribe/sel/scripts/scribe_bundle_graph.py
 
-      - name: Cross-platform invariants
-        run: python .agent/mcp/tests/test_v216_cross_platform.py
+      - name: Run portable core tests with structured logs
+        shell: python
+        run: |
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
 
-      - name: Installation classification and six-agent locking
-        run: python .agent/mcp/tests/test_tenor_init_orchestrator.py
+          tests = [
+              ("cross_platform", ".agent/mcp/tests/test_v216_cross_platform.py"),
+              ("tenor_init_orchestrator", ".agent/mcp/tests/test_tenor_init_orchestrator.py"),
+              ("graphify_readiness", ".agent/mcp/tests/test_graphify_readiness.py"),
+              ("scribe_bootstrap", ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"),
+              ("host_adapter", ".agent/mcp/tests/test_host_adapter_autoguard.py"),
+          ]
+          output_dir = Path("ci-logs")
+          output_dir.mkdir(parents=True, exist_ok=True)
+          results = []
+          for label, script in tests:
+              try:
+                  completed = subprocess.run(
+                      [sys.executable, script],
+                      text=True,
+                      capture_output=True,
+                      timeout=300,
+                      check=False,
+                  )
+                  stdout = completed.stdout
+                  stderr = completed.stderr
+                  returncode = completed.returncode
+              except subprocess.TimeoutExpired as exc:
+                  stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+                  stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+                  stderr += "\nTEST_TIMEOUT_300S\n"
+                  returncode = 124
+              combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
+              (output_dir / f"{label}.log").write_text(combined, encoding="utf-8")
+              results.append({"label": label, "script": script, "returncode": returncode})
+              print(f"PORTABLE_TEST {label} rc={returncode}", flush=True)
+              if returncode != 0:
+                  lines = combined.splitlines()
+                  print("\n".join(lines[-80:]), file=sys.stderr, flush=True)
+          (output_dir / "results.json").write_text(
+              json.dumps(results, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
 
-      - name: Graphify readiness contract
-        run: python .agent/mcp/tests/test_graphify_readiness.py
+      - name: Upload portable test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v216-core-${{ matrix.os }}-py${{ matrix.python }}
+          path: ci-logs
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: SCRIBE bootstrap authority
-        run: python .agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py
+      - name: Enforce portable test results
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
 
-      - name: Host adapter truthfulness
-        run: python .agent/mcp/tests/test_host_adapter_autoguard.py
+          results = json.loads(Path("ci-logs/results.json").read_text(encoding="utf-8"))
+          failures = [result for result in results if result["returncode"] != 0]
+          if failures:
+              raise SystemExit(f"PORTABLE_TEST_FAILURES: {failures}")
+          print("PORTABLE_CORE_ALL_OK")
 
   linux-deep-validation:
     name: Linux deep validation
@@ -99,18 +152,48 @@ jobs:
         run: |
           import subprocess
           import sys
+          from pathlib import Path
 
+          Path("ci-logs").mkdir(parents=True, exist_ok=True)
           try:
               completed = subprocess.run(
                   [sys.executable, ".agent/scripts/validation_suite.py"],
                   text=True,
+                  capture_output=True,
                   timeout=600,
                   check=False,
               )
-          except subprocess.TimeoutExpired:
-              print("VALIDATION_SUITE_TIMEOUT_600S", file=sys.stderr)
-              raise SystemExit(124)
-          raise SystemExit(completed.returncode)
+              stdout = completed.stdout
+              stderr = completed.stderr
+              returncode = completed.returncode
+          except subprocess.TimeoutExpired as exc:
+              stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+              stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+              stderr += "\nVALIDATION_SUITE_TIMEOUT_600S\n"
+              returncode = 124
+          combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
+          Path("ci-logs/deep-validation.log").write_text(combined, encoding="utf-8")
+          print("\n".join(combined.splitlines()[-120:]), flush=True)
+          Path("ci-logs/deep-validation-exit.txt").write_text(f"{returncode}\n", encoding="utf-8")
+
+      - name: Upload deep validation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v216-linux-deep-validation
+          path: ci-logs
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce deep validation result
+        shell: python
+        run: |
+          from pathlib import Path
+
+          returncode = int(Path("ci-logs/deep-validation-exit.txt").read_text(encoding="utf-8").strip())
+          if returncode != 0:
+              raise SystemExit(f"VALIDATION_SUITE_FAILED rc={returncode}")
+          print("VALIDATION_SUITE_OK")
 
       - name: Verify clean generated-artifact hygiene
         shell: bash
