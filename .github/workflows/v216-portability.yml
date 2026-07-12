@@ -68,7 +68,13 @@ jobs:
           import json
           import subprocess
           import sys
+          import traceback
           from pathlib import Path
+
+          for stream in (sys.stdout, sys.stderr):
+              reconfigure = getattr(stream, "reconfigure", None)
+              if callable(reconfigure):
+                  reconfigure(encoding="utf-8", errors="backslashreplace")
 
           tests = [
               ("cross_platform", ".agent/mcp/tests/test_v216_cross_platform.py"),
@@ -79,12 +85,29 @@ jobs:
           ]
           output_dir = Path("ci-logs")
           output_dir.mkdir(parents=True, exist_ok=True)
+          results_path = output_dir / "results.json"
           results = []
+
+          def as_text(value):
+              if isinstance(value, bytes):
+                  return value.decode("utf-8", errors="replace")
+              return value if isinstance(value, str) else ""
+
+          def persist_results():
+              results_path.write_text(
+                  json.dumps(results, indent=2, sort_keys=True) + "\n",
+                  encoding="utf-8",
+              )
+
+          persist_results()
+
           for label, script in tests:
               try:
                   completed = subprocess.run(
                       [sys.executable, script],
                       text=True,
+                      encoding="utf-8",
+                      errors="replace",
                       capture_output=True,
                       timeout=300,
                       check=False,
@@ -93,21 +116,22 @@ jobs:
                   stderr = completed.stderr
                   returncode = completed.returncode
               except subprocess.TimeoutExpired as exc:
-                  stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-                  stderr = exc.stderr if isinstance(exc.stderr, str) else ""
-                  stderr += "\nTEST_TIMEOUT_300S\n"
+                  stdout = as_text(exc.stdout)
+                  stderr = as_text(exc.stderr) + "\nTEST_TIMEOUT_300S\n"
                   returncode = 124
+              except BaseException:
+                  stdout = ""
+                  stderr = "HARNESS_EXCEPTION\n" + traceback.format_exc()
+                  returncode = 125
+
               combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
               (output_dir / f"{label}.log").write_text(combined, encoding="utf-8")
               results.append({"label": label, "script": script, "returncode": returncode})
+              persist_results()
               print(f"PORTABLE_TEST {label} rc={returncode}", flush=True)
               if returncode != 0:
                   lines = combined.splitlines()
                   print("\n".join(lines[-80:]), file=sys.stderr, flush=True)
-          (output_dir / "results.json").write_text(
-              json.dumps(results, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
 
       - name: Upload portable test logs
         if: always()
@@ -119,12 +143,16 @@ jobs:
           retention-days: 14
 
       - name: Enforce portable test results
+        if: always()
         shell: python
         run: |
           import json
           from pathlib import Path
 
-          results = json.loads(Path("ci-logs/results.json").read_text(encoding="utf-8"))
+          results_path = Path("ci-logs/results.json")
+          if not results_path.is_file():
+              raise SystemExit("PORTABLE_RESULTS_MISSING")
+          results = json.loads(results_path.read_text(encoding="utf-8"))
           failures = [result for result in results if result["returncode"] != 0]
           if failures:
               raise SystemExit(f"PORTABLE_TEST_FAILURES: {failures}")
@@ -159,6 +187,8 @@ jobs:
               completed = subprocess.run(
                   [sys.executable, ".agent/scripts/validation_suite.py"],
                   text=True,
+                  encoding="utf-8",
+                  errors="replace",
                   capture_output=True,
                   timeout=600,
                   check=False,
@@ -167,8 +197,8 @@ jobs:
               stderr = completed.stderr
               returncode = completed.returncode
           except subprocess.TimeoutExpired as exc:
-              stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-              stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+              stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+              stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
               stderr += "\nVALIDATION_SUITE_TIMEOUT_600S\n"
               returncode = 124
           combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
