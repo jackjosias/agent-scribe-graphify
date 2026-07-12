@@ -27,11 +27,26 @@ class GraphifyReadinessTest(unittest.TestCase):
     def out(self) -> Path:
         return self.root / ".agent" / "state" / "outputs" / "graphify-out"
 
-    def write_real(self) -> None:
+    def write_graph(self, graph: dict[str, object]) -> None:
         (self.root / "app.py").write_text("print('ok')\n", encoding="utf-8")
-        (self.out / "graph.json").write_text(json.dumps({"nodes": [{"id": "app"}], "edges": []}), encoding="utf-8")
+        (self.out / "graph.json").write_text(json.dumps(graph), encoding="utf-8")
         (self.out / "GRAPH_REPORT.md").write_text("# Graph Report\nNodes: 1\nEdges: 0\n", encoding="utf-8")
         (self.out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+
+    def write_real(self) -> None:
+        self.write_graph({"nodes": [{"id": "app"}], "edges": []})
+
+    def write_node_link_real(self) -> None:
+        self.write_graph(
+            {
+                "directed": False,
+                "multigraph": False,
+                "graph": {},
+                "nodes": [{"id": "app"}],
+                "links": [{"source": "app", "target": "app", "relation": "self"}],
+                "hyperedges": [],
+            }
+        )
 
     def test_missing_outputs(self) -> None:
         result = readiness.inspect_graphify_readiness(self.root)
@@ -61,6 +76,47 @@ class GraphifyReadinessTest(unittest.TestCase):
         result = readiness.inspect_graphify_readiness(self.root)
         self.assertTrue(result.ok)
         self.assertEqual(result.verdict, readiness.GRAPHIFY_READY)
+        self.assertEqual(result.node_count, 1)
+        self.assertEqual(result.edge_count, 0)
+
+    def test_node_link_graph_bound_to_current_workspace_is_ready(self) -> None:
+        self.write_node_link_real()
+        manifest = readiness.write_graphify_manifest(self.root)
+        self.assertTrue(manifest["ok"])
+        self.assertEqual(manifest["manifest"]["edge_field"], "links")
+        result = readiness.inspect_graphify_readiness(self.root)
+        self.assertTrue(result.ok)
+        self.assertEqual(result.verdict, readiness.GRAPHIFY_READY)
+        self.assertEqual(result.node_count, 1)
+        self.assertEqual(result.edge_count, 1)
+
+    def test_non_list_links_are_rejected(self) -> None:
+        self.write_graph({"nodes": [{"id": "app"}], "links": {"bad": "shape"}})
+        result = readiness.inspect_graphify_readiness(self.root)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.verdict, readiness.GRAPHIFY_CORRUPT)
+        self.assertIn("links", result.reason)
+        self.assertIn("must be lists", result.reason)
+
+    def test_conflicting_edges_and_links_are_rejected(self) -> None:
+        self.write_graph(
+            {
+                "nodes": [{"id": "app"}],
+                "edges": [],
+                "links": [{"source": "app", "target": "app"}],
+            }
+        )
+        result = readiness.inspect_graphify_readiness(self.root)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.verdict, readiness.GRAPHIFY_CORRUPT)
+        self.assertIn("contradictory", result.reason)
+
+    def test_equal_edges_and_links_are_accepted(self) -> None:
+        edge = {"source": "app", "target": "app"}
+        self.write_graph({"nodes": [{"id": "app"}], "edges": [edge], "links": [edge]})
+        manifest = readiness.write_graphify_manifest(self.root)
+        self.assertTrue(manifest["ok"])
+        self.assertEqual(manifest["manifest"]["edge_field"], "edges+links")
 
     def test_changed_source_makes_graph_stale(self) -> None:
         self.write_real()
