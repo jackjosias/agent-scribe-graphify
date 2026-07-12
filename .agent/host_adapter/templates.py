@@ -2,24 +2,32 @@ from __future__ import annotations
 
 
 def render_minimal_host_instructions(host_type: str = "unknown") -> str:
-    core_block = (
-        "AGENT-SCRIBE-GRAPHIFY AUTO-GUARD\n\n"
-        "Before any code write/fix/refactor/delete/test:\n"
-        "1. Use local .agent MCP.\n"
-        "2. Call discipline_ping at session start, after context compaction, after MCP error, or before finish.\n"
-        "3. Call pre_action_guard before sensitive actions.\n"
-        "4. Follow must_call until PRE_ACTION_GUARD_OK.\n"
-        "5. Use action_lease_id on claim_resource/propose_patch/apply_patch/delete_resource/finish_task.\n"
-        "6. Call workspace_audit before finish_task.\n"
-        "7. Direct file edit fallback is forbidden.\n"
-        "8. If stuck, call workflow_snapshot or stop and ask the user."
-    )
+    host = str(host_type or "unknown").upper()
+    core_block = f"""# AUTO-GUARD FOR HOST: {host}
+AGENT-SCRIBE-GRAPHIFY AUTO-GUARD
 
+Session order:
+1. Run `.agent/workflow/scribe/scribe tenor-init --type cli` from the current project root.
+2. If it returns a Graphify build action, execute that bounded action and rerun TENOR INIT.
+3. After local init, verify that this host exposes the project-local MCP tools to the LLM.
+4. Prove MCP root binding; local `--list-tools` alone is not host visibility proof.
+5. Register/bridge the independent agent session.
+
+Before any code write/fix/refactor/delete/test:
+1. Call discipline_ping after session start, context compaction, MCP error, or before finish.
+2. Follow workflow_next and every must_call verdict.
+3. Retrieve targeted SCRIBE and Graphify context; do not treat either as a checkbox.
+4. Call pre_action_guard before sensitive actions.
+5. Use resource locks, claims, patch queue and action_lease_id for every mutation.
+6. Call workspace_audit before finish_task.
+7. Direct file edit fallback is forbidden.
+8. A prose-only `done` without finish_task and READY_FOR_NEXT_TASK is not completion.
+9. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
+"""
     return (
-        f"<!-- agent-scribe-graphify:auto-guard:start -->\n"
-        f"# AUTO-GUARD FOR HOST: {str(host_type).upper()}\n"
-        f"{core_block}\n"
-        f"<!-- agent-scribe-graphify:auto-guard:end -->"
+        "<!-- agent-scribe-graphify:auto-guard:start -->\n"
+        f"{core_block}"
+        "<!-- agent-scribe-graphify:auto-guard:end -->"
     )
 
 
