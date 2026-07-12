@@ -164,6 +164,54 @@ def _payload_age_seconds(path: Path, payload: dict[str, Any]) -> float:
     return max(0.0, time.time() - epoch)
 
 
+def _windows_pid_is_alive(pid: int) -> bool:
+    """Probe a Windows PID without sending any signal or mutating the process."""
+
+    if pid == os.getpid():
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_access_denied = 5
+        error_invalid_parameter = 87
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+
+        get_exit_code_process = kernel32.GetExitCodeProcess
+        get_exit_code_process.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        get_exit_code_process.restype = wintypes.BOOL
+
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(process_query_limited_information, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == error_invalid_parameter:
+                return False
+            if error == error_access_denied:
+                return True
+            return True
+
+        try:
+            exit_code = wintypes.DWORD()
+            if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            close_handle(handle)
+    except Exception:
+        # Fail closed: an uninspectable owner must not have its lock stolen.
+        return True
+
+
 def _pid_is_alive(pid: object) -> bool:
     try:
         value = int(pid)
@@ -171,6 +219,8 @@ def _pid_is_alive(pid: object) -> bool:
         return False
     if value <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_is_alive(value)
     try:
         os.kill(value, 0)
     except ProcessLookupError:
