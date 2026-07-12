@@ -1,68 +1,69 @@
-# Cursor MCP
+# Cursor MCP — V2.16 Terrain Guide
 
-Recherche web: 2026-06-21.
+## Canonical TENOR entry
 
-## Source officielle
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-Source officielle non confirmee dans cette passe. A verifier dans la documentation Cursor MCP correspondant a la version installee.
+Mechanical local initialization:
 
-## Fichier de config
+```bash
+.agent/workflow/scribe/scribe tenor-init --type cli
+```
 
-`.cursor/mcp.json`
+`bootstrap` is internal/legacy, not the public start.
 
-## Commande `.agent`
+## Host configuration
+
+The historical workspace-local candidate is `.cursor/mcp.json`. Verify the current official Cursor MCP schema and installed version before editing. Configure only the current project's STDIO server:
 
 ```bash
 python3 .agent/mcp/server_entry.py
 ```
 
-## Validation des tools
+Do not point Cursor to another checkout and do not alter user/global configuration without explicit permission.
 
-Verifier que le host expose au minimum:
+## Required V2.16 proof
 
-- `workflow_next`
-- `before_task`
-- `scribe_query`
-- `graphify_query`
-- `propose_patch`
-- `apply_patch`
-- `delete_resource`
-- `finish_task`
+Local `server_entry.py --list-tools` proves only the server. Inside Cursor, prove the model sees the complete guard/lock/claim/patch/audit/finish/bridge surface.
 
-Commande locale de controle hors host:
+Then:
 
-```bash
-python3 .agent/mcp/server_entry.py --list-tools
-```
+1. compare a host sentinel hash with MCP `file_hash`;
+2. require the current project root;
+3. call `tenor_init_bridge` with the TENOR session and proof;
+4. obtain `TENOR_INIT_BRIDGE_OK`;
+5. run one complete MCP micro-write;
+6. test native edit/terminal bypass behavior.
 
-## Permissions a verifier
-
-- Shell direct: verifier si Cursor Agent expose terminal/commande shell.
-- Edit direct: verifier si Cursor Agent peut modifier les fichiers hors MCP.
-- Desactivation: verifier si shell/edit directs peuvent etre retires ou soumis a approbation stricte.
-- Sandbox: verifier si Cursor peut etre lance via `.agent/scripts/agent_sandbox.py` ou isolation OS equivalente.
-
-## Direct Tool Neutralization
-
-Avant de classer ce host `SAFE`, verifier explicitement:
-
-1. Les tools natifs write/edit/apply_patch sont desactives, refuses, ou soumis a permission ask stricte.
-2. Le shell ne peut pas ecrire dans le projet, ou toute ecriture shell demande approbation.
-3. Les redirections `>`, `>>`, `tee`, `sed -i`, `perl -pi`, `rm`, `mv`, `cp` et scripts qui ecrivent sont bloques, sandboxes, ou detectes.
-4. Une detection dirty-write compare les fichiers modifies avant/apres la tache.
-5. Si une modification apparait sans trace MCP attendue: `DIRECT_WRITE_BYPASS_DETECTED`, STOP, rapport utilisateur.
-
-Si un seul point est inconnu, le verdict maximal est `ACCEPTABLE` ou `UNKNOWN`, pas `SAFE`.
-
-## Verdict terrain
+Wrong root:
 
 ```text
-MCP visible: UNKNOWN
-MCP tools visibles: UNKNOWN
-Shell direct: UNKNOWN
-Edit/write_file direct: UNKNOWN
-Desactivation shell/edit possible: UNKNOWN
-Sandbox agent_sandbox.py possible: UNKNOWN
-Direct FS test: NOT_TESTED
-Verdict: UNKNOWN
+INIT_BLOCKED_MCP_WRONG_ROOT
 ```
+
+Unproven host:
+
+```text
+HOST_MCP_UNBOUND
+LOCAL_INIT_READY_HOST_MCP_UNBOUND
+```
+
+## Direct-write audit
+
+Audit Cursor terminal, agent edits, native patch/write tools, redirects, `tee`, `sed -i`, `rm`, `mv`, `cp` and extensions. Any mutation without MCP receipts must yield `DIRECT_WRITE_BYPASS_DETECTED`.
+
+## Terrain verdict
+
+```text
+Cursor MCP config on final head: NOT_TESTED
+MCP tools visible to Cursor LLM: UNKNOWN
+Root binding: UNKNOWN
+TENOR_INIT_BRIDGE_OK: NOT_TESTED
+Complete MCP micro-write: NOT_TESTED
+Direct-write bypass: NOT_TESTED
+Final verdict: UNKNOWN
+```
+
+Update evidence only under `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
