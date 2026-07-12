@@ -167,8 +167,10 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertIn(trigger, rendered)
             self.assertIn("tenor-init --type", rendered)
             self.assertIn("bootstrap", rendered)
-            self.assertIn("internal/legacy", rendered)
+            self.assertIn("legacy", rendered)
             self.assertNotIn("[[.agent/skills/init-tenor/SKILL.md]]", rendered)
+            self.assertNotIn("fall back to bootstrap", rendered.lower())
+            self.assertNotIn("fallback to bootstrap", rendered.lower())
             self.assertIn("DOCUMENTATION_SYNC_POLICY.md", rendered)
 
     def test_graphify_placeholder_is_project_bound_on_empty_project(self) -> None:
