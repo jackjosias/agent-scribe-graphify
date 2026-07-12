@@ -32,7 +32,15 @@ def plan(root: Path, *, classification: str, memory_action: str, project_changed
 
 
 class ScribeBootstrapTests(unittest.TestCase):
-    def run_bootstrap(self, root: Path, *, classification: str, memory_action: str, project_changed: bool):
+    def run_bootstrap(
+        self,
+        root: Path,
+        *,
+        classification: str,
+        memory_action: str,
+        project_changed: bool,
+        skip_graphify: bool = True,
+    ):
         stdout = io.StringIO()
         stderr = io.StringIO()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -40,7 +48,7 @@ class ScribeBootstrapTests(unittest.TestCase):
                 root,
                 agent="test-agent",
                 agent_type="cli",
-                skip_graphify=True,
+                skip_graphify=skip_graphify,
                 installation_plan=plan(
                     root,
                     classification=classification,
@@ -49,7 +57,7 @@ class ScribeBootstrapTests(unittest.TestCase):
                 ),
             )
 
-    def test_bootstrap_initializes_empty_project(self) -> None:
+    def test_bootstrap_initializes_empty_project_with_bound_graph_placeholder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report = self.run_bootstrap(
@@ -57,10 +65,13 @@ class ScribeBootstrapTests(unittest.TestCase):
                 classification="TENOR_INIT_NEW_INSTALLATION",
                 memory_action="SCRIBE_MEMORY_CREATE",
                 project_changed=True,
+                skip_graphify=False,
             )
 
             self.assertTrue(report.new_project)
             self.assertEqual(report.scribe_status, "created")
+            self.assertEqual(report.graphify_status, "placeholder")
+            self.assertEqual(report.errors, [])
             self.assertEqual(report.doctor_code, 0)
             self.assertTrue(report.sync_repaired)
             self.assertTrue((root / ".agent" / "workflow" / "scribe" / "scribe").exists())
@@ -71,6 +82,9 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertTrue((root / ".agent" / "rules" / "scribe.md").exists())
             self.assertTrue((root / ".agent" / ".gitignore").exists())
             self.assertTrue((root / ".graphifyignore").exists())
+            graph_dir = root / ".agent" / "state" / "outputs" / "graphify-out"
+            for name in ("GRAPH_REPORT.md", "graph.json", "graph.html", "GRAPHIFY_READY.json"):
+                self.assertTrue((graph_dir / name).is_file(), name)
 
     def test_bootstrap_detects_package_stack_when_memory_creation_is_authorized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +99,7 @@ class ScribeBootstrapTests(unittest.TestCase):
                 classification="TENOR_INIT_NEW_INSTALLATION",
                 memory_action="SCRIBE_MEMORY_CREATE",
                 project_changed=True,
+                skip_graphify=True,
             )
             scribe = (root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe").read_text(encoding="utf-8")
 
@@ -143,33 +158,31 @@ class ScribeBootstrapTests(unittest.TestCase):
         self.assertIn('"tenor-init": "scribe_tenor_init_v216.py"', adapter)
         compile(adapter, "<installed-scribe-adapter>", "exec")
 
-    def test_graphify_placeholder_is_info_on_empty_project(self) -> None:
+    def test_graphify_placeholder_is_project_bound_on_empty_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             status, infos, warnings, errors = ensure_graphify(root, lambda *_: None, skip_graphify=False)
             self.assertFalse(has_application_code(root))
             self.assertEqual(status, "placeholder")
-            self.assertIn("Graphify: placeholder initialisé", infos[0])
+            self.assertIn("empty-project placeholder bound", infos[0])
             self.assertEqual(warnings, [])
             self.assertEqual(errors, [])
-            self.assertTrue((root / ".agent" / "state" / "outputs" / "graphify-out" / "GRAPH_REPORT.md").exists())
+            graph_dir = root / ".agent" / "state" / "outputs" / "graphify-out"
+            self.assertTrue((graph_dir / "GRAPHIFY_READY.json").is_file())
 
-    def test_graphify_missing_is_error_when_app_code_exists(self) -> None:
+    def test_graphify_requires_explicit_bounded_build_when_app_code_exists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "package.json").write_text('{"name":"app"}', encoding="utf-8")
-            original_which = scribe_bootstrap.shutil.which
-            try:
-                scribe_bootstrap.shutil.which = lambda _: None
-                status, infos, warnings, errors = ensure_graphify(root, lambda *_: None, skip_graphify=False)
-            finally:
-                scribe_bootstrap.shutil.which = original_which
+            status, infos, warnings, errors = ensure_graphify(root, lambda *_: None, skip_graphify=False)
 
             self.assertTrue(has_application_code(root))
-            self.assertEqual(status, "missing")
+            self.assertEqual(status, "build_required")
             self.assertEqual(infos, [])
             self.assertEqual(warnings, [])
-            self.assertIn("Graphify manquant sur projet avec code", errors[0])
+            self.assertTrue(any("Graphify not ready" in error for error in errors))
+            self.assertTrue(any("graph --project-build --timeout 180" in error for error in errors))
+            self.assertFalse((root / ".agent" / "state" / "outputs" / "graphify-out" / "GRAPHIFY_READY.json").exists())
 
 
 if __name__ == "__main__":
