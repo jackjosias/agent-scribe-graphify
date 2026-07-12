@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -43,13 +43,33 @@ def verify_instruction_installation(target_file: Path) -> bool:
 
 
 def _atomic_text_write(path: Path, content: str) -> None:
+    """Write *content* atomically without sharing temporary names across writers.
+
+    ``time.time_ns()`` is not a uniqueness guarantee on every platform or under
+    highly concurrent writers. ``mkstemp`` creates the temporary file
+    exclusively in the destination directory, so six host sessions cannot race
+    on the same temporary path. The final ``os.replace`` remains atomic.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    existing_mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+        text=True,
+    )
+    temporary = Path(temporary_name)
     try:
-        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        try:
+            os.chmod(temporary, existing_mode)
+        except OSError:
+            # Permission mode preservation is best-effort on non-POSIX hosts.
+            pass
         os.replace(temporary, path)
     finally:
         try:
