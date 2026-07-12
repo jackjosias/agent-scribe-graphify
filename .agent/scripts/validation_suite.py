@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MCP_DIR = ROOT / ".agent" / "mcp"
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+
+from runtime import graphify_readiness
 
 # The suite is sequential because these tests exercise one real runtime and
 # intentionally verify lock, claim and database semantics. mcp_smoke is a full
@@ -24,10 +30,18 @@ STEPS = (
     ("enforcement_redteam_smoke", [sys.executable, ".agent/scripts/enforcement_redteam_smoke.py"]),
 )
 
+_GRAPHIFY_SCOPED_STEPS = {"mcp_smoke", "enforcement_redteam_smoke"}
+
 
 def run_step(label: str, command: list[str]) -> None:
     print(f"VALIDATION_SUITE_STEP_START {label}", flush=True)
-    process = subprocess.run(command, cwd=str(ROOT), text=True, check=False)
+    fixture_scope = (
+        graphify_readiness.smoke_fixture_scope(ROOT)
+        if label in _GRAPHIFY_SCOPED_STEPS
+        else nullcontext()
+    )
+    with fixture_scope:
+        process = subprocess.run(command, cwd=str(ROOT), text=True, check=False)
     if process.returncode != 0:
         raise SystemExit(f"VALIDATION_SUITE_FAIL {label} rc={process.returncode}")
     print(f"VALIDATION_SUITE_STEP_OK {label}", flush=True)
