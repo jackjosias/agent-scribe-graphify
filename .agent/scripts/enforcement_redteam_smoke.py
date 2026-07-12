@@ -140,6 +140,8 @@ def acquire_lease(agent_id: str, action: str, ctx: dict[str, str] | None = None,
     result = call_tool("pre_action_guard", args)
     if result.get("verdict") == "PRE_ACTION_GUARD_OK" and "action_lease" in result:
         return result["action_lease"]["lease_id"]
+    if ctx is not None:
+        fail(f"pre_action_guard failed to issue lease for {action}: {result}")
     return ""
 
 
