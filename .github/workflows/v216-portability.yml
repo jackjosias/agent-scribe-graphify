@@ -1,0 +1,125 @@
+name: V2.16 TENOR portability
+
+on:
+  pull_request:
+    paths:
+      - ".agent/**"
+      - ".github/workflows/v216-portability.yml"
+  push:
+    branches:
+      - "agent/v2-16-tenor-init-single-authority"
+      - "v2"
+    paths:
+      - ".agent/**"
+      - ".github/workflows/v216-portability.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v216-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-core:
+    name: Core / ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Validate machine protocol JSON
+        run: python -m json.tool .agent/rules/tenor-init-v2.json
+
+      - name: Compile V2.16 core
+        run: >-
+          python -m py_compile
+          .agent/mcp/runtime/installation_state.py
+          .agent/mcp/runtime/tenor_init_orchestrator.py
+          .agent/mcp/runtime/graphify_readiness.py
+          .agent/mcp/runtime/graphify_guard.py
+          .agent/mcp/runtime/graphify_scribe_bridge.py
+          .agent/mcp/server_entry.py
+          .agent/host_adapter/policy.py
+          .agent/host_adapter/launcher.py
+          .agent/host_adapter/instructions.py
+          .agent/host_adapter/templates.py
+          .agent/workflow/scribe/sel/scripts/scribe_bootstrap.py
+          .agent/workflow/scribe/sel/scripts/scribe_tenor_init_v216.py
+          .agent/workflow/scribe/sel/scripts/scribe_bundle_graph.py
+
+      - name: Cross-platform invariants
+        run: python .agent/mcp/tests/test_v216_cross_platform.py
+
+      - name: Installation classification and six-agent locking
+        run: python .agent/mcp/tests/test_tenor_init_orchestrator.py
+
+      - name: Graphify readiness contract
+        run: python .agent/mcp/tests/test_graphify_readiness.py
+
+      - name: SCRIBE bootstrap authority
+        run: python .agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py
+
+      - name: Host adapter truthfulness
+        run: python .agent/mcp/tests/test_host_adapter_autoguard.py
+
+  linux-deep-validation:
+    name: Linux deep validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: portable-core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Run sequential validation suite with hard timeout
+        shell: python
+        run: |
+          import subprocess
+          import sys
+
+          try:
+              completed = subprocess.run(
+                  [sys.executable, ".agent/scripts/validation_suite.py"],
+                  text=True,
+                  timeout=600,
+                  check=False,
+              )
+          except subprocess.TimeoutExpired:
+              print("VALIDATION_SUITE_TIMEOUT_600S", file=sys.stderr)
+              raise SystemExit(124)
+          raise SystemExit(completed.returncode)
+
+      - name: Verify clean generated-artifact hygiene
+        shell: bash
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain=v1)" || {
+            echo "Validation left the checkout dirty:" >&2
+            git status --short >&2
+            exit 1
+          }
