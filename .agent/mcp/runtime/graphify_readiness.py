@@ -74,6 +74,14 @@ class Readiness:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class GraphArtifacts:
+    raw: dict[str, Any]
+    nodes: list[Any]
+    edges: list[Any]
+    edge_field: str
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -156,7 +164,27 @@ def workspace_fingerprint(project_root: Path | str, *, max_files: int = 200_000)
     }
 
 
-def _read_artifacts(root: Path) -> tuple[dict[str, Any] | None, str, list[str], str]:
+def _resolve_edge_collection(graph: dict[str, Any]) -> tuple[list[Any] | None, str, str]:
+    present = {name: graph[name] for name in ("edges", "links") if name in graph}
+    if not present:
+        return None, "", "graph.json must contain a list field named edges or links"
+
+    invalid = [name for name, value in present.items() if not isinstance(value, list)]
+    if invalid:
+        return None, "", f"graph.json field(s) {', '.join(invalid)} must be lists"
+
+    if len(present) == 2:
+        edges = present["edges"]
+        links = present["links"]
+        if edges != links:
+            return None, "", "graph.json contains contradictory list fields edges and links"
+        return edges, "edges+links", ""
+
+    edge_field, edge_values = next(iter(present.items()))
+    return edge_values, edge_field, ""
+
+
+def _read_artifacts(root: Path) -> tuple[GraphArtifacts | None, str, list[str], str]:
     out = canonical_output_dir(root)
     missing: list[str] = []
     for name in REQUIRED_FILES:
@@ -175,9 +203,16 @@ def _read_artifacts(root: Path) -> tuple[dict[str, Any] | None, str, list[str], 
         return None, "", [], str(exc)
     if not isinstance(graph, dict):
         return None, report, [], "graph.json root must be an object"
-    if not isinstance(graph.get("nodes"), list) or not isinstance(graph.get("edges"), list):
-        return None, report, [], "graph.json must contain list fields nodes and edges"
-    return graph, report, [], ""
+
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        return None, report, [], "graph.json field nodes must be a list"
+
+    edges, edge_field, edge_error = _resolve_edge_collection(graph)
+    if edges is None:
+        return None, report, [], edge_error
+
+    return GraphArtifacts(graph, nodes, edges, edge_field), report, [], ""
 
 
 def inspect_graphify_readiness(
@@ -197,46 +232,48 @@ def inspect_graphify_readiness(
     if graph is None:
         return Readiness(False, GRAPHIFY_CORRUPT, str(root), str(out), artifact_error or "invalid Graphify artifacts", "graphify update .")
 
+    node_count = len(graph.nodes)
+    edge_count = len(graph.edges)
     marker = next((item for item in _STUB_MARKERS if item in report.lower()), "")
     manifest_file = out / MANIFEST_FILENAME
     if not manifest_file.is_file():
         verdict = GRAPHIFY_STUB_INVALID if marker else GRAPHIFY_LEGACY_UNBOUND
         reason = f"stub marker detected: {marker}" if marker else "legacy graph has no project-bound readiness manifest"
-        return Readiness(False, verdict, str(root), str(out), reason, "graphify update .", len(graph["nodes"]), len(graph["edges"]))
+        return Readiness(False, verdict, str(root), str(out), reason, "graphify update .", node_count, edge_count)
     try:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), str(exc), "graphify update .", len(graph["nodes"]), len(graph["edges"]))
+        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), str(exc), "graphify update .", node_count, edge_count)
     if not isinstance(manifest, dict) or manifest.get("schema") != MANIFEST_SCHEMA:
-        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), "unsupported readiness manifest", "graphify update .", len(graph["nodes"]), len(graph["edges"]))
+        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), "unsupported readiness manifest", "graphify update .", node_count, edge_count)
 
     kind = str(manifest.get("kind") or "")
     bound_root = str(manifest.get("project_root") or "")
     if bound_root != str(root):
-        return Readiness(False, GRAPHIFY_STALE_ROOT, str(root), str(out), f"graph is bound to {bound_root or '<empty>'}", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind)
+        return Readiness(False, GRAPHIFY_STALE_ROOT, str(root), str(out), f"graph is bound to {bound_root or '<empty>'}", "graphify update .", node_count, edge_count, kind)
     if kind == "smoke_fixture" and not allow_fixture:
-        return Readiness(False, GRAPHIFY_FIXTURE_FORBIDDEN, str(root), str(out), "test fixture graph is forbidden outside smoke mode", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind)
+        return Readiness(False, GRAPHIFY_FIXTURE_FORBIDDEN, str(root), str(out), "test fixture graph is forbidden outside smoke mode", "graphify update .", node_count, edge_count, kind)
     if marker and kind not in {"smoke_fixture", "empty_project"}:
-        return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), f"stub marker detected: {marker}", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind)
+        return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), f"stub marker detected: {marker}", "graphify update .", node_count, edge_count, kind)
 
     current = workspace_fingerprint(root)
     if current["truncated"]:
-        return Readiness(False, GRAPHIFY_WORKSPACE_TOO_LARGE, str(root), str(out), "workspace fingerprint exceeded safety limit", "configure Graphify ignore rules and rebuild", len(graph["nodes"]), len(graph["edges"]), kind, current["fingerprint"], str(manifest.get("workspace_fingerprint") or ""), current["source_file_count"])
+        return Readiness(False, GRAPHIFY_WORKSPACE_TOO_LARGE, str(root), str(out), "workspace fingerprint exceeded safety limit", "configure Graphify ignore rules and rebuild", node_count, edge_count, kind, current["fingerprint"], str(manifest.get("workspace_fingerprint") or ""), current["source_file_count"])
     recorded = str(manifest.get("workspace_fingerprint") or "")
     if require_workspace_match and recorded != current["fingerprint"]:
-        return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "project sources changed since the graph was bound", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind, current["fingerprint"], recorded, current["source_file_count"])
+        return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "project sources changed since the graph was bound", "graphify update .", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
 
     if kind == "empty_project":
-        if current["source_file_count"] != 0 or graph["nodes"] or graph["edges"]:
-            return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "empty-project placeholder no longer matches workspace", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind, current["fingerprint"], recorded, current["source_file_count"])
+        if current["source_file_count"] != 0 or graph.nodes or graph.edges:
+            return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "empty-project placeholder no longer matches workspace", "graphify update .", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
         return Readiness(True, GRAPHIFY_EMPTY_PROJECT_READY, str(root), str(out), "empty project placeholder is bound and current", "", 0, 0, kind, current["fingerprint"], recorded, 0)
     if kind == "smoke_fixture":
-        return Readiness(True, GRAPHIFY_TEST_FIXTURE_READY, str(root), str(out), "authorized test fixture", "", len(graph["nodes"]), len(graph["edges"]), kind, current["fingerprint"], recorded, current["source_file_count"])
+        return Readiness(True, GRAPHIFY_TEST_FIXTURE_READY, str(root), str(out), "authorized test fixture", "", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
     if kind != "real":
-        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), f"unsupported manifest kind: {kind}", "graphify update .", len(graph["nodes"]), len(graph["edges"]), kind)
-    if not graph["nodes"]:
-        return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), "real graph contains zero nodes", "graphify update .", 0, len(graph["edges"]), kind)
-    return Readiness(True, GRAPHIFY_READY, str(root), str(out), "project-bound graph is valid and current", "", len(graph["nodes"]), len(graph["edges"]), kind, current["fingerprint"], recorded, current["source_file_count"])
+        return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), f"unsupported manifest kind: {kind}", "graphify update .", node_count, edge_count, kind)
+    if not graph.nodes:
+        return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), "real graph contains zero nodes", "graphify update .", 0, edge_count, kind)
+    return Readiness(True, GRAPHIFY_READY, str(root), str(out), "project-bound graph is valid and current", "", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
 
 
 def write_graphify_manifest(project_root: Path | str, *, kind: str = "real", purpose: str = "terrain") -> dict[str, Any]:
@@ -261,8 +298,9 @@ def write_graphify_manifest(project_root: Path | str, *, kind: str = "real", pur
         "project_root": str(root),
         "workspace_fingerprint": current["fingerprint"],
         "source_file_count": current["source_file_count"],
-        "node_count": len(graph["nodes"]),
-        "edge_count": len(graph["edges"]),
+        "node_count": len(graph.nodes),
+        "edge_count": len(graph.edges),
+        "edge_field": graph.edge_field,
         "created_at": _utc_now(),
     }
     _atomic_json(out / MANIFEST_FILENAME, payload)
