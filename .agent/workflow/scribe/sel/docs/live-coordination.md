@@ -1,254 +1,284 @@
-# Workflow multi-agent: live coordination SCRIBE
+# Live Multi-Agent Coordination — V2.16
 
-Derniere verification locale: 2026-06-01.
+## Purpose
 
-## Emplacement canonique
+This document governs several LLM/CLI agents working concurrently in the same repository. It prevents stale mental models, wrong-root sessions, conflicting ownership, cross-agent lease reuse, direct-write bypass and orphan runtime state.
 
-Ce fichier appartient a la racine SCRIBE portable: `.agent/workflow/scribe/sel/docs/live-coordination.md`.
-Tout dossier frere comme `.agent/workflow/multi-agent/` est non canonique: migrer son contenu sous `.agent/workflow/scribe/` puis supprimer le dossier vide.
+The canonical workflow root remains `.agent/workflow/scribe/`. A sibling `.agent/workflow/multi-agent/` directory is non-canonical.
 
-Ce workflow encadre plusieurs agents CLI ouverts en parallele dans le meme
-repository. Objectif: eviter que les agents cassent le travail des autres,
-ecrivent une memoire obsolete dans le SCRIBE, ou modifient la meme surface sans
-coordination.
+## Session prerequisite
 
-## Principe central
+Every terminal begins with the canonical human/LLM trigger:
 
-Le lock SCRIBE protege uniquement l'ecriture dans
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe`. Il ne suffit pas pour coordonner quatre
-agents qui modifient du code en parallele.
-
-Il faut ajouter trois couches:
-
-- presence: savoir quels agents sont actifs;
-- surface: savoir sur quoi chacun travaille;
-- precedence: connaitre les changements deja faits avant d'implementer ou
-  d'ecrire dans SCRIBE.
-
-## Identite de session
-
-Chaque agent doit obtenir une identite de session depuis le code, pas la fabriquer a la main. Le format canonique est `<agent-type>-<YYYYMMDD>-<hash12>`, ou `hash12` derive du PID, du hostname et de `time_ns()`. Deux agents lances le meme jour, la meme seconde ou dans le meme terminal doivent quand meme produire deux IDs distincts.
-
-Commande canonique:
-
-```bash
-.agent/workflow/scribe/scribe whoami --type cli --surface idle
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 ```
 
-La ligne `Mon ID:` devient le `AGENT_NAME` stable de la session. Ne plus utiliser `codex-YYYYMMDD-01`, car ce format collisionne des que plusieurs agents demarrent en parallele.
-
-## Initialisation obligatoire d'un agent
-
-Au debut d'une session multi-agent, chaque terminal commence dans le pool idle:
+The deterministic command is:
 
 ```bash
-AGENT_TYPE="cli"
-
-.agent/workflow/scribe/scribe bootstrap
-.agent/workflow/scribe/scribe whoami --type "$AGENT_TYPE" --surface idle
-AGENT_NAME="<Mon ID from scribe whoami>"
-.agent/workflow/scribe/scribe workflow read --agent "$AGENT_NAME" --type "$AGENT_TYPE"
-.agent/workflow/scribe/scribe workflow check --agent "$AGENT_NAME"
-.agent/workflow/scribe/scribe lock status
-.agent/workflow/scribe/scribe sync --agent "$AGENT_NAME" --type "$AGENT_TYPE"
-.agent/workflow/scribe/scribe coordination status
-.agent/workflow/scribe/scribe-rag context
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
 ```
 
-Quand une tache concrete arrive, l'agent prend un `coordination claim` semantique. Il ne se fige pas dans un role manuel: le terminal disponible peut enchainer une autre tache apres livraison. Escalader vers `scribe-rag preflight --tier CRITICAL --strict "<plan>"` seulement pour auth/data/API publique, mutation SCRIBE, surface partagee ou coordination a risque.
+`bootstrap` is an internal/legacy primitive and is not the public V2.16 multi-agent start.
 
-L'agent doit annoncer:
+Before product work, each terminal must prove:
 
-- son `AGENT_NAME`;
-- son statut idle ou son claim semantique courant;
-- les surfaces deja modifiees qu'il voit;
-- le statut du workflow ack;
-- le statut du lock SCRIBE;
-- s'il peut travailler sans conflit.
+```text
+local installation ready
+Graphify ready
+local MCP ready
+host tools visible
+root binding correct
+tenor_init_bridge OK
+TENOR_INIT_READY
+```
 
-## Presence live
+Without host/root/bridge proof, the terminal remains:
 
-`scribe sync` indique le dernier writer memoire, mais ne donne pas a lui seul le nombre de sessions ouvertes. La presence canonique est maintenant `scribe-out/presence/`, alimentee par `scribe whoami`.
+```text
+LOCAL_INIT_READY_HOST_MCP_UNBOUND
+```
 
-Creation ou heartbeat toutes les 60 secondes:
+and may not mutate product files.
+
+## Shared versus private state
+
+Agents share:
+
+```text
+project root
+runtime SQLite
+canonical SCRIBE memory
+Graphify map
+claims and resource-lock registry
+patch queue
+coordination events
+```
+
+Agents never share:
+
+```text
+agent_id
+proof token
+action lease
+claim ownership
+resource-lock ownership
+pending patch identity
+```
+
+One agent cannot borrow another agent's proof, lease, claim or lock.
+
+## Initialization serialization
+
+Shared TENOR initialization is protected by `.agent/.tenor-init.lock`.
+
+The lock is nonce-owned and records PID, hostname, root, stage, creation time and heartbeat.
+
+Rules:
+
+- a live owner's lock is never deleted;
+- a fresh partially written lock uses filesystem `mtime` as age fallback, never epoch zero;
+- stale recovery re-reads and removes only the exact observed nonce;
+- `TENOR_INIT_SAME_PROJECT` never purges active shared runtime;
+- each terminal registers an independent session after shared initialization.
+
+## Presence
+
+TENOR INIT registers session presence and emits the `Agent session` and `Proof token` used for host bridging.
+
+After bridge, MCP tools are the canonical live coordination interface. Legacy `scribe whoami`/`scribe coordination` commands may remain useful for diagnostics, but they do not replace the session proof, action lease or MCP ownership records.
+
+Each active agent should maintain a fresh heartbeat appropriate to the runtime. A dead PID or expired heartbeat makes presence recoverable according to the bounded stale policy.
+
+## Before every task
+
+```text
+workflow_next
+before_task
+targeted scribe_query
+targeted graphify_query when code/architecture is involved
+```
+
+The task receives a distinct `task_id` and `context_token`. The agent must inspect relevant active ownership and current workspace state before planning a mutation.
+
+SCRIBE and Graphify output must influence the plan or be explicitly challenged.
+
+## Before mutation
+
+```text
+pre_action_guard
+resource_lock_claim
+claim_resource
+file_hash
+propose_patch
+apply_patch
+```
+
+`pre_action_guard` issues an action lease only after required context and workflow state are satisfied.
+
+Rules:
+
+- semantic claim describes the intent, for example `indicator:X` or `auth:token-refresh`;
+- resource lock protects the concrete mutation surface;
+- the same semantic claim or exact function is a conflict;
+- deletion, rename and global refactor require explicit coordination;
+- shared files may be touched by different non-conflicting claims only after reread/rebase;
+- file hash prevents applying a patch to an obsolete version;
+- patches are proposed and applied through MCP, never by blind native edit.
+
+## Direct-write prohibition
+
+The following are not valid mutation paths outside MCP:
+
+```text
+shell/bash writes
+>, >>
+tee
+sed -i
+perl -pi
+write_file/edit/apply_patch native host tools
+rm, mv, cp
+custom scripts that mutate project files directly
+```
+
+If a file changes without the expected MCP receipts:
+
+```text
+DIRECT_WRITE_BYPASS_DETECTED
+```
+
+Stop, list the affected files and require rollback or explicit user handling.
+
+## Concurrent work scenarios
+
+### Different resources
+
+Two agents may write concurrently when they hold different claims and resource locks and their Graphify blast radii do not create a hidden shared contract conflict.
+
+### Same file, different semantics
+
+Allowed only when:
+
+- claims are different and compatible;
+- both agents reread current content before applying;
+- hash/patch queue detects stale base versions;
+- final validation proves coexistence.
+
+### Same function or semantic claim
+
+Conflict. One agent proceeds; the other waits, changes scope or receives a different task.
+
+### Deletion, rename or global refactor
+
+Exclusive coordination is required before mutation.
+
+## Interrupted-agent recovery
+
+Recovery must be evidence-based:
+
+1. confirm the owner PID/heartbeat is dead or expired;
+2. inspect active claim, lock and pending patch records;
+3. never reuse the dead agent's lease or proof;
+4. abandon/recover ownership through the runtime's explicit recovery path;
+5. reread workspace, SCRIBE and Graphify before continuing;
+6. create a new agent/task/lease identity for resumed work;
+7. audit for partial direct writes or unapplied patches.
+
+Do not delete runtime files manually to “unstick” the system.
+
+## SCRIBE memory mutation
+
+Canonical memory is a separate locked surface.
+
+Before SCRIBE mutation:
 
 ```bash
-.agent/workflow/scribe/scribe whoami --agent "$AGENT_NAME" --type "$AGENT_TYPE" --surface idle
+SCRIBE=.agent/workflow/scribe/scribe
+$SCRIBE workflow read --agent <agent> --type <type>
+$SCRIBE workflow check --agent <agent>
+$SCRIBE sync --agent <agent> --type <type>
+$SCRIBE doctor --suggest-fix
+$SCRIBE lock acquire --agent <agent> --type <type> --session <JOURNAL-ID>
 ```
 
-Voir les agents actifs et le lock courant:
+After incremental mutation:
 
 ```bash
-.agent/workflow/scribe/scribe whoami --agent "$AGENT_NAME" --type "$AGENT_TYPE" --surface idle --no-register
-.agent/workflow/scribe/scribe lock status
+$SCRIBE doctor --suggest-fix
+$SCRIBE sync --repair --agent <agent> --type <type> --session <JOURNAL-ID> --changed-id <ID> --write-kind <kind>
+$SCRIBE lock release --agent <agent>
 ```
 
-Regles:
+A runtime `scribe_record` receipt is not automatically a canonical memory append. Promote only real causal value.
 
-- `scribe-out/presence/` est un etat runtime local, pas du code produit;
-- un heartbeat expire apres `ttl_seconds` et un PID mort rend la presence stale;
-- les presences stale sont nettoyees au prochain `scribe whoami`;
-- `idle`, `none` et `unknown` ne creent pas de conflit; si deux agents declarent la meme surface active non-idle, la fenetre de coordination arbitre avant toute modification.
+## Task closure
 
-## Lock release et propriete
+Before closing:
 
-Depuis la stabilisation 2026-06-01, `lock release` ne supprime plus aveuglement
-un stale lock appartenant a un autre agent. Il lit le lock brut, verifie agent et
-surface, puis nettoie seulement son propre stale lock. Pour une session longue,
-faire porter le lock par le processus proprietaire reel via `SCRIBE_OWNER_PID` ou
-`--owner-pid`; sinon le lock court peut devenir stale apres la fin de la commande
-et sera nettoye au prochain appel.
-
-## Claim de surface
-
-Une surface est une zone large de responsabilite temporaire. Pour les fichiers partages, elle ne suffit pas: chaque tache doit aussi prendre un claim semantique. Exemples:
-
-- `frontend`
-- `tests`
-- `scribe`
-- `auth`
-- `websocket`
-
-Avant d'implementer:
-
-```bash
-.agent/workflow/scribe/scribe worktree --surface <surface> --agent "$AGENT_NAME" --limit 80
+```text
+workspace_audit
+scribe_record or auditable causal skip
+release claim
+resource_lock_release
+finish_task
+workflow_next -> READY_FOR_NEXT_TASK
 ```
 
-Si la commande signale `SURFACE_VIOLATION`, l'agent stoppe et demande coordination. Il ne corrige pas par-dessus un autre agent.
+Closure is invalid when the agent still owns:
 
-## Claims semantiques et fichiers partages
-
-Le workflow multi-agent n interdit pas a deux agents de modifier le meme fichier. Il interdit de modifier le meme fichier avec une vision mentale obsolete. Les fichiers comme `IndicatorsModal.tsx`, `TechnicalIndicators.ts` ou `indicators.worker.ts` sont des surfaces partagees normales: plusieurs agents peuvent y ajouter des indicateurs differents en parallele.
-
-Regle canonique:
-
-- meme fichier partage: autorise, avec relecture et rebase obligatoire avant livraison;
-- meme entite metier: conflit, un seul'agent a la fois;
-- meme fonction exacte: conflit fort;
-- suppression, renommage ou refactor global: coordination obligatoire avant changement;
-- ecriture aveugle d une ancienne version du fichier: interdite.
-
-Avant une tache, l'agent declare une intention semantique, pas seulement un fichier:
-
-```bash
-.agent/workflow/scribe/scribe coordination claim \
-  --agent "$AGENT_NAME" \
-  --claim "indicator:X" \
-  --task "implement indicator X" \
-  --expected-file "components/technical-analysis/components/modals/IndicatorsModal.tsx" \
-  --expected-file "components/technical-analysis/lib/Indicators/TechnicalIndicators.ts" \
-  --expected-file "components/technical-analysis/lib/workers/indicators.worker.ts"
+```text
+active claim
+resource lock
+unconsumed action lease
+pending patch
+unresolved direct-write bypass
 ```
 
-Si un autre agent a un claim different mais les memes fichiers probables, ce n est pas un blocage. La commande signale `shared_files_detected: yes` et impose: relire les fichiers courants, fusionner les ajouts des autres, puis valider la coexistence.
+## Six-terminal terrain acceptance
 
-Si un autre agent a deja le meme claim semantique, par exemple `indicator:X`, la commande refuse. L'agent doit changer de tache ou attendre.
+A real six-terminal replay must prove:
 
-A la fin de la tache:
+1. six independent TENOR sessions;
+2. six distinct proofs and bridges;
+3. shared root, SCRIBE, Graphify and runtime;
+4. parallel read-only tasks;
+5. two independent writes on different resources;
+6. same-resource conflict rejection;
+7. cross-agent lease rejection;
+8. one interrupted-agent recovery;
+9. no orphan claims, locks or pending patches;
+10. each terminal finishes at `READY_FOR_NEXT_TASK`.
 
-```bash
-.agent/workflow/scribe/scribe coordination finish \
-  --agent "$AGENT_NAME" \
-  --claim "indicator:X" \
-  --summary "implemented indicator X" \
-  --changed-file "components/technical-analysis/lib/Indicators/TechnicalIndicators.ts"
-```
-
-Les evenements vont dans `scribe-out/coordination/events.jsonl`. Ils servent a synchroniser les agents entre eux; ils ne remplacent pas le SCRIBE, qui reste reserve a la memoire causale durable.
-
-## Avant implementation
-
-Checklist obligatoire:
-
-```bash
-.agent/workflow/scribe/scribe workflow check --agent "$AGENT_NAME"
-.agent/workflow/scribe/scribe lock status
-.agent/workflow/scribe/scribe sync --agent "$AGENT_NAME" --type "$AGENT_TYPE"
-.agent/workflow/scribe/scribe worktree --surface <surface> --agent "$AGENT_NAME" --limit 80
-.agent/workflow/scribe/scribe coordination status
-.agent/workflow/scribe/scribe-rag preflight --tier CRITICAL --strict "<plan>"  # only if risk tier is CRITICAL
-```
-
-L'agent doit lire les changements visibles dans `worktree` et les claims actifs avant d'ecrire. Si le meme fichier est partage par un claim semantique different, il continue seulement apres relecture de la version courante et rebase explicite. Si le meme claim semantique, la meme fonction exacte, une suppression ou un refactor global est en cours, il stoppe.
-
-## Avant ecriture SCRIBE
-
-Avant de modifier `AGENT-MEMOIRE_PROJECT_STATUS.scribe`, l'agent doit connaitre
-les changements deja presents et verifier que la memoire n'a pas evolue depuis
-son dernier sync.
-
-Sequence obligatoire:
-
-```bash
-.agent/workflow/scribe/scribe workflow check --agent "$AGENT_NAME"
-.agent/workflow/scribe/scribe lock status
-.agent/workflow/scribe/scribe lock acquire --agent "$AGENT_NAME" --type "$AGENT_TYPE" --session "<JOURNAL-ID>"
-.agent/workflow/scribe/scribe sync --agent "$AGENT_NAME" --type "$AGENT_TYPE"
-.agent/workflow/scribe/scribe doctor --suggest-fix
-.agent/workflow/scribe/scribe worktree --surface scribe --agent "$AGENT_NAME" --limit 80
-```
-
-Puis seulement:
-
-1. relire le dernier etat SCRIBE pertinent;
-2. integrer les changements faits par les agents precedents;
-3. ecrire uniquement en append incremental;
-4. relancer doctor;
-5. sync repair;
-6. release lock.
-
-Fin:
-
-```bash
-.agent/workflow/scribe/scribe doctor --suggest-fix
-.agent/workflow/scribe/scribe sync --repair --agent "$AGENT_NAME" --type "$AGENT_TYPE" --session "<JOURNAL-ID>" --changed-id "<JOURNAL-ID>" --write-kind memory_append
-.agent/workflow/scribe/scribe lock release --agent "$AGENT_NAME"
-```
-
-## Regle de precedence
-
-Un agent ne doit jamais ecrire dans SCRIBE comme si son travail etait seul au
-monde. Avant son append memoire, il doit verifier:
-
-- qui tient le lock;
-- quels fichiers ont change;
-- si `AGENT-MEMOIRE_PROJECT_STATUS.scribe` a deja ete modifie;
-- si un journal recent couvre deja le meme sujet;
-- si son delta contredit une entree precedente.
-
-Si oui, il adapte son entree ou demande coordination.
-
-## Fenetre de coordination et integration
-
-Aucun terminal ne recoit un role permanent au demarrage. Les quatre terminaux restent interchangeables: celui qui termine peut reprendre une autre tache.
-
-La coordination est un role temporaire tenu par la fenetre qui integre les deltas a un instant donne.
-
-Responsabilites temporaires:
-
-- verifier `.agent/workflow/scribe/scribe workflow status --strict` pour voir le pool reel des agents ackes;
-- utiliser `--required ... --strict` seulement si une liste nommee est explicitement imposee;
-- lire `coordination status` et les claims actifs avant toute attribution de travail;
-- arbitrer les conflits de claim semantique, de fonction exacte, de suppression, de renommage ou de refactor global;
-- demander aux agents de relire/rebase les fichiers partages avant livraison;
-- decider quel delta SCRIBE est grave;
-- garder les fichiers generes hors du commit produit.
+CI concurrency tests are necessary but do not replace this terrain proof.
 
 ## Red flags
 
-Stop immediat si:
+Stop immediately when:
 
-- `scribe workflow check --agent "$AGENT_NAME"` retourne ACK_REQUIRED ou ACK_STALE;
-- `scribe lock status` montre un autre agent actif sur SCRIBE;
-- `worktree --surface` retourne `SURFACE_VIOLATION`;
-- le fichier cible a change depuis la lecture initiale et l'agent n a pas encore relu puis rebased;
-- `AGENT-MEMOIRE_PROJECT_STATUS.scribe` a change depuis le dernier sync;
-- l'agent ne sait pas si son information est plus recente que celle d'un autre;
-- deux agents corrigent le meme symptome avec deux strategies differentes;
-- un agent tente de livrer sans verifier `scribe coordination status` et les claims semantiques actifs.
+- host tools are not visible or root binding is unknown;
+- an agent presents another agent's proof or lease;
+- `pre_action_guard` refuses the action;
+- the target hash changed since planning;
+- another owner holds the same semantic claim or exact resource;
+- a direct mutation appears without MCP receipts;
+- Graphify is stale, wrong-root, stub or missing;
+- SCRIBE changed since the last memory sync;
+- closure would leave runtime ownership behind.
 
-## Formule courte
+## Short formula
 
-Multi-agent SCRIBE = identite unique + presence idle/working + claims semantiques + fichiers partages autorises avec rebase + events runtime + sync/worktree avant travail + lock avant memoire + precedence avant append.
+```text
+multi-agent V2.16 =
+TENOR_INIT_READY per terminal
++ distinct identity/proof/lease
++ shared runtime/SCRIBE/Graphify
++ targeted context
++ guard + lock + claim + patch queue
++ workspace audit
++ clean release and finish
+```
 
+## Documentation maintenance
+
+Any coordination change must update code, tests, this file, multi-agent installation docs, machine rules, host rules and PR body according to `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
