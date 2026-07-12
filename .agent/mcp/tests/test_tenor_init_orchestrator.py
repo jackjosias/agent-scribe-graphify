@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -140,6 +141,38 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         with self.assertRaises(orchestrator.TenorInitBusy):
             orchestrator.acquire_tenor_init_lock(root, wait_timeout_seconds=0.0, stale_after_seconds=1.0)
         self.assertTrue(lock.path.exists())
+        orchestrator.release_tenor_init_lock(lock)
+
+    def test_fresh_partial_lock_is_not_stolen(self) -> None:
+        root = self.base / "fresh-partial-lock"
+        root.mkdir()
+        make_project(root)
+        lock_path = root / orchestrator.LOCK_RELATIVE
+        lock_path.write_text("", encoding="utf-8")
+
+        with self.assertRaises(orchestrator.TenorInitBusy):
+            orchestrator.acquire_tenor_init_lock(
+                root,
+                wait_timeout_seconds=0.0,
+                stale_after_seconds=30.0,
+            )
+        self.assertTrue(lock_path.exists())
+
+    def test_old_partial_lock_is_recovered_from_mtime(self) -> None:
+        root = self.base / "old-partial-lock"
+        root.mkdir()
+        make_project(root)
+        lock_path = root / orchestrator.LOCK_RELATIVE
+        lock_path.write_text("", encoding="utf-8")
+        old = time.time() - 10_000
+        os.utime(lock_path, (old, old))
+
+        lock = orchestrator.acquire_tenor_init_lock(
+            root,
+            wait_timeout_seconds=0.0,
+            stale_after_seconds=1.0,
+        )
+        self.assertNotEqual(lock.nonce, "")
         orchestrator.release_tenor_init_lock(lock)
 
     def test_dead_stale_lock_is_recovered(self) -> None:
