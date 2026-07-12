@@ -1,35 +1,22 @@
-# scribe-rag — Retrieval Layer V1
+# scribe-rag — Canonical Agent Retrieval Layer
 
 ## Role
 
-scribe-rag is the only memory read interface for agents. Its index rebuild path
-uses SEL native Python modules for low-latency export, while the canonical SEL CLI
-remains available for compatibility, doctor, and maintenance commands. Agents must not read
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly. `preflight` is the host-model
-proof command: it emits whoami, context, eval, and challenge in one compact gate.
+`scribe-rag` is the canonical memory-read interface for agents. Agents must not read `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly during normal work.
 
-SEL remains the internal guard/write engine for bootstrap, doctor, lock, sync,
-state, export, archive, graph maintenance, and SCRIBE writes.
+SEL remains the internal maintenance/write engine for doctor, lock, sync, state, export, archive and canonical SCRIBE mutation.
 
-## Stabilized Baseline 2026-06-01
+## Place in V2.16
 
-- RAG tests: `25 OK`.
-- Protocol eval/gate: `8/8`.
-- Forced BM25 gate target: rebuild and eval should stay near single-digit seconds on the project SCRIBE; investigate if it regresses toward the old 18-26s CLI-export path.
-- BM25 remains canonical while eval stays `>= 7/8`.
-- Hybrid remains a fallback, not the default, and needs concrete recall-loss evidence before activation.
-- The current operational instruction is to stop improving SCRIBE and return to product work unless a real SCRIBE defect appears.
+A host session begins with:
 
-## Modes
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-- `BM25`: default, zero external dependency, portable.
-- `Hybrid`: enabled by `--with-embeddings` when `sentence-transformers` is installed.
+TENOR INIT classifies installation, adopts or creates SCRIBE, verifies Graphify and emits the session machine proof. `scribe-rag` is then used for targeted causal retrieval inside the task workflow.
 
-Hybrid is recommended only after recall-loss evidence: `scribe-rag eval --force`
-drops below `7/8`, a query misses a known relevant SCRIBE entry, or
-`challenge "<plan>"` fails to surface a directly related SCAR/VAC/GHOST. The
-mere presence of `sentence-transformers` or the `all-MiniLM-L6-v2` model is not
-a reason to leave BM25.
+`scribe-rag preflight` is memory-use proof, not installation authority. `bootstrap` is not the V2.16 public entry.
 
 ## Commands
 
@@ -47,90 +34,104 @@ a reason to leave BM25.
 .agent/workflow/scribe/scribe-rag whoami
 ```
 
-## Workflow Tiers
+Equivalent MCP retrieval uses `scribe_query` after `before_task` and before sensitive action leases.
 
-```bash
-# NANO: < 30 min, one file, no shared surface
-.agent/workflow/scribe/scribe-rag context
+## Retrieval contract
 
-# STANDARD: significant implementation
-.agent/workflow/scribe/scribe-rag build
-.agent/workflow/scribe/scribe-rag context
-.agent/workflow/scribe/scribe-rag challenge "<plan>"
+A query is not a checkbox. Retrieved SCAR, GHOST, VAC, PAT, invariant, decision, debt or `ne_pas_reproposer` must:
 
-# CRITICAL: auth/data/public API, SCRIBE mutation, or shared surface
-.agent/workflow/scribe/scribe-rag preflight --tier CRITICAL --strict "<plan>"
-```
+- change the plan;
+- add a protective test or constraint;
+- reject a previously failed approach;
+- or be explicitly challenged as irrelevant/contradictory.
 
-## Local State
+Executing a query and ignoring its output is false memory usage.
 
-`scribe-rag whoami` reports the last SCRIBE writer, last session, lock status,
-lock owner/surface when locked, index mode, and the eval command to run. It is
-read-only.
+## Graphify separation
 
-## Canonical Decisions
+- Graphify: structure, dependencies, communities, centrality and blast radius.
+- SCRIBE-RAG: causal pain, decisions, failures, prohibitions and durable lessons.
 
-- `PAT-GRAPH-001`: Graphify handles structure while SCRIBE handles causal memory.
-- `PAT-GIT-001`: generated Graphify/SCRIBE runtime state stays out of product commits by default.
-- `PAT-SCRIBE-RAG-001`: host agents prove memory usage through `scribe-rag preflight`.
-- `GHOST-SCRIBE-RAG-SEL-DIRECT-001`: SEL direct retrieval is rejected for host agents.
+Do not store structural facts in SCRIBE when Graphify can infer them. Do not use SCRIBE-RAG as a replacement for Graphify architecture queries.
 
-Benchmark decision data:
+## Modes
 
-- Preflight output: one proof surface for whoami, context, eval, and challenge.
-- Query output: scribe-rag BM25 `12` lines vs SEL `34` lines.
-- Protocol eval: Graphify/SCRIBE separation, artifact boundary, scribe-rag interface, and SEL-direct rejection.
-- Hybrid rejected as default because its latency, dependency risk, and model footprint do not justify the marginal gain while BM25 retrieves the right memory.
-- BM25 index rebuild uses a native index export contract rather than the full SEL export payload; compatibility tests compare the native contract with the CLI export entity and tier contract.
-- A hybrid index must not satisfy a default BM25 request; default commands rebuild BM25 instead of silently loading the embedding model.
+### BM25
 
-## Gate CI / Pre-Commit
+Default, portable and dependency-light. Keep BM25 while it retrieves known relevant memories and protocol eval remains acceptable.
 
-Use this command in a pre-commit hook or CI job:
+### Hybrid
+
+Opt-in only after actual recall-loss evidence, such as:
+
+- eval falling below the accepted gate;
+- a known relevant entry repeatedly missing;
+- challenge failing to surface a directly related SCAR/VAC/GHOST;
+- repeated off-topic retrieval for normal project wording.
+
+The mere presence of `sentence-transformers` or a local embedding model is not a reason to switch.
+
+## Workflow tiers
+
+Use the smallest safe tier selected by risk.
+
+### NANO
+
+Focused context for a bounded read-only or one-file low-risk task.
+
+### STANDARD
+
+Significant implementation: context, targeted query and plan challenge.
+
+### CRITICAL
+
+Auth/data/public API, deletion, global refactor, shared surface or SCRIBE mutation. Use strict preflight and full ownership controls.
+
+A tier does not replace the MCP mutation workflow.
+
+## Gate
 
 ```bash
 .agent/workflow/scribe/scribe-rag gate
 ```
 
-It rebuilds the compact index, runs the protocol eval, and exits non-zero unless
-all checks pass and the score is at least `8/8`. The portable hook
-`.agent/workflow/scribe/hooks/pre-commit` calls this command directly.
+The gate rebuilds the compact index, runs protocol evaluation and exits non-zero when the required score is not met.
 
-## AutoDream Policy
+For full V2.16 validation, also run the portability matrix and Linux deep validation. A green RAG gate does not prove host MCP visibility.
 
-AutoDream is not an automatic idle daemon. The host agent must suggest it only
-after a completed implementation, because it cannot know real user idle time.
-The executable runner is `scribe-rag autodream --read-only`. It emits a bounded
-text or JSON report with diff surfaces, stale context cleanup, contradiction
-findings, candidate SCAR/PAT/GHOST/JOURNAL memories, and `read_only_proof`.
-Defaults are finite: 500 files, 12 MB read budget, 240 KB diff-summary budget,
-5s timeout, 180 output lines. `--cancel-file <path>` aborts safely. The runner
-does not rebuild indexes, run doctor, acquire locks, write SCRIBE, modify code,
-change generated outputs, install dependencies, start background services, or
-commit. If the user approves a candidate write, run it as a separate guarded
-SCRIBE mutation.
+## AutoDream
 
-## Canonical Surface Sync
-
-When SCRIBE/RAG workflow behavior changes, propagate the same operational fact
-to every canonical surface before delivery: `AGENTS.md`,
-`.agent/rules/scribe.md`, `.agent/skills/init-tenor/SKILL.md`,
-`.agent/workflow/scribe/README.md`, `.agent/workflow/scribe/rag/README.md`,
-`.agent/workflow/scribe/sel/docs/AGENTS.md`,
-`.agent/workflow/scribe/sel/docs/friction-policy.md`,
-`.agent/workflow/scribe/sel/docs/scribe.md`, and
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe`. Do not update archive `.old` files for
-current operating rules.
-
-## Hybrid Signal
+AutoDream is a user-approved, bounded, read-only post-implementation review:
 
 ```bash
-.agent/workflow/scribe/scribe-rag eval --force
-# if result is < 7/8, or a known relevant SCRIBE entry is missed by BM25:
-pip install sentence-transformers --break-system-packages
-.agent/workflow/scribe/scribe-rag build --with-embeddings --force
+.agent/workflow/scribe/scribe-rag autodream --read-only
 ```
 
-After that build, only commands explicitly run with `--with-embeddings` should use the hybrid index. Keep BM25 when
-the proof is only "a model exists"; switch only when retrieval quality actually
-fails.
+It may inspect diff surfaces, current RAG context, coordination state and docs to propose memory candidates. It must not edit source, mutate SCRIBE, modify generated outputs, install dependencies, start daemons or commit.
+
+Any approved memory write becomes a separate guarded task.
+
+## Local state
+
+`scribe-rag whoami` is read-only and may report last writer/session, lock status, index mode and eval command. It does not create a host bridge and does not produce `TENOR_INIT_READY`.
+
+## Causal quality
+
+Do not create SCAR/GHOST/PAT entries to improve dashboard ratios. Record only concrete future value:
+
+```text
+root cause
+regression protection
+rejected approach
+important decision
+active debt
+forbidden recurrence
+```
+
+Before closure, ask what will hurt the next LLM if undocumented.
+
+## Documentation synchronization
+
+All retrieval behavior changes must follow `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
+
+Update this file together with the skill, machine rules, always-on rules, SEL docs, generators, tests and PR body. Dated test counts are historical evidence, not permanent architecture.
