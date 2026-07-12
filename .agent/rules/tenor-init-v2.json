@@ -1,6 +1,9 @@
 {
   "name": "TENOR_INIT_V2_16",
-  "human_trigger": "[[.agent/skills/init-tenor/SKILL.md]]",
+  "human_trigger": "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]",
+  "legacy_human_triggers": [
+    "[[.agent/skills/init-tenor/SKILL.md]]"
+  ],
   "entry_file": ".agent/skills/init-tenor/SKILL.md",
   "required_mcp": "agent-scribe-graphify",
   "mcp_entrypoint": ".agent/mcp/server_entry.py",
@@ -8,6 +11,13 @@
     ".agent/skills/init-tenor/SKILL.md",
     ".agent/rules/tenor-init-v2.json"
   ],
+  "entry_semantics": {
+    "human_llm_trigger_required_for_host_sessions": true,
+    "direct_cli_allowed_for_ci_scripts_and_humans": true,
+    "bootstrap_is_internal_or_legacy": true,
+    "bootstrap_must_not_bypass_tenor_init": true,
+    "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>"
+  },
   "authority_order": [
     "resolve_current_project_root",
     "classify_installation_from_manifest_and_root",
@@ -25,6 +35,7 @@
   "tenor_init_commands": {
     "cli": ".agent/workflow/scribe/scribe tenor-init --type cli",
     "extension": ".agent/workflow/scribe/scribe tenor-init --type extension",
+    "api": ".agent/workflow/scribe/scribe tenor-init --type api",
     "windows_python": "python .agent/workflow/scribe/scribe tenor-init --type cli",
     "graphify_build": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
   },
@@ -73,7 +84,22 @@
     "not_ready_exit_code": 78,
     "not_ready_verdict": "TENOR_INIT_REQUIRED",
     "must_not_retry_as_transient_failure": true,
-    "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli"
+    "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli",
+    "list_tools_proves_only_local_server": true,
+    "list_tools_does_not_prove_host_visibility": true
+  },
+  "atomic_write_policy": {
+    "exclusive_temp_creation_required": true,
+    "preferred_primitive": "tempfile.mkstemp",
+    "same_destination_directory_required": true,
+    "fsync_before_replace": true,
+    "atomic_replace_required": true,
+    "timestamp_name_is_not_uniqueness_proof": true,
+    "covered_surfaces": [
+      "installation_manifest",
+      "host_instruction_repair",
+      "future_shared_metadata_writers"
+    ]
   },
   "graphify_readiness": {
     "manifest": ".agent/state/outputs/graphify-out/GRAPHIFY_READY.json",
@@ -83,11 +109,18 @@
       "graph.html",
       "GRAPHIFY_READY.json"
     ],
+    "node_field": "nodes",
+    "supported_edge_fields": [
+      "links",
+      "edges"
+    ],
+    "real_graphify_edge_field": "links",
+    "dual_edge_fields_must_be_equivalent": true,
     "requires_project_root_match": true,
     "requires_workspace_fingerprint_match": true,
     "rejects_smoke_stub_on_terrain": true,
     "rejects_legacy_unbound_graph": true,
-    "rejects_corrupt_or_partial_graph": true,
+    "rejects_corrupt_partial_or_contradictory_graph": true,
     "empty_project_placeholder_allowed_only_while_no_application_code": true,
     "bounded_build_command": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
   },
@@ -107,6 +140,7 @@
       "before_task",
       "targeted_scribe_query",
       "targeted_graphify_query",
+      "pre_action_guard",
       "resource_lock_claim",
       "claim_resource",
       "file_hash",
@@ -123,6 +157,7 @@
       "before_task",
       "targeted_scribe_query",
       "targeted_graphify_query",
+      "pre_action_guard",
       "resource_lock_claim",
       "claim_resource",
       "file_hash",
@@ -138,12 +173,13 @@
   "multi_agent_rules": [
     "each terminal runs its own TENOR INIT",
     "shared bootstrap is serialized by an owned nonce lock",
+    "fresh partial lock age falls back to filesystem mtime",
     "same project never purges active shared runtime",
     "each agent uses a distinct agent_id and proof token",
     "reads are concurrent",
     "writes require resource lock, claim, action lease and patch queue",
-    "one agent cannot use another agent lease",
-    "do not finish with active claims, locks or pending patches"
+    "one agent cannot use another agent proof lease claim or lock",
+    "do not finish with active claims locks or pending patches"
   ],
   "memory_policy": {
     "scribe_query": {
@@ -160,6 +196,7 @@
     },
     "scribe_record": {
       "runtime_receipt_is_not_canonical_memory": true,
+      "record_only_when_causal_value_exists": true,
       "record_when": [
         "write_applied",
         "important_decision",
@@ -174,7 +211,6 @@
     }
   },
   "host_mcp_preflight": {
-    "must_run_before_tenor_init": false,
     "local_tenor_init_must_run_first": true,
     "local_server_check_after_init": {
       "command": "python .agent/mcp/server_entry.py --list-tools",
@@ -229,6 +265,29 @@
       "direct filesystem tripwire",
       "workspace audit",
       "canonical memory finish gate"
+    ],
+    "bypass_verdict": "DIRECT_WRITE_BYPASS_DETECTED"
+  },
+  "documentation_sync": {
+    "policy": ".agent/docs/DOCUMENTATION_SYNC_POLICY.md",
+    "code_tests_docs_generators_and_pr_move_together": true,
+    "dated_baselines_are_historical": true,
+    "canonical_surfaces": [
+      "README.md",
+      "AGENTS.md",
+      ".agent/rules/scribe.md",
+      ".agent/rules/tenor-init-v2.json",
+      ".agent/skills/init-tenor/SKILL.md",
+      ".agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md",
+      ".agent/docs/V2.16_TERRAIN_FINDINGS.md",
+      ".agent/docs/hosts/README.md",
+      ".agent/workflow/scribe/README.md",
+      ".agent/workflow/scribe/sel/docs/AGENTS.md",
+      ".agent/workflow/scribe/sel/docs/scribe.md",
+      ".agent/workflow/scribe/sel/docs/multi-agent-installation.md",
+      ".agent/host_adapter/templates.py",
+      ".agent/workflow/scribe/sel/scripts/scribe_install_templates.py",
+      "pull_request_body"
     ]
   },
   "report_fields": [
@@ -249,6 +308,9 @@
   ],
   "terminal_success": {
     "verdict": "TENOR_INIT_READY",
-    "requires_all_report_fields_proven": true
+    "requires_all_report_fields_proven": true,
+    "requires_real_host_visibility": true,
+    "requires_root_binding": true,
+    "requires_session_bridge": true
   }
 }
