@@ -1,68 +1,72 @@
-# Kilo Code MCP
+# Kilo Code MCP — V2.16 Terrain Guide
 
-Recherche web: 2026-06-21.
+## Canonical TENOR entry
 
-## Source officielle
+```text
+TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+```
 
-Source officielle non confirmee dans cette passe. A verifier avant installation.
+Mechanical local initialization:
 
-## Fichier de config
+```bash
+.agent/workflow/scribe/scribe tenor-init --type extension
+```
 
-`kilo.jsonc`
+`bootstrap` is internal/legacy, not the public start.
 
-## Commande `.agent`
+## Host identification and configuration
+
+The previous guide mentioned `kilo.jsonc`, but the official schema was not confirmed. Before any installation:
+
+1. identify the exact Kilo Code version and official documentation;
+2. confirm its MCP configuration file and scope;
+3. prefer project/workspace-local configuration;
+4. configure the current project's STDIO server only:
 
 ```bash
 python3 .agent/mcp/server_entry.py
 ```
 
-## Validation des tools
-
-Verifier que le host expose au minimum:
-
-- `workflow_next`
-- `before_task`
-- `scribe_query`
-- `graphify_query`
-- `propose_patch`
-- `apply_patch`
-- `delete_resource`
-- `finish_task`
-
-Commande locale de controle hors host:
-
-```bash
-python3 .agent/mcp/server_entry.py --list-tools
-```
-
-## Permissions a verifier
-
-- Shell direct: verifier si Kilo Code expose terminal/commande shell.
-- Edit direct: verifier si Kilo Code expose edition directe du workspace.
-- Desactivation: verifier si shell/edit directs peuvent etre desactives.
-- Sandbox: verifier si le host peut etre lance via `.agent/scripts/agent_sandbox.py`.
-
-## Direct Tool Neutralization
-
-Avant de classer ce host `SAFE`, verifier explicitement:
-
-1. Les tools natifs write/edit/apply_patch sont desactives, refuses, ou soumis a permission ask stricte.
-2. Le shell ne peut pas ecrire dans le projet, ou toute ecriture shell demande approbation.
-3. Les redirections `>`, `>>`, `tee`, `sed -i`, `perl -pi`, `rm`, `mv`, `cp` et scripts qui ecrivent sont bloques, sandboxes, ou detectes.
-4. Une detection dirty-write compare les fichiers modifies avant/apres la tache.
-5. Si une modification apparait sans trace MCP attendue: `DIRECT_WRITE_BYPASS_DETECTED`, STOP, rapport utilisateur.
-
-Si un seul point est inconnu, le verdict maximal est `ACCEPTABLE` ou `UNKNOWN`, pas `SAFE`.
-
-## Verdict terrain
+If the config contract is still unknown:
 
 ```text
-MCP visible: UNKNOWN
-MCP tools visibles: UNKNOWN
-Shell direct: UNKNOWN
-Edit/write_file direct: UNKNOWN
-Desactivation shell/edit possible: UNKNOWN
-Sandbox agent_sandbox.py possible: UNKNOWN
-Direct FS test: NOT_TESTED
-Verdict: UNKNOWN
+HOST_GUIDE_INCOMPLETE
 ```
+
+Do not invent a config file or write globally.
+
+## Required V2.16 proof
+
+Local `--list-tools` proves only local readiness. Inside Kilo Code, prove the complete `.agent` tool surface, matching root sentinel, `TENOR_INIT_BRIDGE_OK`, one complete MCP micro-write and controlled native-write paths.
+
+Wrong root:
+
+```text
+INIT_BLOCKED_MCP_WRONG_ROOT
+```
+
+Unproven host:
+
+```text
+HOST_MCP_UNBOUND
+LOCAL_INIT_READY_HOST_MCP_UNBOUND
+```
+
+## Direct-write audit
+
+Audit terminal, native edit/write tools, approval modes, redirects, `tee`, `sed -i`, `rm`, `mv`, `cp` and plugins. Any mutation without MCP receipts must yield `DIRECT_WRITE_BYPASS_DETECTED`.
+
+## Terrain verdict
+
+```text
+Official MCP schema: UNVERIFIED
+Kilo MCP config on final head: NOT_TESTED
+MCP tools visible to Kilo LLM: UNKNOWN
+Root binding: UNKNOWN
+TENOR_INIT_BRIDGE_OK: NOT_TESTED
+Complete MCP micro-write: NOT_TESTED
+Direct-write bypass: NOT_TESTED
+Final verdict: UNKNOWN
+```
+
+Update evidence only under `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
