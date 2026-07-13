@@ -1,0 +1,36 @@
+name: Temporary transcript artifact
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  upload-transcript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Verify transcript integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="tmp_final_export/conversation-chatgpt-public-6a55289f-b540-83ea-a397-0183fd86f5a4.txt"
+          test -f "$FILE"
+          test "$(sha256sum "$FILE" | awk '{print $1}')" = "614c3dcf655dd3a62d26518cb787af5bb430383409fa3b71c103c6c4c6019c14"
+          grep -q "Nombre total de messages visibles : 389" "$FILE"
+          grep -q "URL publique : https://chatgpt.com/share/6a55289f-b540-83ea-a397-0183fd86f5a4" "$FILE"
+
+      - name: Upload exact TXT
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-chatgpt-public-6a55289f
+          path: tmp_final_export/conversation-chatgpt-public-6a55289f-b540-83ea-a397-0183fd86f5a4.txt
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
