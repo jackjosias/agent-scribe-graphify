@@ -119,4 +119,47 @@ def scope_task_resource(
     return {
         "task_id": task_id,
         "agent_id": agent_id,
-        "previous_resource": current°(€€€€€€€€‰É•Í½ÕÉ”ˆèÍ…™”°(€€€€€€€€‰¥¹Ñ•¹Ðˆè…¹½¹¥…°°(€€€€€€€€‰ÍÉ¥‰•}‘½¹”ˆè…±Í”°(€€€€€€€€‰É…Á¥™å}‘½¹”ˆè…±Í”°(€€€€€€€€‰…±É•…‘å}Í½Á•ˆè…±Í”°(€€€ô(()}	M}IEU%I}=9QaQ}Id€ô}¥µÁ°¹É•ÅÕ¥É•}½¹Ñ•áÑ}É•…‘ä(()‘•˜É•ÅÕ¥É•}½¹Ñ•áÑ}É•…‘ä (€€€…•¹Ñ}¥èÍÑÈ°(€€€Ñ…Í­}¥èÍÑÈ°(€€€½¹Ñ•áÑ}Ñ½­•¸èÍÑÈ°(€€€É•Í½ÕÉ”èÍÑÈ€ô€ˆˆ°(€€€É•ÅÕ¥É•}É…Á¡¥™äè‰½½°ð9½¹”€ô9½¹”°(€€€ÍÑÉ¥Ñ}É•Í½ÕÉ”è‰½½°€ô…±Í”°(€€€…±±½Ý•‘}¥¹Ñ•¹ÑÌèÍ•ÑmÍÑÉtð9½¹”€ô9½¹”°(¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€‘…Ñ„€ô}	M}IEU%I}=9QaQ}Id (€€€€€€€…•¹Ñ}¥°(€€€€€€€Ñ…Í­}¥°(€€€€€€€½¹Ñ•áÑ}Ñ½­•¸°(€€€€€€€É•Í½ÕÉ”õÉ•Í½ÕÉ”°(€€€€€€€É•ÅÕ¥É•}É…Á¥™äõÉ•ÅÕ¥É•}É…Á¡¥™ä°(€€€€€€€ÍÑÉ¥Ñ}É•Í½ÕÉ”õÍÑÉ¥Ñ}É•Í½ÕÉ”°(€€€€€€€…±±½Ý•‘}¥¹Ñ•¹ÑÌõ…±±½Ý•‘}¥¹Ñ•¹ÑÌ°(€€€€¤(€€€…¹½¹¥…°€ô¹½Éµ…±¥é•}¥¹Ñ•¹Ð¡ÍÑÈ¡‘…Ñ„¹•Ð ‰¥¹Ñ•¹Ðˆ¤½È€ˆˆ¤¤(€€€É•ÍÕ±Ð€ô‘¥Ð¡‘…Ñ„¤(€€€É•ÍÕ±Ñl‰¥¹Ñ•¹Ð‰t€ô…¹½¹¥…°(€€€¥˜…¹½¹¥…°¥¸ì‰ÝÉ¥Ñ”ˆ°€‰‘•±•Ñ”‰ô…¹‰½½°¡É•ÍÕ±Ð¹•Ð ‰ÍÉ¥‰•}¡¥ÍÑ½Éå}…‰Í•¹Ðˆ¤¤è(€€€€€€€™É½´€¸¥µÁ½ÉÐÑ…Í­}‘¥Í½Ù•Éä(€€€€€€€ÑÉäè(€€€€€€€€€€€Ñ…Í­}‘¥Í½Ù•Éä¹É•ÅÕ¥É•}‘¥Í½Ù•Éå}É•…‘ä (€€€€€€€€€€€€€€€…•¹Ñ}¥°(€€€€€€€€€€€€€€€Ñ…Í­}¥°(€€€€€€€€€€€€€€€É•Í½ÕÉ”õÉ•Í½ÕÉ”½ÈÍÑÈ¡É•ÍÕ±Ð¹•Ð ‰É•Í½ÕÉ”ˆ¤½È€ˆˆ¤°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁÐÑ…Í­}‘¥Í½Ù•Éä¹Q…Í­¥Í½Ù•ÉåÉÉ½È…Ì•áŒè(€€€€€€€€€€€É…¥Í”Q…Í­½¹Ñ•áÑÉÉ½È¡•áŒ¹½‘”°•áŒ¹‘•Ñ…¥±Ì¤™É½´•áŒ(€€€É•ÑÕÉ¸É•ÍÕ±Ð(
+        "previous_resource": current,
+        "resource": safe,
+        "intent": canonical,
+        "scribe_done": False,
+        "graphify_done": False,
+        "already_scoped": False,
+    }
+
+
+_BASE_REQUIRE_CONTEXT_READY = _impl.require_context_ready
+
+
+def require_context_ready(
+    agent_id: str,
+    task_id: str,
+    context_token: str,
+    resource: str = "",
+    require_graphify: bool | None = None,
+    strict_resource: bool = False,
+    allowed_intents: set[str] | None = None,
+) -> dict[str, Any]:
+    data = _BASE_REQUIRE_CONTEXT_READY(
+        agent_id,
+        task_id,
+        context_token,
+        resource=resource,
+        require_graphify=require_graphify,
+        strict_resource=strict_resource,
+        allowed_intents=allowed_intents,
+    )
+    canonical = normalize_intent(str(data.get("intent") or ""))
+    result = dict(data)
+    result["intent"] = canonical
+    if canonical in {"write", "delete"} and bool(result.get("scribe_history_absent")):
+        from . import task_discovery
+        try:
+            task_discovery.require_discovery_ready(
+                agent_id,
+                task_id,
+                resource=resource or str(result.get("resource") or ""),
+            )
+        except task_discovery.TaskDiscoveryError as exc:
+            raise TaskContextError(exc.code, exc.details) from exc
+    return result
