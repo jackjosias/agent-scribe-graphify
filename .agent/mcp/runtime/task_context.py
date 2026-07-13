@@ -1,212 +1,122 @@
 from __future__ import annotations
 
-"""Canonical task-context facade for V2.16.
-
-The storage implementation remains isolated in ``_task_context_impl``. This
-module is the public policy boundary: every caller sees one canonical intent
-vocabulary, including contexts created by older hosts that persisted aliases.
-
-A zero SCRIBE result is security-significant only when it was written by the
-explicit first-write no-history path.  Older contexts may have ``scribe_done``
-with a zero/default result count, so they are projected as legacy-ready unless
-the managed marker is present.
-"""
+"""Canonical task-context facade with exact first-write discovery binding."""
 
 from typing import Any
 
 try:
-    from . import _task_context_impl as _impl
-except ImportError:  # pragma: no cover - direct script/import compatibility
-    import _task_context_impl as _impl  # type: ignore
+    from . import _task_context_first_write_impl as _impl
+except ImportError:  # pragma: no cover
+    import _task_context_first_write_impl as _impl  # type: ignore
 
 TaskContextError = _impl.TaskContextError
 DEFAULT_TTL_SECONDS = _impl.DEFAULT_TTL_SECONDS
-FIRST_WRITE_NO_HISTORY_PREFIX = "FIRST_WRITE_NO_HISTORY:"
+FIRST_WRITE_NO_HISTORY_PREFIX = _impl.FIRST_WRITE_NO_HISTORY_PREFIX
 
-_READ_ALIASES = frozenset({
-    "read",
-    "read_or_research",
-    "read-or-research",
-    "research",
-    "research_only",
-    "research-only",
-    "inspect",
-    "query",
-    "ask",
-    "explain",
-    "list",
-    "show",
-    "status",
+_COARSE_RESOURCES = frozenset({
+    "", ".", "(whole repo)", "whole repo", "whole-repo",
+    "repository", "repo", "project", "project-wide",
 })
-_WRITE_ALIASES = frozenset({
-    "write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create",
-})
-_DELETE_ALIASES = frozenset({"delete", "remove"})
 
 
-def normalize_intent(intent: str) -> str:
-    """Return the canonical security intent used by all task-context gates."""
-
-    value = (intent or "").strip().lower()
-    if value in _READ_ALIASES:
-        return "read"
-    if value in _WRITE_ALIASES:
-        return "write"
-    if value in _DELETE_ALIASES:
-        return "delete"
-    return value
+def _is_coarse_resource(resource: str) -> bool:
+    value = (resource or "").strip().lower()
+    return value in _COARSE_RESOURCES or "whole repo" in value
 
 
-# Backward-compatible internal name used by older modules/tests.
-_normalize_intent = normalize_intent
-
-
-def _canonical_task(data: dict[str, Any]) -> dict[str, Any]:
-    result = dict(data)
-    original = str(result.get("intent") or "")
-    canonical = normalize_intent(original)
-    result["intent"] = canonical
-    if original and original.strip().lower() != canonical:
-        result["intent_original"] = original
-
-    resources = str(result.get("scribe_result_resources") or "")
-    explicit_no_history = resources.startswith(FIRST_WRITE_NO_HISTORY_PREFIX)
-    result["scribe_history_absent"] = explicit_no_history
-    if explicit_no_history:
-        result["scribe_history_resource"] = resources[len(FIRST_WRITE_NO_HISTORY_PREFIX):]
-    elif result.get("scribe_done"):
-        try:
-            count = int(result.get("scribe_result_count") or 0)
-        except (TypeError, ValueError):
-            count = 0
-        if count == 0:
-            # Compatibility projection only: pre-V2.16 contexts did not persist
-            # an explicit no-history marker.  They were already considered
-            # context-ready and must not be reclassified by a schema default.
-            result["scribe_result_count"] = 1
-            result["scribe_result_count_legacy_assumed_ready"] = True
-    return result
-
-
-def find_active_task(agent_id: str, intent: str, resource: str) -> dict[str, Any] | None:
-    found = _impl.find_active_task(agent_id, normalize_intent(intent), resource)
-    return _canonical_task(found) if found is not None else None
-
-
-def create_task_context(
-    agent_id: str,
-    request: str,
-    intent: str = "",
-    resource: str = "",
-    requires_graphify: bool = False,
-    ttl_seconds: int | None = None,
-) -> dict[str, Any]:
-    canonical = normalize_intent(intent)
-    result = _impl.create_task_context(
-        agent_id,
-        request,
-        intent=canonical,
-        resource=resource,
-        requires_graphify=requires_graphify,
-        ttl_seconds=ttl_seconds,
-    )
-    return {**result, "intent": canonical}
-
-
-def resume_task_context(agent_id: str, task_id: str) -> dict[str, Any]:
-    result = _impl.resume_task_context(agent_id, task_id)
-    task = _canonical_task(_impl.task_status(task_id))
-    return {
-        **result,
-        "intent": task.get("intent") or "",
-        "resource": task.get("resource") or "",
-        "requires_graphify": bool(task.get("requires_graphify")),
-    }
-
-
-def task_status(task_id: str) -> dict[str, Any]:
-    return _canonical_task(_impl.task_status(task_id))
-
-
-def get_task_context(agent_id: str, task_id: str) -> dict[str, Any]:
-    return _canonical_task(_impl.get_task_context(agent_id, task_id))
-
-
-def list_tasks(agent_id: str = "", status: str = "") -> dict[str, Any]:
-    result = dict(_impl.list_tasks(agent_id=agent_id, status=status))
-    result["tasks"] = [_canonical_task(task) for task in result.get("tasks", [])]
-    result["count"] = len(result["tasks"])
-    return result
-
-
-def mark_scribe_done(
-    agent_id: str,
-    task_id: str,
-    context_token: str,
-    result_count: int = 0,
-    result_resources: str = "",
-) -> dict[str, Any]:
-    resources = result_resources or ""
-    if int(result_count or 0) == 0 and not resources.startswith(FIRST_WRITE_NO_HISTORY_PREFIX):
-        resources = f"{FIRST_WRITE_NO_HISTORY_PREFIX}{resources}"
-    result = _impl.mark_scribe_done(
-        agent_id,
-        task_id,
-        context_token,
-        result_count=result_count,
-        result_resources=resources,
-    )
-    result["scribe_history_absent"] = int(result_count or 0) == 0
-    if result["scribe_history_absent"]:
-        result["scribe_history_resource"] = resources[len(FIRST_WRITE_NO_HISTORY_PREFIX):]
-    return result
-
-
-def require_context_ready(
-    agent_id: str,
-    task_id: str,
-    context_token: str,
-    resource: str = "",
-    require_graphify: bool | None = None,
-    strict_resource: bool = False,
-    allowed_intents: set[str] | None = None,
-) -> dict[str, Any]:
-    """Validate readiness, then enforce canonical intent authorization.
-
-    Readiness (token, ownership, resource, SCRIBE freshness and Graphify) stays
-    delegated to the storage implementation. Intent authorization is applied
-    here so aliases cannot accidentally gain write privileges or become
-    impossible to finish.
-    """
-
-    data = _impl.require_context_ready(
-        agent_id,
-        task_id,
-        context_token,
-        resource=resource,
-        require_graphify=require_graphify,
-        strict_resource=strict_resource,
-        allowed_intents=None,
-    )
-    canonical = normalize_intent(str(data.get("intent") or ""))
-    if allowed_intents is not None:
-        allowed = {normalize_intent(value) for value in allowed_intents}
-        if not canonical:
-            raise TaskContextError("TASK_CONTEXT_INTENT_REQUIRED: task context intent is required")
-        if canonical not in allowed:
-            code = "READ_INTENT_CANNOT_WRITE" if canonical == "read" else "TASK_CONTEXT_INTENT_MISMATCH"
-            raise TaskContextError(code, {"intent": canonical, "allowed_intents": sorted(allowed)})
-    result = _canonical_task(dict(data))
-    result["intent"] = canonical
-    return result
-
-
-# Re-export the storage API without overriding the policy functions above.
+# Preserve every established policy/storage API before overriding the two
+# first-write authority functions below.
 for _name in dir(_impl):
     if _name.startswith("__") or _name in globals():
         continue
     globals()[_name] = getattr(_impl, _name)
 
 
-def __getattr__(name: str) -> Any:
-    return getattr(_impl, name)
+def verify_active_context(agent_id: str, task_id: str, context_token: str) -> dict[str, Any]:
+    storage = _impl._impl
+    return _impl._canonical_task(storage._load_ready(agent_id, task_id, context_token))
+
+
+def scope_task_resource(
+    agent_id: str,
+    task_id: str,
+    context_token: str,
+    resource: str,
+) -> dict[str, Any]:
+    """Narrow one coarse mutating task to one exact file before ownership exists."""
+
+    from . import patch_queue, resource_locks, task_discovery
+
+    storage = _impl._impl
+    data = verify_active_context(agent_id, task_id, context_token)
+    canonical = normalize_intent(str(data.get("intent") or ""))
+    if canonical not in {"write", "delete"}:
+        raise TaskContextError("TASK_RESOURCE_SCOPE_MUTATING_INTENT_REQUIRED", {"intent": canonical})
+    current = str(data.get("resource") or "")
+    safe = patch_queue.safe_resource(resource)
+    if _is_coarse_resource(safe):
+        raise TaskContextError("TASK_EXACT_RESOURCE_REQUIRED")
+    if not _is_coarse_resource(current):
+        if current == safe:
+            return {
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "resource": safe,
+                "intent": canonical,
+                "already_scoped": True,
+            }
+        raise TaskContextError(
+            "TASK_CONTEXT_RESOURCE_MISMATCH",
+            {"task_resource": current, "requested_resource": safe},
+        )
+
+    patch_queue.ensure_schema()
+    resource_locks.ensure_schema()
+    ensure_schema()
+    with storage.connect() as con:
+        active_claims = con.execute(
+            "SELECT COUNT(*) FROM claims WHERE agent_id=? AND status='active'",
+            (agent_id,),
+        ).fetchone()[0]
+        pending_patches = con.execute(
+            "SELECT COUNT(*) FROM patches_v2 WHERE agent_id=? AND status IN ('proposed','conflict')",
+            (agent_id,),
+        ).fetchone()[0]
+        active_locks = con.execute(
+            f"SELECT COUNT(*) FROM {resource_locks.LOCK_TABLE} WHERE agent_id=? AND expires_at>?",
+            (agent_id, storage.now_ts()),
+        ).fetchone()[0]
+        if active_claims or pending_patches or active_locks:
+            raise TaskContextError(
+                "TASK_RESOURCE_SCOPE_ALREADY_MUTATING",
+                {
+                    "active_claims": int(active_claims),
+                    "pending_patches": int(pending_patches),
+                    "active_locks": int(active_locks),
+                },
+            )
+        request_hash = storage._request_hash(str(data.get("request") or ""), canonical, safe)
+        con.execute(
+            """
+            UPDATE task_context_v2
+            SET resource=?,request_hash=?,scribe_done=0,graphify_done=0,
+                memory_hash=NULL,scribe_result_count=0,scribe_result_resources='',
+                scribe_record_done=0,scribe_record_required=0,scribe_record_policy=NULL,
+                scribe_record_path=NULL,scribe_record_digest=NULL,
+                scribe_record_promoted=0,scribe_record_entry_id=NULL,
+                scribe_record_skip_reason=NULL
+            WHERE task_id=? AND agent_id=? AND status='active'
+            """,
+            (safe, request_hash, task_id, agent_id),
+        )
+        storage.add_event(
+            con,
+            "task.resource_scoped",
+            {"task_id": task_id, "previous_resource": current, "resource": safe, "intent": canonical},
+            agent_id,
+        )
+    task_discovery.clear_task(task_id, agent_id)
+    return {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "previous_resource": current°(€€€€€€€€‰É•Í½ÕÉ”ˆèÍ…™”°(€€€€€€€€‰¥¹Ñ•¹Ğˆè…¹½¹¥…°°(€€€€€€€€‰ÍÉ¥‰•}‘½¹”ˆè…±Í”°(€€€€€€€€‰É…Á¥™å}‘½¹”ˆè…±Í”°(€€€€€€€€‰…±É•…‘å}Í½Á•ˆè…±Í”°(€€€ô(()}	M}IEU%I}=9QaQ}Id€ô}¥µÁ°¹É•ÅÕ¥É•}½¹Ñ•áÑ}É•…‘ä(()‘•˜É•ÅÕ¥É•}½¹Ñ•áÑ}É•…‘ä (€€€…•¹Ñ}¥èÍÑÈ°(€€€Ñ…Í­}¥èÍÑÈ°(€€€½¹Ñ•áÑ}Ñ½­•¸èÍÑÈ°(€€€É•Í½ÕÉ”èÍÑÈ€ô€ˆˆ°(€€€É•ÅÕ¥É•}É…Á¡¥™äè‰½½°ğ9½¹”€ô9½¹”°(€€€ÍÑÉ¥Ñ}É•Í½ÕÉ”è‰½½°€ô…±Í”°(€€€…±±½İ•‘}¥¹Ñ•¹ÑÌèÍ•ÑmÍÑÉtğ9½¹”€ô9½¹”°(¤€´ø‘¥ÑmÍÑÈ°¹åtè(€€€‘…Ñ„€ô}	M}IEU%I}=9QaQ}Id (€€€€€€€…•¹Ñ}¥°(€€€€€€€Ñ…Í­}¥°(€€€€€€€½¹Ñ•áÑ}Ñ½­•¸°(€€€€€€€É•Í½ÕÉ”õÉ•Í½ÕÉ”°(€€€€€€€É•ÅÕ¥É•}É…Á¥™äõÉ•ÅÕ¥É•}É…Á¡¥™ä°(€€€€€€€ÍÑÉ¥Ñ}É•Í½ÕÉ”õÍÑÉ¥Ñ}É•Í½ÕÉ”°(€€€€€€€…±±½İ•‘}¥¹Ñ•¹ÑÌõ…±±½İ•‘}¥¹Ñ•¹ÑÌ°(€€€€¤(€€€…¹½¹¥…°€ô¹½Éµ…±¥é•}¥¹Ñ•¹Ğ¡ÍÑÈ¡‘…Ñ„¹•Ğ ‰¥¹Ñ•¹Ğˆ¤½È€ˆˆ¤¤(€€€É•ÍÕ±Ğ€ô‘¥Ğ¡‘…Ñ„¤(€€€É•ÍÕ±Ñl‰¥¹Ñ•¹Ğ‰t€ô…¹½¹¥…°(€€€¥˜…¹½¹¥…°¥¸ì‰İÉ¥Ñ”ˆ°€‰‘•±•Ñ”‰ô…¹‰½½°¡É•ÍÕ±Ğ¹•Ğ ‰ÍÉ¥‰•}¡¥ÍÑ½Éå}…‰Í•¹Ğˆ¤¤è(€€€€€€€™É½´€¸¥µÁ½ÉĞÑ…Í­}‘¥Í½Ù•Éä(€€€€€€€ÑÉäè(€€€€€€€€€€€Ñ…Í­}‘¥Í½Ù•Éä¹É•ÅÕ¥É•}‘¥Í½Ù•Éå}É•…‘ä (€€€€€€€€€€€€€€€…•¹Ñ}¥°(€€€€€€€€€€€€€€€Ñ…Í­}¥°(€€€€€€€€€€€€€€€É•Í½ÕÉ”õÉ•Í½ÕÉ”½ÈÍÑÈ¡É•ÍÕ±Ğ¹•Ğ ‰É•Í½ÕÉ”ˆ¤½È€ˆˆ¤°(€€€€€€€€€€€€¤(€€€€€€€•á•ÁĞÑ…Í­}‘¥Í½Ù•Éä¹Q…Í­¥Í½Ù•ÉåÉÉ½È…Ì•áŒè(€€€€€€€€€€€É…¥Í”Q…Í­½¹Ñ•áÑÉÉ½È¡•áŒ¹½‘”°•áŒ¹‘•Ñ…¥±Ì¤™É½´•áŒ(€€€É•ÑÕÉ¸É•ÍÕ±Ğ(
