@@ -252,7 +252,7 @@ def render_shim_helper() -> str:
         from types import ModuleType
         from typing import Any
 
-        sys.dont_writebytecode = True
+        sys.dont_write_bytecode = True
         ROOT = Path(__file__).resolve().parents[1]
         CANONICAL_SCRIPTS_DIR = ROOT / ".agent" / "workflow" / "scribe" / "sel" / "scripts"
 
