@@ -25,6 +25,7 @@ STEPS = (
     ("graphify_readiness", [sys.executable, ".agent/mcp/tests/test_graphify_readiness.py"]),
     ("graphify_scribe_bridge", [sys.executable, ".agent/tests/test_graphify_scribe_bridge.py"]),
     ("scribe_bootstrap", [sys.executable, ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"]),
+    ("generated_surface_parity", [sys.executable, ".agent/workflow/scribe/sel/tests/test_generated_surface_parity.py"]),
     ("tenor_init_output_hygiene", [sys.executable, ".agent/workflow/scribe/sel/tests/test_tenor_init_output_hygiene.py"]),
     ("scribe_memory_and_bundle_identity", [sys.executable, ".agent/workflow/scribe/sel/tests/test_scribe_memory.py"]),
     ("host_adapter_autoguard", [sys.executable, ".agent/mcp/tests/test_host_adapter_autoguard.py"]),
