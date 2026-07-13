@@ -395,6 +395,7 @@ def render_agents_block() -> str:
 
         - `{TENOR_SKILL_PATH}`
         - `{TENOR_RULE_PATH}`
+        - `{SCRIBE_RULE_PATH}`
         - `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md`
         - `{DOC_SYNC_PATH}`
         - `{PORTABLE_RELATIVE_PATH}/README.md`
