@@ -37,6 +37,7 @@ for _name in dir(_IMPL_MODULE):
         globals()[_name] = _value
 
 import scribe_bootstrap
+from host_adapter import instructions as host_instructions
 from runtime import task_context
 
 
@@ -144,6 +145,59 @@ class RuntimePolicyPortabilityTest(unittest.TestCase):
         self.assertTrue(
             all(call.args[0] <= 0.25 for call in sleeper.call_args_list)
         )
+
+    def test_dead_same_host_instruction_owner_is_recoverable_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / ".AGENTS.md.agent-instructions.lock"
+            lock_path.write_text(
+                json.dumps({
+                    "nonce": "dead-owner",
+                    "pid": 999999,
+                    "hostname": host_instructions.socket.gethostname(),
+                    "created_epoch": time.time(),
+                }),
+                encoding="utf-8",
+            )
+            with mock.patch.object(
+                host_instructions._impl,
+                "_pid_is_alive",
+                return_value=False,
+            ):
+                self.assertTrue(
+                    host_instructions._lock_is_stale(
+                        lock_path,
+                        host_instructions._impl._read_lock(lock_path),
+                    )
+                )
+
+    def test_instruction_lock_release_retries_windows_sharing_and_cleans_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / ".AGENTS.md.agent-instructions.lock"
+            lock_path.write_text(
+                json.dumps({"nonce": "owned", "pid": os.getpid()}),
+                encoding="utf-8",
+            )
+            real_unlink = Path.unlink
+            attempts = 0
+
+            def flaky_unlink(path: Path, *args, **kwargs) -> None:
+                nonlocal attempts
+                if path == lock_path and attempts < 2:
+                    attempts += 1
+                    raise PermissionError("sharing violation")
+                real_unlink(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "unlink", flaky_unlink), mock.patch.object(
+                time,
+                "sleep",
+            ) as sleeper:
+                self.assertTrue(
+                    host_instructions._release_owned_lock(lock_path, "owned")
+                )
+            self.assertEqual(attempts, 2)
+            self.assertEqual(sleeper.call_count, 2)
+            self.assertFalse(lock_path.exists())
+            self.assertEqual(host_instructions._process_lock_registry_size(), 0)
 
 
 if __name__ == "__main__":
