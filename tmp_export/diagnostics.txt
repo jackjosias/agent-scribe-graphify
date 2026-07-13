@@ -1,0 +1,12 @@
+share_page status=200 content_type=text/html; charset=utf-8 bytes=8336571
+api endpoint=https://chatgpt.com/backend-anon/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=1 status=403 content_type=text/html; charset=UTF-8 bytes=9289
+api endpoint=https://chatgpt.com/backend-anon/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=2 status=403 content_type=text/html; charset=UTF-8 bytes=9310
+api endpoint=https://chatgpt.com/backend-anon/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=3 status=403 content_type=text/html; charset=UTF-8 bytes=9289
+api endpoint=https://chatgpt.com/backend-api/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=1 status=403 content_type=text/html; charset=UTF-8 bytes=9307
+api endpoint=https://chatgpt.com/backend-api/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=2 status=403 content_type=text/html; charset=UTF-8 bytes=9286
+api endpoint=https://chatgpt.com/backend-api/share/6a55289f-b540-83ea-a397-0183fd86f5a4 attempt=3 status=403 content_type=text/html; charset=UTF-8 bytes=9286
+title=Conversation ChatGPT publique
+messages=0
+user_messages=0
+assistant_messages=0
+txt_bytes=418
