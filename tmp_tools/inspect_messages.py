@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
-from tmp_tools.stream_extract import extract_content, linear
+from stream_extract import extract_content, linear
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "tmp_message_inspect"
