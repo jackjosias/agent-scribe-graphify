@@ -14,10 +14,11 @@ When documents disagree, use this order:
 2. `.agent/rules/tenor-init-v2.json` — machine-readable operating contract;
 3. `.agent/skills/init-tenor/SKILL.md` — host-LLM initialization procedure;
 4. `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md` — architecture and proof categories;
-5. `AGENTS.md` and `.agent/rules/scribe.md` — short always-on host rules;
-6. `.agent/workflow/scribe/README.md` and SEL/RAG internal manuals;
-7. host-specific guides under `.agent/docs/hosts/`;
-8. historical reports, `.old` files and dated snapshots.
+5. `.agent/docs/V2.16_DATA_PRESERVATION.md` — runtime purge, output preservation and legacy-conflict contract;
+6. `AGENTS.md` and `.agent/rules/scribe.md` — short always-on host rules;
+7. `.agent/workflow/scribe/README.md` and SEL/RAG internal manuals;
+8. host-specific guides under `.agent/docs/hosts/`;
+9. historical reports, `.old` files and dated snapshots.
 
 A lower-level or historical document must never override a higher-level current contract.
 
@@ -41,7 +42,7 @@ The old `[[.agent/skills/init-tenor/SKILL.md]]` trigger may be recognized for co
 
 ## Surfaces that must move together
 
-Any change to installation, relocation, Graphify readiness, host binding, task workflow, memory policy or multi-agent coordination must audit and update, when relevant:
+Any change to installation, relocation, runtime purge, output migration, Graphify readiness, host binding, task workflow, memory policy or multi-agent coordination must audit and update, when relevant:
 
 ```text
 README.md
@@ -50,6 +51,7 @@ AGENTS.md
 .agent/rules/tenor-init-v2.json
 .agent/skills/init-tenor/SKILL.md
 .agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md
+.agent/docs/V2.16_DATA_PRESERVATION.md
 .agent/docs/V2.16_TERRAIN_FINDINGS.md
 .agent/docs/hosts/README.md
 .agent/docs/hosts/<ACTIVE_HOST>.md
@@ -72,7 +74,7 @@ For every protocol evolution:
 2. **Implementation** — change the smallest authoritative code surface.
 3. **Executable proof** — add or update tests that fail under the old contract.
 4. **String drift audit** — search canonical surfaces for superseded triggers, commands, verdicts, paths and schemas.
-5. **Generated-surface parity** — render or compare templates against checked-in outputs.
+5. **Generated-surface parity** — render or compare templates against checked-in outputs byte-for-byte.
 6. **Proof classification** — label each claim as implemented, tested or terrain-proven.
 7. **PR synchronization** — update the PR body so completed work is not still listed as pending.
 8. **CI and terrain replay** — do not mark the PR ready until required gates are green.
@@ -87,6 +89,9 @@ Examples of forbidden drift:
 - declaring `TENOR_INIT_READY` without host visibility, root binding and bridge proof;
 - documenting only `nodes + edges` after real Graphify proved NetworkX `nodes + links`;
 - referring to root `graphify-out/` as canonical instead of `.agent/state/outputs/graphify-out/`;
+- describing runtime purge as deletion of all `.agent/state/` after canonical outputs became preservable evidence;
+- allowing legacy migration to overwrite a canonical destination instead of quarantining the conflict;
+- treating a preserved Graphify output as ready without root/fingerprint revalidation;
 - copying global host paths into a workspace-local guide;
 - keeping a dated test count or baseline as a current architectural truth;
 - documenting a fallback that bypasses an explicit safety verdict;
@@ -126,6 +131,8 @@ code/tests/docs/generators aligned
 portable matrix green
 Linux deep validation green
 checkout clean after tests
+runtime purge preserves canonical outputs
+legacy conflicts quarantine without data loss
 real Graphify proof
 real codebase relocation/adoption proof
 host tools visible to LLM
