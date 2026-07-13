@@ -32,6 +32,7 @@ class GeneratedSurfaceParityTest(unittest.TestCase):
         )
         self.assertIn("canonical output wins", expected)
         self.assertIn("_legacy_migrated/", expected)
+        self.assertIn("- `.agent/rules/scribe.md`", expected)
 
     def test_scribe_rule_matches_generator_byte_for_byte(self) -> None:
         templates = load_templates()
