@@ -1,4 +1,4 @@
-name: Temporary public ChatGPT DOM and stream export
+name: Temporary public ChatGPT stream export
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  export-dom-and-stream:
+  export-stream:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -29,13 +29,13 @@ jobs:
       - name: Inspect React Router stream
         run: python tmp_tools/inspect_stream.py
 
-      - name: Extract messages from public HTML DOM
-        run: python tmp_tools/dom_extract.py
+      - name: Decode linear public conversation
+        run: python tmp_tools/stream_extract.py
 
-      - name: Commit extraction diagnostics
+      - name: Commit stream export result
         run: |
           git config user.name "chat-export-bot"
           git config user.email "chat-export-bot@users.noreply.github.com"
-          git add tmp_stream_inspect tmp_export_dom
-          git commit -m "chore(tmp): store stream inspection and DOM export" || true
+          git add tmp_stream_inspect tmp_stream_export
+          git commit -m "chore(tmp): store decoded public conversation export" || true
           git push origin HEAD:tmp/chat-export-6a55289f-20260713
