@@ -5,14 +5,18 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 MCP_DIR = HERE.parent
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
+from runtime import graphify_guard as guard
 from runtime import graphify_readiness as readiness
 
 
@@ -202,6 +206,85 @@ class GraphifyReadinessTest(unittest.TestCase):
         result = readiness.inspect_graphify_readiness(self.root)
         self.assertTrue(result.ok)
         self.assertEqual(result.verdict, readiness.GRAPHIFY_EMPTY_PROJECT_READY)
+
+
+class AtomicWriterHardeningTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "project"
+        (self.root / ".agent" / "state" / "outputs" / "graphify-out").mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _capture_mkstemp(self, captured: dict) -> object:
+        real_mkstemp = tempfile.mkstemp
+
+        def fake_mkstemp(*args, **kwargs):
+            captured["dir"] = kwargs.get("dir")
+            captured["prefix"] = kwargs.get("prefix")
+            captured["suffix"] = kwargs.get("suffix")
+            fd, name = real_mkstemp(*args, **kwargs)
+            captured["tmp_name"] = name
+            return fd, name
+
+        return fake_mkstemp
+
+    def test_atomic_json_uses_exclusive_sibling_temp(self) -> None:
+        target = self.root / ".agent" / "state" / "outputs" / "graphify-out" / "manifest.json"
+        captured: dict[str, object] = {}
+        payload = {"schema": "graphify_manifest_v1", "verdict": "GRAPHIFY_OUTPUTS_READY"}
+        with mock.patch.object(tempfile, "mkstemp", self._capture_mkstemp(captured)):
+            readiness._atomic_json(target, payload)
+        self.assertEqual(captured["dir"], str(target.parent))
+        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["suffix"], ".tmp")
+        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
+        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), payload)
+
+    def test_atomic_json_concurrent_no_orphans(self) -> None:
+        target = self.root / ".agent" / "state" / "outputs" / "graphify-out" / "manifest.json"
+        marker = "Y" * 4096
+
+        def write(n: int) -> None:
+            readiness._atomic_json(target, {"n": n, "marker": marker})
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(write, range(64)))
+        data = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(data["marker"], marker)
+        self.assertEqual(len(data["marker"]), 4096)
+        orphans = [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+        self.assertEqual(orphans, [])
+
+    def test_write_doc_atomic_uses_exclusive_sibling_temp(self) -> None:
+        target = self.root / "GRAPHIFY_INSTALL_GUIDE.md"
+        captured: dict[str, object] = {}
+        content = "install guide\n" + "Z" * 2048 + "\n"
+        with mock.patch.object(tempfile, "mkstemp", self._capture_mkstemp(captured)):
+            result = guard._write_doc_atomic(target, content)
+        self.assertTrue(result["ok"])
+        self.assertEqual(captured["dir"], str(target.parent))
+        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["suffix"], ".tmp")
+        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
+        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_write_doc_atomic_concurrent_no_orphans(self) -> None:
+        target = self.root / "GRAPHIFY_INSTALL_GUIDE.md"
+        marker = "W" * 4096
+
+        def write(n: int) -> None:
+            guard._write_doc_atomic(target, f"guide {n}\n{marker}\n")
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(write, range(64)))
+        text = target.read_text(encoding="utf-8")
+        self.assertIn(marker, text)
+        orphans = [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+        self.assertEqual(orphans, [])
 
 
 if __name__ == "__main__":

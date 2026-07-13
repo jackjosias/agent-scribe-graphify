@@ -7,7 +7,9 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -340,6 +342,52 @@ class ScribeBootstrapTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(repo_launcher), "install", "--help"], cwd=repo_root, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("--force", result.stdout + result.stderr)
+
+
+class AtomicTextWriteHardeningTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_atomic_text_write_uses_exclusive_sibling_temp(self) -> None:
+        target = self.root / "GRAPH_REPORT.md"
+        captured: dict[str, object] = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def fake_mkstemp(*args, **kwargs):
+            captured["dir"] = kwargs.get("dir")
+            captured["prefix"] = kwargs.get("prefix")
+            captured["suffix"] = kwargs.get("suffix")
+            fd, name = real_mkstemp(*args, **kwargs)
+            captured["tmp_name"] = name
+            return fd, name
+
+        content = "# Graph Report\n\nBootstrap placeholder.\n"
+        with mock.patch.object(tempfile, "mkstemp", fake_mkstemp):
+            scribe_bootstrap._atomic_text_write(target, content)
+        self.assertEqual(captured["dir"], str(target.parent))
+        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["suffix"], ".tmp")
+        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
+        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_atomic_text_write_concurrent_no_orphans(self) -> None:
+        target = self.root / "graph.json"
+        marker = "Q" * 4096
+
+        def write(n: int) -> None:
+            scribe_bootstrap._atomic_text_write(target, f'{{"n":{n},"marker":"{marker}"}}\n')
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(write, range(64)))
+        text = target.read_text(encoding="utf-8")
+        self.assertIn(marker, text)
+        orphans = [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
+        self.assertEqual(orphans, [])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import socket
+import tempfile
 import time
 import uuid
 from contextlib import contextmanager
@@ -272,19 +273,42 @@ def _remove_stale_lock(path: Path, observed: dict[str, Any]) -> bool:
     return True
 
 
+def _atomic_replace(src: str, dst: Path) -> None:
+    """Publish a sibling temp file atomically with a bounded Windows retry.
+
+    On Windows, os.replace can raise PermissionError while the destination is
+    read concurrently; we retry a bounded number of times with backoff and then
+    re-raise. We never silently fall back to a non-atomic direct write.
+    """
+    last_exc: OSError | None = None
+    for attempt in range(5):
+        try:
+            os.replace(src, str(dst))
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt < 4:
+                time.sleep(0.01 * (2 ** attempt))
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
 def _atomic_lock_write(path: Path, payload: dict[str, Any]) -> None:
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        _atomic_replace(temporary, path)
     finally:
         try:
-            if tmp.exists():
-                tmp.unlink()
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         except OSError:
             pass
 

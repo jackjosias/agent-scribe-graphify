@@ -6,6 +6,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -128,15 +129,41 @@ def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[
     return payload
 
 
+def _atomic_replace(src: str, dst: Path) -> None:
+    """Publish a sibling temp file atomically with a bounded Windows retry.
+
+    On Windows, os.replace can raise PermissionError while the destination is
+    read concurrently; we retry a bounded number of times with backoff and then
+    re-raise. We never silently fall back to a non-atomic direct write.
+    """
+    last_exc: OSError | None = None
+    for attempt in range(5):
+        try:
+            os.replace(src, str(dst))
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt < 4:
+                time.sleep(0.01 * (2 ** attempt))
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
 def _write_doc_atomic(path: Path, content: str) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
-        temporary.write_text(content, encoding="utf-8")
-        os.replace(temporary, path)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _atomic_replace(temporary, path)
     except OSError as exc:
         try:
-            temporary.unlink(missing_ok=True)
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         except OSError:
             pass
         return {"ok": False, "verdict": "INSTALL_GUIDE_WRITE_FAILED", "reason": str(exc), "path": str(path)}

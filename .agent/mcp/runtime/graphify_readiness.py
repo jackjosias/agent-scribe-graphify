@@ -97,20 +97,42 @@ def manifest_path(project_root: Path | str) -> Path:
     return canonical_output_dir(project_root) / MANIFEST_FILENAME
 
 
+def _atomic_replace(src: str, dst: Path) -> None:
+    """Publish a sibling temp file atomically with a bounded Windows retry.
+
+    On Windows, os.replace can raise PermissionError while the destination is
+    read concurrently; we retry a bounded number of times with backoff and then
+    re-raise. We never silently fall back to a non-atomic direct write.
+    """
+    last_exc: OSError | None = None
+    for attempt in range(5):
+        try:
+            os.replace(src, str(dst))
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt < 4:
+                time.sleep(0.01 * (2 ** attempt))
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
     try:
-        with temp.open("w", encoding="utf-8", newline="\n") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp, path)
+        _atomic_replace(temporary, path)
     finally:
         try:
-            if temp.exists():
-                temp.unlink()
+            if os.path.exists(temporary):
+                os.unlink(temporary)
         except OSError:
             pass
 

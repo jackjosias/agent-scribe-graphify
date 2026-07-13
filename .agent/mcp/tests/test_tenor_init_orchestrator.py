@@ -231,5 +231,58 @@ class TenorInitOrchestratorTest(unittest.TestCase):
         self.assertEqual(second.memory_action, orchestrator.SCRIBE_MEMORY_CREATE)
 
 
+class AtomicLockWriteHardeningTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_atomic_lock_write_uses_exclusive_sibling_temp(self) -> None:
+        root = self.base / "lockproj"
+        root.mkdir()
+        lock_path = root / ".agent" / "mcp" / "tenor_init.lock"
+        lock_path.parent.mkdir(parents=True)
+        captured: dict[str, object] = {}
+        real_mkstemp = tempfile.mkstemp
+
+        def fake_mkstemp(*args, **kwargs):
+            captured["dir"] = kwargs.get("dir")
+            captured["prefix"] = kwargs.get("prefix")
+            captured["suffix"] = kwargs.get("suffix")
+            fd, name = real_mkstemp(*args, **kwargs)
+            captured["tmp_name"] = name
+            return fd, name
+
+        payload = {"schema": "tenor_init_lock_v2", "nonce": "abc", "pid": 999999}
+        with mock.patch.object(tempfile, "mkstemp", fake_mkstemp):
+            orchestrator._atomic_lock_write(lock_path, payload)
+        self.assertEqual(captured["dir"], str(lock_path.parent))
+        self.assertTrue(str(captured["prefix"]).startswith(f".{lock_path.name}."))
+        self.assertEqual(captured["suffix"], ".tmp")
+        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
+        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
+        self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8")), payload)
+
+    def test_atomic_lock_write_concurrent_no_orphans(self) -> None:
+        root = self.base / "lockproj"
+        root.mkdir()
+        lock_path = root / ".agent" / "mcp" / "tenor_init.lock"
+        lock_path.parent.mkdir(parents=True)
+        marker = "X" * 4096
+
+        def write(n: int) -> None:
+            orchestrator._atomic_lock_write(lock_path, {"schema": "tenor_init_lock_v2", "nonce": f"n{n}", "marker": marker})
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(write, range(64)))
+        data = json.loads(lock_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["marker"], marker)
+        self.assertEqual(len(data["marker"]), 4096)
+        orphans = [p for p in lock_path.parent.iterdir() if p.name.endswith(".tmp")]
+        self.assertEqual(orphans, [])
+
+
 if __name__ == "__main__":
     unittest.main()
