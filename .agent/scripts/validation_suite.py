@@ -31,12 +31,14 @@ STEPS = (
     ("host_adapter_autoguard", [sys.executable, ".agent/mcp/tests/test_host_adapter_autoguard.py"]),
     ("agent_runtime_sync", [sys.executable, ".agent/tests/test_agent_runtime_sync.py"]),
     ("read_only_task_closure", [sys.executable, ".agent/mcp/tests/test_read_only_task_closure.py"]),
+    ("first_write_discovery", [sys.executable, ".agent/mcp/tests/test_first_write_discovery.py"]),
     ("mcp_smoke", [sys.executable, ".agent/scripts/mcp_smoke.py"]),
     ("enforcement_redteam_smoke", [sys.executable, ".agent/scripts/enforcement_redteam_smoke.py"]),
 )
 
 _GRAPHIFY_SCOPED_STEPS = {
     "read_only_task_closure",
+    "first_write_discovery",
     "mcp_smoke",
     "enforcement_redteam_smoke",
 }
