@@ -1,0 +1,277 @@
+name: Temporary public ChatGPT export
+
+on:
+  push:
+    branches:
+      - tmp/chat-export-6a55289f-20260713
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+        with:
+          ref: tmp/chat-export-6a55289f-20260713
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install fetch dependencies
+        run: python -m pip install --disable-pip-version-check curl-cffi beautifulsoup4
+
+      - name: Fetch and export the public share
+        env:
+          SHARE_URL: https://chatgpt.com/share/6a55289f-b540-83ea-a397-0183fd86f5a4
+          SHARE_ID: 6a55289f-b540-83ea-a397-0183fd86f5a4
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import re
+          import time
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from typing import Any
+
+          from curl_cffi import requests
+
+          share_url = os.environ["SHARE_URL"]
+          share_id = os.environ["SHARE_ID"]
+          out_dir = Path("tmp_export")
+          out_dir.mkdir(parents=True, exist_ok=True)
+
+          diagnostics: list[str] = []
+          session = requests.Session(impersonate="chrome124")
+          page_headers = {
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+              "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache",
+              "Upgrade-Insecure-Requests": "1",
+          }
+          api_headers = {
+              "Accept": "application/json",
+              "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.7",
+              "Referer": share_url,
+              "Origin": "https://chatgpt.com",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache",
+          }
+
+          html = ""
+          try:
+              page_response = session.get(share_url, headers=page_headers, timeout=120)
+              diagnostics.append(
+                  f"share_page status={page_response.status_code} content_type={page_response.headers.get('content-type')} bytes={len(page_response.content)}"
+              )
+              html = page_response.text
+              (out_dir / "share-page.html").write_text(html, encoding="utf-8")
+          except Exception as exc:
+              diagnostics.append(f"share_page exception={type(exc).__name__}: {exc}")
+
+          data: dict[str, Any] | None = None
+          endpoints = [
+              f"https://chatgpt.com/backend-anon/share/{share_id}",
+              f"https://chatgpt.com/backend-api/share/{share_id}",
+          ]
+
+          for endpoint in endpoints:
+              for attempt in range(1, 4):
+                  try:
+                      response = session.get(endpoint, headers=api_headers, timeout=120)
+                      diagnostics.append(
+                          f"api endpoint={endpoint} attempt={attempt} status={response.status_code} content_type={response.headers.get('content-type')} bytes={len(response.content)}"
+                      )
+                      if response.status_code == 200:
+                          candidate = response.json()
+                          if isinstance(candidate, dict):
+                              data = candidate
+                              (out_dir / "share.json").write_text(
+                                  json.dumps(candidate, ensure_ascii=False, indent=2),
+                                  encoding="utf-8",
+                              )
+                              break
+                  except Exception as exc:
+                      diagnostics.append(
+                          f"api endpoint={endpoint} attempt={attempt} exception={type(exc).__name__}: {exc}"
+                      )
+                  time.sleep(attempt * 2)
+              if data is not None:
+                  break
+
+          def extract_text(content: Any) -> str:
+              if not isinstance(content, dict):
+                  return ""
+              parts = content.get("parts")
+              chunks: list[str] = []
+              if isinstance(parts, list):
+                  for part in parts:
+                      if isinstance(part, str):
+                          chunks.append(part)
+                      elif isinstance(part, dict):
+                          if isinstance(part.get("text"), str):
+                              chunks.append(part["text"])
+                          elif isinstance(part.get("content"), str):
+                              chunks.append(part["content"])
+                          elif part.get("content_type") == "image_asset_pointer":
+                              chunks.append("[IMAGE OU PIÈCE JOINTE]")
+              elif isinstance(content.get("text"), str):
+                  chunks.append(content["text"])
+              return "\n".join(chunk.rstrip() for chunk in chunks if chunk).strip()
+
+          def linearize(payload: dict[str, Any]) -> list[dict[str, Any]]:
+              mapping = payload.get("mapping")
+              if not isinstance(mapping, dict):
+                  conversation = payload.get("conversation")
+                  if isinstance(conversation, dict):
+                      mapping = conversation.get("mapping")
+              if not isinstance(mapping, dict):
+                  return []
+
+              current_node = payload.get("current_node")
+              if not current_node and isinstance(payload.get("conversation"), dict):
+                  current_node = payload["conversation"].get("current_node")
+
+              ordered_nodes: list[dict[str, Any]] = []
+              if isinstance(current_node, str) and current_node in mapping:
+                  seen: set[str] = set()
+                  cursor: str | None = current_node
+                  reverse_nodes: list[dict[str, Any]] = []
+                  while cursor and cursor in mapping and cursor not in seen:
+                      seen.add(cursor)
+                      node = mapping[cursor]
+                      if isinstance(node, dict):
+                          reverse_nodes.append(node)
+                          parent = node.get("parent")
+                          cursor = parent if isinstance(parent, str) else None
+                      else:
+                          break
+                  ordered_nodes = list(reversed(reverse_nodes))
+              else:
+                  candidates = [node for node in mapping.values() if isinstance(node, dict)]
+                  ordered_nodes = sorted(
+                      candidates,
+                      key=lambda node: (
+                          float(((node.get("message") or {}).get("create_time") or 0)),
+                          str(node.get("id") or ""),
+                      ),
+                  )
+
+              messages: list[dict[str, Any]] = []
+              for node in ordered_nodes:
+                  message = node.get("message")
+                  if not isinstance(message, dict):
+                      continue
+                  author = message.get("author")
+                  role = author.get("role") if isinstance(author, dict) else None
+                  if role not in {"user", "assistant"}:
+                      continue
+                  text = extract_text(message.get("content"))
+                  if not text:
+                      continue
+                  messages.append(
+                      {
+                          "id": message.get("id") or node.get("id"),
+                          "role": role,
+                          "text": text,
+                          "create_time": message.get("create_time"),
+                      }
+                  )
+              return messages
+
+          messages: list[dict[str, Any]] = linearize(data) if data is not None else []
+
+          # Secondary fallback: locate a JSON object embedded in the HTML.
+          if not messages and html:
+              script_candidates = []
+              for pattern in (
+                  r'<script[^>]+id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+                  r'<script[^>]+type="application/json"[^>]*>(.*?)</script>',
+              ):
+                  script_candidates.extend(re.findall(pattern, html, flags=re.S | re.I))
+              for raw in script_candidates:
+                  try:
+                      candidate = json.loads(raw)
+                  except Exception:
+                      continue
+                  stack = [candidate]
+                  while stack:
+                      item = stack.pop()
+                      if isinstance(item, dict):
+                          candidate_messages = linearize(item)
+                          if len(candidate_messages) > len(messages):
+                              messages = candidate_messages
+                              data = item
+                          stack.extend(item.values())
+                      elif isinstance(item, list):
+                          stack.extend(item)
+
+          title = "Conversation ChatGPT publique"
+          if isinstance(data, dict):
+              for key in ("title", "conversation_title"):
+                  if isinstance(data.get(key), str) and data[key].strip():
+                      title = data[key].strip()
+                      break
+              if title == "Conversation ChatGPT publique" and isinstance(data.get("conversation"), dict):
+                  value = data["conversation"].get("title")
+                  if isinstance(value, str) and value.strip():
+                      title = value.strip()
+
+          txt_path = out_dir / "conversation-chatgpt-public-6a55289f-b540-83ea-a397-0183fd86f5a4.txt"
+          lines = [
+              "CONVERSATION CHATGPT PUBLIQUE EXTRAITE",
+              "=" * 96,
+              f"Titre : {title}",
+              f"URL publique : {share_url}",
+              f"Date d'extraction : {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+              f"Nombre de messages : {len(messages)}",
+              "=" * 96,
+              "",
+          ]
+          role_label = {"user": "UTILISATEUR", "assistant": "ASSISTANT"}
+          for index, message in enumerate(messages, start=1):
+              lines.extend(
+                  [
+                      f"--- MESSAGE {index:03d} | RÔLE : {role_label[message['role']]} ---",
+                      "",
+                      message["text"].rstrip(),
+                      "",
+                      "",
+                  ]
+              )
+          txt_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+          diagnostics.extend(
+              [
+                  f"title={title}",
+                  f"messages={len(messages)}",
+                  f"user_messages={sum(1 for m in messages if m['role'] == 'user')}",
+                  f"assistant_messages={sum(1 for m in messages if m['role'] == 'assistant')}",
+                  f"txt_bytes={txt_path.stat().st_size}",
+              ]
+          )
+          (out_dir / "diagnostics.txt").write_text("\n".join(diagnostics) + "\n", encoding="utf-8")
+
+          if len(messages) < 2:
+              (out_dir / "EXTRACTION_FAILED.txt").write_text(
+                  "La page publique a été téléchargée, mais moins de deux messages ont pu être structurés.\n",
+                  encoding="utf-8",
+              )
+          PY
+
+      - name: Commit temporary extraction result
+        run: |
+          git config user.name "chat-export-bot"
+          git config user.email "chat-export-bot@users.noreply.github.com"
+          git add tmp_export
+          git commit -m "chore(tmp): store public conversation export result" || true
+          git push origin HEAD:tmp/chat-export-6a55289f-20260713
