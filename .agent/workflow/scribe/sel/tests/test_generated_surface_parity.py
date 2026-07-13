@@ -43,6 +43,7 @@ class GeneratedSurfaceParityTest(unittest.TestCase):
         self.assertIn("Invariant SAME_PROJECT", expected)
         self.assertIn("Invariant purge/migration sans perte", expected)
         self.assertIn("scribe install --force", expected)
+        self.assertIn(".agent/workflow/scribe/sel/docs/scribe.md", expected)
 
     def test_generated_python_adapters_compile(self) -> None:
         templates = load_templates()
