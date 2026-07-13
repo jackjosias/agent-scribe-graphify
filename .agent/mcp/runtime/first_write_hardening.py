@@ -92,14 +92,14 @@ def _required_payload(
 
 
 def install(server: Any, namespace: dict[str, Any]) -> None:
-    if getattr(server, "_FIRRT_WRITE_HASH_POLICY_INSTALLED", False):
+    if getattr(server, "_FIRST_WRITE_HASH_POLICY_INSTALLED", False):
         return
     current_scribe = server.TOOLS["scribe_query"]
     current_workflow = server.TOOLS["workflow_next"]
     base_schema = server.tool_schema
     server._BASE_SCRIBE_QUERY_POLICY = current_scribe
 
-    def gate(agent_id: str, task_id: str, context_token: str, resource: str = "") -> dict[str, Any] | None:
+    def gate(agent_id: str, task_id: str, context_token: str, resource: str = "", base_hash: str = "") -> dict[str, Any] | None:
         task = _task(agent_id, task_id)
         if task is None:
             return None
@@ -128,14 +128,9 @@ def install(server: Any, namespace: dict[str, Any]) -> None:
         try:
             task_discovery.require_discovery_ready(agent_id, task_id, resource=target)
         except task_discovery.TaskDiscoveryError as exc:
-            current_hash = ""
-            try:
-                current_hash = str(patch_queue.file_hash(target).get("hash") or "")
-            except Exception:
-                pass
             return _required_payload(
                 agent_id=agent_id, task_id=task_id, context_token=context_token,
-                resource=target, base_hash=current_hash, reason=exc.code,
+                resource=target, base_hash=base_hash, reason=exc.code,
             )
         return None
 
@@ -170,12 +165,12 @@ def install(server: Any, namespace: dict[str, Any]) -> None:
             response.update({"ok": True, "verdict": "SCRIBE_HISTORY_ABSENT_RESOURCE_SCOPE_REQUIRED"})
             return server.ok(response)
         try:
-            task_context.mark_scribe_done(agent_id, task_id, context_token, result_count=0, resource_resources=resource)
+            task_context.mark_scribe_done(agent_id, task_id, context_token, result_count=0, result_resources=resource)
             miss = task_discovery.mark_scribe_miss(
                 agent_id, task_id, context_token, resource,
                 query=query, stdout=stdout,
                 reason="SCRIBE returned no resource-relevant historical result",
-             )
+            )
         except (task_context.TaskContextError, task_discovery.TaskDiscoveryError) as exc:
             code = getattr(exc, "code", str(exc))
             return server.ok({"ok": False, "verdict": code, "state": "HARD_STOP", "reason": code, "details": getattr(exc, "details", {}), "forbidden": _FORBIDDEN})
@@ -189,7 +184,7 @@ def install(server: Any, namespace: dict[str, Any]) -> None:
             "scribe_miss": miss,
             "must_call": (
                 {"tool": "graphify_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": f"impact dependencies blast radius for {resource}", "resource": resource}}
-                if bool(task.get("requires_grapify")) and not bool(task.get("graphify_done"))
+                if bool(task.get("requires_graphify")) and not bool(task.get("graphify_done"))
                 else {"tool": "file_hash", "args": {"resource": resource}}
             ),
             "forbidden": _FORBIDDEN,
@@ -204,7 +199,7 @@ def install(server: Any, namespace: dict[str, Any]) -> None:
             "ok": True, "verdict": "TASK_RESOURCE_SCOPED", "state": "SCRIBE_CONTEXT_REQUIRED", **scoped,
             "must_call": {"tool": "scribe_query", "args": {"agent_id": agent_id, "task_id": task_id, "context_token": context_token, "query": f"resource:{resource} intent:write first intervention", "limit": 5}},
             "forbidden": _FORBIDDEN,
-})
+        })
 
     def record_task_discovery(
         agent_id: str = "", task_id: str = "", context_token: str = "", resource: str = "",
@@ -224,7 +219,7 @@ def install(server: Any, namespace: dict[str, Any]) -> None:
             target = str(kwargs.get("resource") or task.get("resource") or "")
             if _coarse(str(task.get("resource") or "")):
                 return server.ok(_scope_payload(agent_id, task_id, token, target))
-            blocked = gate(agent_id, task_id, token, target)
+            blocked = gate(agent_id, task_id, token, target, str(kwargs.get("base_hash") or ""))
             if blocked is not None:
                 return server.ok(blocked)
         return current_workflow(*args, **kwargs)
