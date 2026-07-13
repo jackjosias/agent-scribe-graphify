@@ -22,7 +22,8 @@ The project-local `.agent/skills/init-tenor/SKILL.md` and `.agent/rules/tenor-in
 ```text
 resolve root
 classify installation
-purge only old project-bound state when relocation is proven
+purge only old project-bound runtime when relocation is proven
+preserve canonical outputs and quarantine legacy conflicts
 adopt/create target SCRIBE
 verify/build and bind Graphify
 finalize local installation
@@ -44,8 +45,13 @@ TENOR_INIT_READY
 - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.
 - A prose-only “done” without `finish_task` and `READY_FOR_NEXT_TASK` is not completion.
 - Each terminal uses its own `agent_id`, proof token and lease. Agents share runtime, SCRIBE and Graphify, never identity or ownership credentials.
-- A relocation may purge only copied `.agent/state/` bound to the old root. It must preserve the target's canonical SCRIBE memory.
-- Graphify readiness accepts explicit supported edge fields (`edges` or real NetworkX node-link `links`) and rejects missing, stale, wrong-root, stub or contradictory graphs.
+- `TENOR_INIT_SAME_PROJECT` is tracked-file read-only; bundle repair is explicit through `scribe install --force`.
+- Runtime purge preserves `.agent/state/outputs/`; canonical output wins and conflicting legacy output is quarantined under `_legacy_migrated/`.
+- Preserved Graphify output is never trusted automatically; root/fingerprint readiness must pass again.
+- Graphify supports explicit `nodes + links` and historical `nodes + edges`; missing, stale, wrong-root, stub or contradictory graphs are rejected.
+- Default commit/push scope is the host product source; `.agent/` changes require intentional tooling maintenance.
+- Always keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits by default.
+- Documentation and generators move together under `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`.
 
 ### Canonical surfaces
 
@@ -58,6 +64,5 @@ TENOR_INIT_READY
 - `.agent/workflow/scribe/sel/docs/multi-agent-installation.md`
 - `.agent/docs/hosts/README.md`
 
-When the architecture or workflow changes, update these surfaces and their generators in the same change. Historical `.old` files and old dated baselines are not authoritative.
+Historical `.old` files and dated baselines are not authoritative.
 <!-- SCRIBE-PORTABLE-WORKFLOW:END -->
-- Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; l'installateur forcé n'est jamais appelé et la réparation du bundle reste explicite (`scribe install --force`).
