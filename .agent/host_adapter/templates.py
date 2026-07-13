@@ -18,6 +18,8 @@ Session entry contract:
 5. Verify the project-local MCP server, then prove that this host exposes the tools to the LLM.
 6. Prove MCP root binding; local `--list-tools` alone is not host visibility proof.
 7. Register/bridge the independent agent session. Until then report `HOST_MCP_UNBOUND`.
+8. On `TENOR_INIT_SAME_PROJECT`, tracked configuration/documentation files are read-only; bundle repair is explicit via `scribe install --force`.
+9. Runtime purge preserves `.agent/state/outputs/`; preserved Graphify output must still pass root/fingerprint readiness before use.
 
 Before any code write/fix/refactor/delete/test:
 1. Call discipline_ping after session start, context compaction, MCP error, or before finish.
