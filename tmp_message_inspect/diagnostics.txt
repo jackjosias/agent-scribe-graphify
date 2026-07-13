@@ -1,0 +1,198 @@
+ASSISTANT GROUP DISTRIBUTION
+groups=36
+
+MESSAGE_KEYS:
+[('id', 1902), ('author', 1902), ('create_time', 1902), ('content', 1902), ('status', 1902), ('weight', 1902), ('metadata', 1902), ('recipient', 1902), ('end_turn', 1796), ('channel', 557), ('update_time', 169)]
+
+METADATA_KEYS:
+[('turn_exchange_id', 1902), ('working_turn_id', 1902), ('parent_id', 1902), ('shared_conversation_id', 1902), ('reasoning_start_time', 1704), ('cot_version', 1539), ('request_id', 1527), ('message_type', 1527), ('model_slug', 1527), ('default_model_slug', 1527), ('thinking_effort', 1527), ('async_source', 1527), ('is_temporal_turn', 1527), ('stream_topic_id', 1527), ('can_save', 1527), ('resolved_model_slug', 1502), ('classifier_response', 1191), ('reasoning_status', 1024), ('citations', 880), ('gizmo_id', 879), ('chime_version', 731), ('tool_icons', 728), ('skip_reasoning_title', 645), ('hide_inline_actions', 618), ('disable_turn_actions', 618), ('content_references', 607), ('reasoning_title', 492), ('reasoning_titles', 492), ('tool_summary_type', 488), ('story_events', 458), ('finish_details', 446), ('is_complete', 446), ('is_redacted', 375), ('is_thinking_preamble_message', 273), ('is_visually_hidden_from_conversation', 236), ('finished_duration_sec', 153), ('reasoning_end_time', 153), ('code_blocks', 153), ('search_result_groups', 151), ('safe_urls', 144), ('tool_invoking_message', 66), ('tool_invoked_message', 66), ('reasoning_recap_type', 62), ('notification_trigger_checkpoint', 38), ('skill_id', 8), ('skill_name', 8), ('skill_plugin_id', 8), ('skill_plugin_name', 8), ('search_queries', 7), ('search_display_string', 4), ('searched_display_string', 4)]
+
+COUNT=527 | content_type=thoughts | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+
+COUNT=251 | content_type=text | recipient=api_tool.call_tool | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=<none> | model_slug=<none>
+  SAMPLE1='The output of this plugin was redacted.'
+  SAMPLE2='The output of this plugin was redacted.'
+  SAMPLE3='The output of this plugin was redacted.'
+  SAMPLE4='The output of this plugin was redacted.'
+  SAMPLE5='The output of this plugin was redacted.'
+
+COUNT=195 | content_type=text | recipient=all | channel=commentary | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='Le premier morceau est maintenant réel sur la branche de sauvetage : TENOR INIT possède une autorité d’installation distincte du SCRIBE, et un verrou d’initialisation partagé permet de sérialiser le bootstrap sans empêcher plusieurs sessions agent de coexister ensuite. J’ajoute les tests qui figent précisément ton scénario « six terminaux, même projet ».'
+  SAMPLE2='La branche de sauvetage contient maintenant un premier noyau exécutable, pas seulement une vision. J’ouvre un brouillon de PR contre `v2` pour rendre le travail traçable et éviter toute fusion prématurée tant que la suite complète n’est pas validée.'
+  SAMPLE3='Mesures locales avant publication du lot central :\\n\\n```text\\ninstallation_state : 30/30 tests ciblés passés\\norchestrateur       : 10/10 tests passés\\nstress lock pur     : 10 séries × 6 concurrents passées\\nsuite orchestrateur : 5 répétitions complètes passées\\npy_compile          : tous les nouveaux modules passent\\n```\\n\\nUne course TOCTOU réelle a été détectée pendant le stress : un waiter pouvait supprimer le lock d’un nouveau propriétaire entre libération et réacquisition. Je l’ai corrigée par rel'
+  SAMPLE4='Je poursuis sans élargir le périmètre. Le prochain sous-lot aligne les tests, l’adaptateur installé et les smokes sur la nouvelle règle : **aucun serveur MCP ne démarre avant une préparation TENOR explicite et finalisée**.'
+  SAMPLE5='Le générateur d’adaptateur contenait encore une route figée vers l’ancien `scribe_tenor_init.py`. Plutôt qu’un remplacement fragile dans une chaîne monolithique d’une ligne, je le normalise en templates lisibles et testables, tout en conservant les mêmes fonctions publiques utilisées par l’installateur.'
+
+COUNT=131 | content_type=code | recipient=container.exec | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='bash -lc rm -rf /mnt/data/agent-scribe-graphify && git clone --branch v2 --single-branch https://github.com/jackjosias/agent-scribe-graphify.git /mnt/data/agent-scribe-graphify && cd /mnt/data/agent-scribe-graphify && git rev-parse HEAD && git status --short'
+  SAMPLE2='bash -lc mkdir -p /mnt/data/syntaxcheck && cat > /mnt/data/syntaxcheck/tenor_init_orchestrator.py <<\'PY\'\\nfrom __future__ import annotations\\n\\nimport json\\nimport os\\nimport time\\nimport uuid\\nfrom contextlib import contextmanager\\nfrom dataclasses import asdict, dataclass\\nfrom datetime import datetime, timezone\\nfrom pathlib import Path\\nfrom typing import Any, Callable, Iterator\\n\\nfrom . import installation_state\\n\\nTENOR_INIT_NEW_INSTALLATION = "TENOR_INIT_NEW_INSTALLATION"\\nTENOR_INIT_SAME_PROJECT = "TEN'
+  SAMPLE3='bash -lc git ls-remote https://github.com/jackjosias/agent-scribe-graphify.git HEAD refs/heads/agent/v2-16-tenor-init-single-authority'
+  SAMPLE4='bash -lc cat > /mnt/data/installation_state.py <<\'PY\'\\nfrom __future__ import annotations\\n\\nimport hashlib\\nimport json\\nimport os\\nimport shutil\\nimport subprocess\\nimport time\\nfrom datetime import datetime, timezone\\nfrom pathlib import Path\\nfrom typing import Any\\n\\nINSTALL_MANIFEST_RELATIVE = Path(".agent") / "state" / "install" / "agent-installation.json"\\nINSTALL_SCHEMA = "agent_installation_v2"\\nINSTALL_STATUS_PREPARING = "preparing"\\nINSTALL_STATUS_READY = "ready"\\n\\nAGENT_INSTALLATION_MANIFEST_CREATED'
+  SAMPLE5='bash -lc set -e\\nrm -rf /tmp/asg-rescue\\nmkdir -p /tmp/asg-rescue\\ncd /tmp/asg-rescue\\ngit clone --depth 1 --branch agent/v2-16-tenor-init-single-authority https://github.com/jackjosias/agent-scribe-graphify.git repo\\ncd repo\\ngit rev-parse HEAD\\ngit status --short'
+
+COUNT=116 | content_type=text | recipient=all | channel=final | end_turn=True | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='Oui, je suis prêt. J’ai repris le fil depuis la source copiée.\\n\\nLe cœur du dossier au départ : un petit LLM hôte avait contourné TENOR/SCRIBE/Graphify pendant l’implémentation du Brush Tool, avec 20+ fichiers modifiés, aucun `tenor-init`, aucun lock, aucun Graphify, aucune entrée SCRIBE, donc un travail techniquement présent mais causalement orphelin. \ue200filecite\ue202turn2file0\ue201\\n\\nEnsuite, le projet `.agent` a évolué vers un système de **discipline agentique locale** : séparation moteur/état, sorties s'
+  SAMPLE2='Oui, on reprend exactement ici. Le statut réel est :\\n\\n```text\\nV2.15.23 = commit local fait\\nCommit local = 97365e4\\nMessage = fix(scribe): make memory gates honest before writes\\nREADY_FOR_REBASE_ON_ORIGIN_V2 = YES\\nREADY_FOR_PUSH = NO\\nProchaine étape = rebase sur origin/v2 / 70abdc1, conflits, tests, puis seulement push\\n```\\n\\nC’est cohérent avec le rapport OpenCode : 10 fichiers commités, aucun unstaged restant, mais des fichiers parasites encore untracked et surtout un état explicitement **pas prêt'
+  SAMPLE3='Je ne vais pas utiliser le web ici : les faits à vérifier ne sont pas publics, ce sont des logs Git/pytest locaux. Une recherche en ligne ne peut pas confirmer ton `HEAD`, ton `origin/v2`, ni tes tests locaux. Mon verdict repose donc uniquement sur le log fourni.\\n\\n## Verdict brutal\\n\\n**Ce n’est pas du vent. Mais ce n’est pas validé.**\\n\\nLa vraie formulation honnête serait :\\n\\n```text\\nREBASE/SYNC: PASS\\nCORE TARGETED TESTS: PARTIAL PASS\\nINTEGRATION: FAIL\\nREADY_FOR_PUSH: NO\\nREADY_FOR_PRODUCTION: ABSOL'
+  SAMPLE4='Mon avis net :\\n\\n```text\\nREADY_FOR_LOCAL_COMMIT : OUI\\nREADY_FOR_PUSH : NON, pas encore\\n```\\n\\nCette fois, OpenCode a bien corrigé le tir. Il ne vend plus un faux `PASS` global : il reconnaît les échecs restants, il montre les 5 fichiers modifiés, il relance les tests ciblés, et il obtient `82 passed` + `validation_suite` OK. Ça, c’est du vrai progrès terrain. \ue200filecite\ue202turn11file0\ue201\\n\\nMais il ne faut **pas** sauter directement au push.\\n\\n## Ce qui est bon\\n\\nLes corrections sont ciblées :\\n\\n```text\\n.agen'
+  SAMPLE5='Oui, là c’est **beaucoup plus propre**.\\n\\nMon verdict maintenant :\\n\\n```text id="ok8si8"\\nV2.15.23 STABILISATION : COMMIT LOCAL OK\\nCOMMIT : 0bb2a4d\\nTESTS CIBLÉS : 82/82 PASS\\nVALIDATION SUITE : PASS\\nBRANCHE : v2 ahead 1\\nPUSH : possible bientôt, mais pas avant nettoyage contrôlé des untracked\\n```\\n\\nLe commit local est bon :\\n\\n```text id="d6w3dt"\\n0bb2a4d fix(scribe): stabilize V2.15.23 memory gates\\n```\\n\\nIl a respecté la consigne : **pas de push**, commit ciblé sur 5 fichiers, tests relancés, `git diff -'
+
+COUNT=115 | content_type=reasoning_recap | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='Réflexion durant 24s'
+  SAMPLE2='Réflexion durant 22s'
+  SAMPLE3='Réflexion durant 1m 6s'
+  SAMPLE4='Réflexion durant 13s'
+  SAMPLE5='Réflexion durant 20s'
+
+COUNT=103 | content_type=thoughts | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+
+COUNT=72 | content_type=text | recipient=api_tool.call_tool | channel=<none> | end_turn=<none> | status=in_progress | hidden=<none> | message_type=<none> | model_slug=<none>
+  SAMPLE1='The output of this plugin was redacted.'
+  SAMPLE2='The output of this plugin was redacted.'
+  SAMPLE3='The output of this plugin was redacted.'
+  SAMPLE4='The output of this plugin was redacted.'
+  SAMPLE5='The output of this plugin was redacted.'
+
+COUNT=66 | content_type=code | recipient=api_tool.list_resources | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"paths":["GitHub"],"query":"branch"}'
+  SAMPLE2='{"paths":["GitHub"],"query":"file"}'
+  SAMPLE3='{"paths":["GitHub"],"query":"pull request"}'
+  SAMPLE4='{"paths":["GitHub"],"query":"pull request"}'
+  SAMPLE5='{"paths":["GitHub"],"query":"fetch_file"}'
+
+COUNT=50 | content_type=text | recipient=all | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='Le nouveau signal change la priorité : avant l’hygiène du working tree, il faut diagnostiquer `tenor-init`. Le simple fait de relancer avec 120s ne prouve rien.'
+  SAMPLE2='Je vais repartir du dépôt réel, pas de ma reconstruction mentale. Je vais vérifier l’état actuel de `agent-scribe-graphify`, les points d’entrée TENOR, la relocation, la mémoire canonique, le sync portable et les derniers commits avant de te donner un plan de sauvetage.'
+  SAMPLE3='Le dépôt GitHub est bien accessible avec droits d’administration. Je vérifie maintenant la branche `v2` et les fichiers réels qui décident « nouveau projet vs relocation », car c’est là que mon précédent raisonnement a déraillé.'
+  SAMPLE4='J’ai déjà trouvé la fracture principale : la logique de relocation existe, mais elle est exécutée dans `server_entry.py`, tandis que le CLI `scribe tenor-init` décide « nouveau projet » uniquement selon l’existence du fichier SCRIBE. Autrement dit, les bonnes briques existent, mais l’ordre de souveraineté est cassé.'
+  SAMPLE5='Tu as raison sur les trois points : **LLM Experience**, **Graphify/SCRIBE comme amplificateurs cognitifs**, et **multi-agent simultané comme invariant central**. Je vais maintenant traduire cette vision en architecture exécutable dans le dépôt, pas seulement en prose.'
+
+COUNT=36 | content_type=reasoning_recap | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='Réfléchi pendant 43s'
+  SAMPLE2='Réfléchi pendant 51s'
+  SAMPLE3='Réfléchi pendant 15s'
+  SAMPLE4='Réfléchi pendant 3m 2s'
+  SAMPLE5='Réfléchi pendant 7m 8s'
+
+COUNT=36 | content_type=text | recipient=all | channel=final | end_turn=True | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='Ce tour produit-il une MESURE EMPIRIQUE NOUVELLE ? OUI.\\n\\nMesure brute observée :\\n\\n```text\\nÉtapes TENOR INIT déjà réussies :\\n- lecture de .agent/skills/init-tenor/SKILL.md : OUI\\n- server_entry.py --list-tools : OUI\\n- hash sentinelle AGENTS.md calculé : OUI\\n- file_hash MCP concordant : OUI\\n- MCP_BOUND_TO_CURRENT_PROJECT : OUI\\n\\nÉtape en échec :\\n.agent/workflow/scribe/scribe tenor-init --type cli\\n\\nRésultat :\\n- aucune sortie pendant 60 secondes\\n- processus tué par timeout\\n- exit attendu du wrapper : '
+  SAMPLE2='Ce tour produit-il une MESURE EMPIRIQUE NOUVELLE ? OUI.\\n\\nMesures brutes nouvelles :\\n\\n```text\\nTENOR INIT sur algowebsite, état chaud :\\n- run A : 5,44 s, exit 0\\n- run B : 7,76 s, exit 0\\n\\nTENOR INIT dans la source, état chaud :\\n- 2,28 s, exit 0\\n\\nGraphify seul sur algowebsite :\\n- graphify update .\\n- 1 025 fichiers analysés\\n- 3 661 nœuds\\n- 5 714 arêtes\\n- 32,32 s\\n- exit 0\\n\\nÉtat Graphify avant le sondage :\\n- graphify-out/GRAPH_REPORT.md existait\\n- taille/contenu : stub de smoke d’environ 26 octets\\n- en'
+  SAMPLE3='Ce tour produit-il une MESURE EMPIRIQUE NOUVELLE ? NON.\\n\\nTu as raison : **mon cadrage précédent était incomplet**. Le dossier `.agent` n’est pas seulement destiné à être synchronisé avec `algowebsite`. Il doit être un **package portable universel**, installable dans n’importe quel projet et sur Linux, macOS ou Windows.\\n\\nLe contrat exact est :\\n\\n```text\\nagent-scribe-graphify/.agent\\n= moteur portable, règles, scripts, tests et templates\\n\\nProjet destinataire\\n= identité, mémoire canonique, configurat'
+  SAMPLE4='Ce tour produit-il une MESURE EMPIRIQUE NOUVELLE ? OUI.\\n\\nTu m’as effectivement piégé, et le piège révèle une erreur grave dans mon cadrage précédent :\\n\\n```text\\nJ’ai traité « le fichier SCRIBE existe-t-il ? »\\ncomme la décision principale.\\n\\nAlors que la décision principale est :\\n« Ce bundle .agent appartient-il toujours au même projet,\\nou vient-il d’être copié/déplacé vers un autre projet ? »\\n```\\n\\nLe SCRIBE ne vient qu’**après** cette décision d’identité et de relocation.\\n\\n## Ce que le dépôt GitHu'
+  SAMPLE5='**Ce tour produit-il une MESURE EMPIRIQUE NOUVELLE ? OUI.**\\n\\nTu as raison sur les trois corrections, et je les ai maintenant inscrites **dans le dépôt GitHub**, pas seulement dans notre discussion.\\n\\n## Vision corrigée\\n\\n### 1. `.agent` doit optimiser la **LLM Experience**\\n\\nL’objectif n’est pas seulement de surveiller ou ralentir les LLM.\\n\\n```text\\n.agent = amplificateur cognitif et opérationnel pour agents LLM\\n```\\n\\nUn petit modèle qui respecte ce système doit obtenir des réflexes proches d’un gran'
+
+COUNT=30 | content_type=model_editable_context | recipient=all | channel=<none> | end_turn=<none> | status=finished_successfully | hidden=<none> | message_type=<none> | model_slug=<none>
+
+COUNT=27 | content_type=text | recipient=all | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='Oui, je suis prêt. Je vais d’abord reconstruire le fil logique : état actuel de `.agent`, dernières décisions, point d’arrêt exact, puis je te redonne une synthèse exploitable pour continuer sans repartir de zéro.'
+  SAMPLE2='Oui, là on est exactement sur le point de bascule : V2.15.23 est commitée localement, mais pas encore intégrée proprement à `origin/v2`. Je vais transformer ça en prochaine instruction terrain stricte pour OpenCode.'
+  SAMPLE3='Je vais être direct : le log contient à la fois de vrais bons signaux et une grosse contradiction de verdict. Le point critique n’est pas “est-ce que ça avance ?”, mais “est-ce qu’on a le droit d’appeler ça PASS ?”.'
+  SAMPLE4='Je vais trancher proprement : cette fois OpenCode a produit une vraie stabilisation testée, mais il reste une différence cruciale entre “commit local autorisé” et “push autorisé”.'
+  SAMPLE5='Le commit local est maintenant le bon jalon : on a figé la stabilisation dans Git sans pousser. La question restante n’est plus “est-ce que V2.15.23 tient ?”, mais “comment nettoyer sans casser les configs locales du host”.'
+
+COUNT=22 | content_type=text | recipient=api_tool.call_tool | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=<none> | model_slug=<none>
+  SAMPLE1='The output of this plugin was redacted.'
+  SAMPLE2='The output of this plugin was redacted.'
+  SAMPLE3='The output of this plugin was redacted.'
+  SAMPLE4='The output of this plugin was redacted.'
+  SAMPLE5='The output of this plugin was redacted.'
+
+COUNT=20 | content_type=code | recipient=web.run | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"system1_search_query":[{"q":"site:docs.python.org 3 os.kill Windows signal 0 behavior"},{"q":"site:docs.python.org os.kill Windows CTRL_C_EVENT signal 0"}],"response_length":"short"}'
+  SAMPLE2='{"open":[{"ref_id":"https://raw.githubusercontent.com/jackjosias/agent-scribe-graphify/agent/v2-16-tenor-init-single-authority/.agent/scripts/mcp_smoke.py"},{"ref_id":"https://raw.githubusercontent.com/jackjosias/agent-scribe-graphify/agent/v2-16-tenor-init-single-authority/.agent/scripts/enforcement_redteam_smoke.py"}],"response_length":"short"}'
+  SAMPLE3='{"open":[{"ref_id":"https://github.com/jackjosias/agent-scribe-graphify/archive/refs/heads/agent/v2-16-tenor-init-single-authority.zip"}],"response_length":"short"}'
+  SAMPLE4='{"system1_search_query":[{"q":"site:opencode.ai/docs MCP servers opencode.jsonc local configuration 2026"}],"response_length":"medium"}'
+  SAMPLE5='{"system1_search_query":[{"q":"site:developers.openai.com/codex MCP config.toml Codex CLI MCP server configuration official"}],"response_length":"medium"}'
+
+COUNT=19 | content_type=code | recipient=api_tool.read_resource | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"uri":"/response/turn5","start_line":289,"num_lines":80}'
+  SAMPLE2='{"uri":"/response/turn8","start_line":320,"num_lines":120}'
+  SAMPLE3='{"uri":"/response/turn6","start_line":341,"num_lines":40}'
+  SAMPLE4='{"uri":"/response/turn43","start_line":217,"num_lines":200}'
+  SAMPLE5='{"uri":"/response/turn44","start_line":1,"num_lines":500}'
+
+COUNT=14 | content_type=code | recipient=file_search.msearch | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='{"queries":["L\'utilisateur demande si je suis prêt à lire la conversation complète Correction Scribe Graphify pour les PETITS LLM afin de continuer là où nous nous sommes arrêtés.","+(V2.15.23) +(SCRIBE_CONTEXT_TICKET) +(SCRIBE_QUERY_HONESTY_FIX) point d\'arrêt feuille de route implémentation OpenCode --QDF=1","+(agent-scribe-graphify) +(V2.15.22) +(V2.15.23) état actuel prochaine étape OpenCode --QDF=1","+(FAMILIARISATION_TERMINÉE) +(PRÊT_POUR_FEUILLE_DE_ROUTE_IMPLÉMENTATION) prompt OpenCode ing'
+  SAMPLE2='{"queries":["+(LOCAL COMMIT V2.15.23) +(97365e4) rebase origin/v2 commit 70abdc1 READY_FOR_REBASE_ON_ORIGIN_V2 READY_FOR_PUSH NO --QDF=2","+(V2.15.23) +(SCRIBE_QUERY_HONESTY_FIX) +(SCRIBE_CONTEXT_TICKET) +(CANONICAL_MEMORY_RETRIEVAL_PROOF) rebase OpenCode --QDF=2","READY_FOR_REBASE_ON_ORIGIN_V2 READY_FOR_PUSH NO","Quelle était la prochaine étape après le commit local V2.15.23 97365e4 dans agent-scribe-graphify ?"]}'
+  SAMPLE3='{"queries":["+(INTEGRATION_V2_15_23_ON_ORIGIN_V2) PASS FAIL READY_FOR_PUSH NO FINAL_VERDICT V2.15.23 OpenCode --QDF=5","+(TEST_CCANONICAL_MEMORY_GATE) test_canonical_memory_gate 5 failed 9 passed V2.15.23 OpenCode --QDF=5","+(scribe-rag --top 5) unrecognized arguments validation_suite mcp_smoke FAIL --QDF=5","+(HEAD origin/v2 c6f0d60) git rev-parse origin/v2 V2.15.23 rebase already done --QDF=5","Qu\'en penses-tu de cette avancée de OpenCode V2.15.23 avec tests et rebase ?"]}'
+  SAMPLE4='{"queries":["+(agent_runtime_sync.py) validation_suite test_installation_state COMMIT_READY PUSH_READY NO limite usage bwrap --QDF=5","+(V2.15.24-B) runtime sync dry-run apply preserve AGENT-MEMOIRE state configs symlink validation blocked --QDF=5","\\"test_installation_state.py\\" \\"AGENT-MEMOIRE_PROJECT_STATUS.scribe\\" fixture corrigée \\"usage limit\\""]}'
+  SAMPLE5='{"queries":["+(agent_runtime_sync.py) dry-run algowebsite apply stub preserved paths validation 2b87de3 --QDF=1","+(V2.15.24-B) +(DRY_RUN_NO_WRITE_PROOF) +(APPLY_TEST) +(agent_runtime_sync) --QDF=1","preserved paths dry-run runtime sync algowebsite manifest backup target changed"]}'
+
+COUNT=13 | content_type=code | recipient=api_tool.find_in_resource | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"uri":"/response/turn136","query":"No file in","start_line":100}'
+  SAMPLE2='{"uri":"/response/turn180","query":"TODO","start_line":1}'
+  SAMPLE3='{"uri":"/response/turn265","query":"Traceback","start_line":100}'
+  SAMPLE4='{"uri":"/response/turn349","query":"Validation left the checkout dirty"}'
+  SAMPLE5='{"uri":"/response/turn42","query":"2026-06-01"}'
+
+COUNT=10 | content_type=thoughts | recipient=all | channel=<none> | end_turn=False | status=in_progress | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+
+COUNT=9 | content_type=code | recipient=file_search.mclick | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='{"pointers":["1:1","1:5","1:7"]}'
+  SAMPLE2='{"pointers":["3:0","3:1","3:12"]}'
+  SAMPLE3='{"pointers":["12:0"]}'
+  SAMPLE4='{"pointers":["18:0","18:1","18:3"]}'
+  SAMPLE5='{"pointers":["31:0"]}'
+
+COUNT=8 | content_type=code | recipient=api_tool.read_resource | channel=commentary | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"uri":"skills://plugins/github/github/skill.md","start_line":1,"num_lines":260}'
+  SAMPLE2='{"uri":"skills://plugins/github/yeet/skill.md","start_line":1,"num_lines":260}'
+  SAMPLE3='{"uri":"skills://plugins/github/github/skill.md","start_line":1,"num_lines":240}'
+  SAMPLE4='{"uri":"skills://plugins/github/yeet/skill.md","start_line":1,"num_lines":240}'
+  SAMPLE5='{"uri":"skills://plugins/github/github/skill.md","start_line":1,"num_lines":260}'
+
+COUNT=4 | content_type=code | recipient=web.run | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-5-thinking
+  SAMPLE1='{"system1_search_query":[{"q":"agenticloops.ai agentic ai engineering tenets engineering > hype"},{"q":"github agenticloops-ai agentic-ai-engineering"},{"q":"cobusgreyling loop-engineering GitHub loop-audit loop-init loop-cost"},{"q":"Addy Osmani loop engineering AI agents 2026"}],"response_length":"medium"}'
+  SAMPLE2='{"system1_search_query":[{"q":"github jackjosias agent-scribe-graphify 3348615"}],"response_length":"short"}'
+  SAMPLE3='{"system1_search_query":[{"q":"site:github.com/jackjosias/agent-scribe-graphify 9224ed7 agent-scribe-graphify"}],"response_length":"short"}'
+  SAMPLE4='{"system1_search_query":[{"q":"PyYAML SafeLoader date timestamp parsed as datetime.date documentation"}],"response_length":"short"}'
+
+COUNT=4 | content_type=code | recipient=python | channel=<none> | end_turn=<none> | status=in_progress | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='runtime_code = r\'\'\'from __future__ import annotations\\n\\nimport hashlib\\nimport json\\nimport os\\nimport time\\nfrom dataclasses import asdict, dataclass\\nfrom datetime import datetime, timezone\\nfrom pathlib import Path\\nfrom typing import Any\\n\\ntry:\\nfrom .state_paths import prepare_state_dirs\\nexcept ImportError:\\nfrom state_paths import prepare_state_dirs  # type: ignore\\n\\nMANIFEST_SCHEMA = "graphify_readiness_v1"\\nMANIFEST_FILENAME = "GRAPHIFY_READY.json"\\nREQUIRED_FILES = ("graph.json", "GRAPH_REPORT.md", "'
+  SAMPLE2='from pathlib import Path\\nbase=Path(\'/mnt/data/first_write_fix\')\\nbase.mkdir(exist_ok=True)\\ntask_discovery = r\'\'\'from __future__ import annotations\\n\\n"""Task-local discovery evidence for first-write resources.\\n\\nA missing SCRIBE hit is not permission to write.  It is a distinct workflow\\nstate: the agent must bind fresh discovery evidence to the active task, exact\\nresource, current base hash and Graphify context before any write lock, claim\\nor patch can proceed.\\n"""\\n\\nimport hashlib\\nimport json\\nimport'
+  SAMPLE3="from pathlib import Path\\ntest_code = '''#!/usr/bin/env python3\\nfrom __future__ import annotations\\n\\nimport hashlib\\nimport importlib\\nimport json\\nimport os\\nimport shutil\\nimport tempfile\\nimport unittest\\nfrom pathlib import Path\\nfrom unittest import mock\\n\\nHERE = Path(__file__).resolve().parent\\nMCP_DIR = HERE.parent\\nAGENT_DIR = MCP_DIR.parent\\nif str(MCP_DIR) not in os.sys.path:\\nos.sys.path.insert(0, str(MCP_DIR))\\nif str(AGENT_DIR) not in os.sys.path:\\nos.sys.path.insert(0, str(AGENT_DIR))\\n\\nimport serve"
+  SAMPLE4='from pathlib import Path\\nworkflow = \'\'\'name: V2.16 TENOR portability\\n\\non:\\npull_request:\\npaths:\\n- ".agent/**"\\n- ".github/workflows/v216-portability.yml"\\npush:\\nbranches:\\n- "agent/v2-16-tenor-init-single-authority"\\n- "v2"\\npaths:\\n- ".agent/**"\\n- ".github/workflows/v216-portability.yml"\\n\\npermissions:\\ncontents: read\\n\\nconcurrency:\\ngroup: v216-${{ github.workflow }}-${{ github.ref }}\\ncancel-in-progress: true\\n\\njobs:\\nportable-core:\\nname: Core / ${{ matrix.os }} / Python ${{ matrix.python }}\\nstrategy:\\nfail'
+
+COUNT=3 | content_type=thoughts | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=variant | model_slug=gpt-5-5-thinking
+
+COUNT=3 | content_type=code | recipient=file_search.msearch | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=variant | model_slug=gpt-5-5-thinking
+  SAMPLE1='{"queries":["Qu\'en penser de la réponse OpenCode stabilisation post-rebase V2.15.23 canonical_memory_gate mcp_smoke --top --limit tests finaux rapport final --QDF=5","FINAL_VERDICT TEST_CANONICAL_MEMORY_GATE VALIDATION_SUITE READY_FOR_PUSH V2.15.23 stabilisation OpenCode","MEMORY_PROOF_REQUIRED DIRECT_WRITE_BYPASS_DETECTED test_canonical_memory_gate test_integration_e2e mcp_smoke --limit --top","Fix 1 server.py --top --limit Fix 2 test_canonical_memory_gate lease NEXT_ACTION_REQUIRED scribe_quer'
+  SAMPLE2='{"queries":["RAPPORT FINAL DE STABILISATION V2.15.23 Tests V2.15.23 ciblés 82/82 PASS READY_FOR_PUSH OUI sous réserve final full report","82 passed in 161.12s validation_suite PASS READY_FOR_PUSH OUI Correctifs appliqués 3 fichiers 4 changements","test_scribe_query_honesty 10 passed full suite 82 passed validation_suite MCP_SMOKE_ALL_OK final report","READY_FOR_PUSH OUI sous réserve des échecs pré-existants test_integration_e2e DIRECT_WRITE_BYPASS_DETECTED PROJECT_BOUND_STATE_PURGE_REFUSED","RAP'
+  SAMPLE3='{"queries":["Le TENOR TASK et l’usage obligatoire des MCP augmentent-ils le coût en tokens ou réduisent-ils le brouillage du LLM hôte dans agent-scribe-graphify ?","+(TENOR TASK) MCP tokens brouillage LLM hôte workflow_next before_task scribe_query apply_patch finish_task","+(scribe_query) checkbox ignore résultat petits modèles hôtes appellent un tool puis ignorent son résultat","+(workflow_next) READY_FOR_NEXT_TASK write task non validé le modèle redevient conversationnel","+(TENOR INIT) host '
+
+COUNT=3 | content_type=code | recipient=file_search.msearch | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"queries":["+(ALGOWEBSITE_V216_ADOPTION_TEST_FINISHED) +(ADOPTION_EXIT=0) +(ORIGINAL_GIT_STATUS_UNCHANGED) +(ORIGINAL_MEMORY_UNCHANGED)","+(Filesystem) +(98%) +(11G) +(/tmp)","+(TARGET=/tmp/algowebsite-v216-terrain) +(TENOR_SECOND_EXIT=0) +(LIST_TOOLS_EXIT=0)"],"source_filter":["files_uploaded_in_conversation"]}'
+  SAMPLE2='{"queries":["+(OpenCode MCP tools visible) +(root binding) +(TENOR_INIT_BRIDGE_PROOF_FAILED) +(proof token expired)","tenor_init_bridge proof token same project","HOST_MCP_UNBOUND file_hash root binding"],"source_filter":["files_uploaded_in_conversation"]}'
+  SAMPLE3='{"queries":["\\"test_bundle_identity_matches_adapter_paths\\" \\"test_existing_canonical_destination_is_not_overwritten\\" +(agent-scribe-graphify)","\\"test_bundle_identity_matches_adapter_paths\\"","\\"test_existing_canonical_destination_is_not_overwritten\\""],"source_filter":["files_uploaded_in_conversation","file_library"]}'
+
+COUNT=2 | content_type=thoughts | recipient=all | channel=<none> | end_turn=False | status=in_progress | hidden=<none> | message_type=variant | model_slug=gpt-5-5-thinking
+
+COUNT=2 | content_type=code | recipient=file_search.mclick | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=variant | model_slug=gpt-5-5-thinking
+  SAMPLE1='{"pointers":["8:0"]}'
+  SAMPLE2='{"pointers":["24:4","24:13","24:15"]}'
+
+COUNT=2 | content_type=reasoning_recap | recipient=all | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=variant | model_slug=gpt-5-5-thinking
+  SAMPLE1='Réflexion durant 26s'
+  SAMPLE2='Réflexion durant 31s'
+
+COUNT=2 | content_type=text | recipient=all | channel=final | end_turn=True | status=finished_successfully | hidden=<none> | message_type=variant | model_slug=gpt-5-5-thinking
+  SAMPLE1='Oui, j’ai compris ton `?`.\\n\\nMon verdict sur cette nouvelle avancée OpenCode :\\n\\n```text id="d3zkmx"\\nV2.15.23 est beaucoup mieux stabilisé qu’avant.\\nMais “READY_FOR_PUSH: OUI” reste trop optimiste.\\nLe vrai statut est : READY_FOR_COMMIT: OUI PROBABLEMENT.\\nREADY_FOR_PUSH: OUI SEULEMENT APRÈS DERNIÈRE VÉRIFICATION GIT + PRE-EXISTING PROOF CLAIRE.\\n```\\n\\n## Ce qui est vraiment bon\\n\\nLà, OpenCode a corrigé des choses concrètes, pas juste parlé.\\n\\nIl a identifié le bug racine `scribe-rag query --top` alors '
+  SAMPLE2='Oui, tu touches **le vrai nerf du système**.\\n\\n```text id="g6v2jq"\\nForcer le LLM hôte à utiliser MCP peut réduire le brouillage.\\nMais forcer TOUS les MCP, tout le temps, peut augmenter le brouillage.\\nLa bonne solution n’est pas “plus de protocole”.\\nLa bonne solution est “moins de protocole visible, plus de contrainte mécanique”.\\n```\\n\\n## 1. Est-ce que MCP consomme plus de tokens ?\\n\\n**Oui, au début.**\\n\\nUn workflow comme :\\n\\n```text id="izlslm"\\nworkflow_next\\nbefore_task\\nscribe_query\\ngraphify_query\\npr'
+
+COUNT=2 | content_type=code | recipient=python | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='from pathlib import Path\\n\\nrun_id = Path("/mnt/data/v216-latest-run-id.txt").read_text().strip()\\nconclusion = Path("/mnt/data/v216-latest-conclusion.txt").read_text().strip()\\n\\nprint(f"GitHub Actions — run #{run_id}: {conclusion.upper()}")'
+  SAMPLE2='from pathlib import Path\\nimport json\\n\\nstatus_path = Path("/mnt/data/v216-final-status.json")\\nstatus = json.loads(status_path.read_text(encoding="utf-8"))\\nstatus'
+
+COUNT=2 | content_type=code | recipient=file_search.mclick | channel=<none> | end_turn=False | status=finished_successfully | hidden=True | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"pointers":["371:0"]}'
+  SAMPLE2='{"pointers":["159:0"]}'
+
+COUNT=1 | content_type=text | recipient=all | channel=commentary | end_turn=False | status=finished_successfully | hidden=<none> | message_type=variant | model_slug=gpt-5-5-thinking
+  SAMPLE1='Tu poses exactement le bon problème : à ce stade, le risque n’est plus seulement “le MCP marche-t-il ?”, mais “est-ce que le protocole aide vraiment le modèle ou le noie dans du rituel ?”. Je vais séparer coût token, discipline réelle, et ancrage mécanique.'
+
+COUNT=1 | content_type=code | recipient=q7dr546 | channel=<none> | end_turn=False | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='{"query":"The user asked me to continue implementing the V2.16 TENOR rescue in their GitHub repository. Retrieve only any prior project decisions about runtime.task_context.require_context, workspace_audit task context validation, and host adapter test fixtures that would materially affect the current fix."}'
+
+COUNT=1 | content_type=reasoning_recap | recipient=all | channel=<none> | end_turn=True | status=finished_successfully | hidden=<none> | message_type=next | model_slug=gpt-5-6-thinking
+  SAMPLE1='Réflexion interrompue'
+
