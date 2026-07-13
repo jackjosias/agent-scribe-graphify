@@ -32,10 +32,13 @@ jobs:
       - name: Decode linear public conversation
         run: python tmp_tools/stream_extract.py
 
+      - name: Classify assistant messages
+        run: python tmp_tools/inspect_messages.py
+
       - name: Commit stream export result
         run: |
           git config user.name "chat-export-bot"
           git config user.email "chat-export-bot@users.noreply.github.com"
-          git add tmp_stream_inspect tmp_stream_export
-          git commit -m "chore(tmp): store decoded public conversation export" || true
+          git add tmp_stream_inspect tmp_stream_export tmp_message_inspect
+          git commit -m "chore(tmp): store assistant visibility classification" || true
           git push origin HEAD:tmp/chat-export-6a55289f-20260713
