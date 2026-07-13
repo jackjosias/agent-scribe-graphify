@@ -61,6 +61,7 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 - Un graphe manquant, vide à tort, stub, wrong-root, stale ou contradictoire bloque les writes.
 - Les agents lisent la mémoire via `.agent/workflow/scribe/scribe-rag` ou MCP `scribe_query`, jamais en parcourant directement le fichier `.scribe`.
 - Une requête mémoire doit modifier le plan ou produire une contradiction explicitement auditée.
+- Protocole complet : `.agent/workflow/scribe/sel/docs/scribe.md`.
 
 ## Workflow par tâche
 
