@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Portable V2.16 tests including first-write discovery regressions."""
+"""Portable V2.16 tests including first-write runtime and machine-contract regressions."""
 
 import importlib.util
 import unittest
@@ -28,6 +28,10 @@ _export_test_cases(
 _export_test_cases(
     HERE / "test_first_write_discovery.py",
     "_test_first_write_discovery_portable",
+)
+_export_test_cases(
+    HERE / "test_first_write_machine_contract.py",
+    "_test_first_write_machine_contract_portable",
 )
 
 

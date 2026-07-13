@@ -1,0 +1,79 @@
+{
+  "name": "FIRST_WRITE_DISCOVERY_V1",
+  "parent_contract": ".agent/rules/tenor-init-v2.json",
+  "purpose": "Allow a bounded first intervention when SCRIBE was queried successfully but returned no historical result relevant to the exact write resource.",
+  "activation": {
+    "canonical_intents": ["write", "delete"],
+    "required_verdict": "SCRIBE_CONTEXT_MISS_FOR_WRITE",
+    "scribe_unavailable_is_not_a_miss": true,
+    "query_text_is_not_relevance_evidence": true
+  },
+  "required_tools": [
+    "scope_task_resource",
+    "scribe_query",
+    "graphify_query",
+    "file_hash",
+    "record_task_discovery",
+    "pre_action_guard",
+    "resource_lock_claim",
+    "claim_resource",
+    "propose_patch",
+    "apply_patch",
+    "workspace_audit",
+    "finish_task"
+  ],
+  "sequence": [
+    "scope_exact_resource_if_task_is_coarse",
+    "query_scribe_for_exact_resource",
+    "establish_explicit_scribe_context_miss",
+    "query_graphify_when_required",
+    "obtain_fresh_file_hash",
+    "record_task_local_discovery",
+    "revalidate_task_agent_resource_hash_and_ttl",
+    "continue_normal_guard_lock_claim_patch_audit_finish"
+  ],
+  "discovery_binding": {
+    "task_id": true,
+    "agent_id": true,
+    "exact_project_relative_resource": true,
+    "fresh_base_hash": true,
+    "scribe_query_digest": true,
+    "scribe_result_digest": true,
+    "evidence_digest": true,
+    "bounded_ttl_seconds": 900,
+    "invalidate_on_hash_change": "TASK_DISCOVERY_BASE_STALE"
+  },
+  "evidence": {
+    "minimum_summary_characters": 24,
+    "minimum_evidence_characters": 80,
+    "must_reference_exact_path_basename_or_distinctive_resource_token": true,
+    "graphify_required_when_task_requires_graphify": true
+  },
+  "canonical_memory": {
+    "automatic_seeding_for_gate": false,
+    "task_local_discovery_is_canonical_memory": false,
+    "promotion_before_validated_result": false,
+    "finish_memory_decision_remains_required": true
+  },
+  "fail_closed": [
+    "SCRIBE_UNAVAILABLE",
+    "SCRIBE_SUBPROCESS_FAILED",
+    "TASK_EXACT_RESOURCE_REQUIRED",
+    "TASK_DISCOVERY_GRAPHIFY_REQUIRED",
+    "TASK_DISCOVERY_BASE_HASH_REQUIRED",
+    "TASK_DISCOVERY_BASE_HASH_MISMATCH",
+    "TASK_DISCOVERY_BASE_STALE",
+    "TASK_DISCOVERY_RESOURCE_MISMATCH",
+    "TASK_DISCOVERY_AGENT_MISMATCH",
+    "TASK_DISCOVERY_EXPIRED",
+    "TASK_DISCOVERY_RESOURCE_EVIDENCE_REQUIRED"
+  ],
+  "forbidden_bypasses": [
+    "direct_host_edit",
+    "manual_patch_application",
+    "canonical_scribe_poisoning",
+    "claim_before_discovery",
+    "lease_before_discovery",
+    "patch_before_discovery"
+  ]
+}
