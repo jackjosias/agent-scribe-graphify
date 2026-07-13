@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-"""V2.16 MCP composition facade.
-
-The established tool implementation is loaded from ``_server_ext_impl.py``.
-This facade applies the canonical read-only finish policy after registration,
-so a read task can close without receiving any write lease while a write task
-can never spoof a read intent.
-"""
+"""V2.16 MCP composition facade with read closure and first-write policy."""
 
 import runpy
 from pathlib import Path
@@ -26,7 +20,7 @@ for _name, _value in _IMPL_NAMESPACE.items():
         continue
     globals()[_name] = _value
 
-_BASE_PRE_ACTION_GUARD = server.TOOLS["pre_action_guard"]
+_BASE_PRE_ACTION_GUARD = _IMPL_NAMESPACE["pre_action_guard"]
 _READ_ONLY_FINISH_FORBIDDEN = [
     "claim_resource",
     "resource_lock_claim",
@@ -169,10 +163,20 @@ def pre_action_guard(
 
 server.pre_action_guard = pre_action_guard
 server.TOOLS["pre_action_guard"] = pre_action_guard
+
+from runtime import first_write_policy  # noqa: E402
+first_write_policy.install(server)
+
+# Public aliases must expose the installed policy, not stale implementation
+# functions copied before the facade installed its wrappers.
+scribe_query = server.TOOLS["scribe_query"]
+workflow_next = server.TOOLS["workflow_next"]
+scope_task_resource = server.TOOLS["scope_task_resource"]
+record_task_discovery = server.TOOLS["record_task_discovery"]
+tool_schema = server.tool_schema
 handle = server.handle
 list_tools = server.list_tools
 main = server.main
-
 
 if __name__ == "__main__":
     raise SystemExit(server.main())
