@@ -109,6 +109,7 @@ def render_scribe_rule() -> str:
         - Un graphe manquant, vide à tort, stub, wrong-root, stale ou contradictoire bloque les writes.
         - Les agents lisent la mémoire via `{RAG_COMMAND}` ou MCP `scribe_query`, jamais en parcourant directement le fichier `.scribe`.
         - Une requête mémoire doit modifier le plan ou produire une contradiction explicitement auditée.
+        - Protocole complet : `{SEL_RELATIVE_PATH}/docs/scribe.md`.
 
         ## Workflow par tâche
 
