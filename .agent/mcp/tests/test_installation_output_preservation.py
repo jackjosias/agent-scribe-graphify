@@ -67,7 +67,8 @@ class InstallationOutputPreservationTest(unittest.TestCase):
 
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["verdict"], installation_state.PROJECT_BOUND_STATE_PURGED)
-        self.assertEqual(result["preserved_state_dirs"], [".agent/state/outputs"])
+        self.assertEqual(len(result["preserved_state_dirs"]), 1)
+        self.assertEqual(tuple(Path(result["preserved_state_dirs"][0]).parts), (".agent", "state", "outputs"))
         self.assertFalse((self.state / "runtime").exists())
         self.assertFalse((self.state / "proof").exists())
         self.assertFalse((self.state / "locks").exists())
