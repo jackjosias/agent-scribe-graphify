@@ -57,6 +57,7 @@ TENOR_INIT_READY
 
 - `.agent/skills/init-tenor/SKILL.md`
 - `.agent/rules/tenor-init-v2.json`
+- `.agent/rules/scribe.md`
 - `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md`
 - `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`
 - `.agent/workflow/scribe/README.md`
