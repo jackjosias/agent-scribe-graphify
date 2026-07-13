@@ -5,6 +5,11 @@ from __future__ import annotations
 The storage implementation remains isolated in ``_task_context_impl``. This
 module is the public policy boundary: every caller sees one canonical intent
 vocabulary, including contexts created by older hosts that persisted aliases.
+
+A zero SCRIBE result is security-significant only when it was written by the
+explicit first-write no-history path.  Older contexts may have ``scribe_done``
+with a zero/default result count, so they are projected as legacy-ready unless
+the managed marker is present.
 """
 
 from typing import Any
@@ -16,6 +21,7 @@ except ImportError:  # pragma: no cover - direct script/import compatibility
 
 TaskContextError = _impl.TaskContextError
 DEFAULT_TTL_SECONDS = _impl.DEFAULT_TTL_SECONDS
+FIRST_WRITE_NO_HISTORY_PREFIX = "FIRST_WRITE_NO_HISTORY:"
 
 _READ_ALIASES = frozenset({
     "read",
@@ -62,6 +68,23 @@ def _canonical_task(data: dict[str, Any]) -> dict[str, Any]:
     result["intent"] = canonical
     if original and original.strip().lower() != canonical:
         result["intent_original"] = original
+
+    resources = str(result.get("scribe_result_resources") or "")
+    explicit_no_history = resources.startswith(FIRST_WRITE_NO_HISTORY_PREFIX)
+    result["scribe_history_absent"] = explicit_no_history
+    if explicit_no_history:
+        result["scribe_history_resource"] = resources[len(FIRST_WRITE_NO_HISTORY_PREFIX):]
+    elif result.get("scribe_done"):
+        try:
+            count = int(result.get("scribe_result_count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count == 0:
+            # Compatibility projection only: pre-V2.16 contexts did not persist
+            # an explicit no-history marker.  They were already considered
+            # context-ready and must not be reclassified by a schema default.
+            result["scribe_result_count"] = 1
+            result["scribe_result_count_legacy_assumed_ready"] = True
     return result
 
 
@@ -116,6 +139,29 @@ def list_tasks(agent_id: str = "", status: str = "") -> dict[str, Any]:
     return result
 
 
+def mark_scribe_done(
+    agent_id: str,
+    task_id: str,
+    context_token: str,
+    result_count: int = 0,
+    result_resources: str = "",
+) -> dict[str, Any]:
+    resources = result_resources or ""
+    if int(result_count or 0) == 0 and not resources.startswith(FIRST_WRITE_NO_HISTORY_PREFIX):
+        resources = f"{FIRST_WRITE_NO_HISTORY_PREFIX}{resources}"
+    result = _impl.mark_scribe_done(
+        agent_id,
+        task_id,
+        context_token,
+        result_count=result_count,
+        result_resources=resources,
+    )
+    result["scribe_history_absent"] = int(result_count or 0) == 0
+    if result["scribe_history_absent"]:
+        result["scribe_history_resource"] = resources[len(FIRST_WRITE_NO_HISTORY_PREFIX):]
+    return result
+
+
 def require_context_ready(
     agent_id: str,
     task_id: str,
@@ -150,7 +196,7 @@ def require_context_ready(
         if canonical not in allowed:
             code = "READ_INTENT_CANNOT_WRITE" if canonical == "read" else "TASK_CONTEXT_INTENT_MISMATCH"
             raise TaskContextError(code, {"intent": canonical, "allowed_intents": sorted(allowed)})
-    result = dict(data)
+    result = _canonical_task(dict(data))
     result["intent"] = canonical
     return result
 
