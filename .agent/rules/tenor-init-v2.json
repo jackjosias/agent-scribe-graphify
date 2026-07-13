@@ -21,7 +21,9 @@
   "authority_order": [
     "resolve_current_project_root",
     "classify_installation_from_manifest_and_root",
-    "purge_old_project_bound_state_only_if_required",
+    "purge_old_project_bound_runtime_only_if_required",
+    "preserve_canonical_outputs_during_runtime_purge",
+    "migrate_legacy_outputs_with_canonical_wins_quarantine",
     "adopt_or_create_current_project_scribe",
     "verify_or_build_project_bound_graphify",
     "finalize_local_installation",
@@ -91,6 +93,29 @@
       "Graphify placeholder when no application code is present"
     ],
     "new_relocated_legacy_installation_keep_bundle_install": true
+  },
+  "runtime_purge_data_preservation": {
+    "statement": "Runtime purge resets project-bound coordination state without deleting canonical outputs.",
+    "preserved_surface": ".agent/state/outputs/",
+    "preserve_byte_for_byte": true,
+    "reset_surfaces": [
+      ".agent/state/runtime/",
+      ".agent/state/proof/",
+      ".agent/state/locks/",
+      ".agent/state/sessions/",
+      ".agent/state/agents/",
+      ".agent/state/redteam/",
+      ".agent/state/backups/",
+      ".agent/state/install/"
+    ],
+    "validate_preserved_paths_before_any_delete": true,
+    "preserved_symlink_or_non_directory_verdict": "PROJECT_BOUND_STATE_PURGE_REFUSED",
+    "canonical_conflict_policy": "canonical_wins",
+    "legacy_conflict_quarantine": "_legacy_migrated/<UTC timestamp>/",
+    "silent_canonical_overwrite_forbidden": true,
+    "silent_legacy_drop_forbidden": true,
+    "preserved_graphify_requires_root_and_fingerprint_revalidation": true,
+    "normative_document": ".agent/docs/V2.16_DATA_PRESERVATION.md"
   },
   "local_server_gate": {
     "server_entry_is_non_destructive": true,
@@ -292,6 +317,7 @@
       ".agent/rules/tenor-init-v2.json",
       ".agent/skills/init-tenor/SKILL.md",
       ".agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md",
+      ".agent/docs/V2.16_DATA_PRESERVATION.md",
       ".agent/docs/V2.16_TERRAIN_FINDINGS.md",
       ".agent/docs/hosts/README.md",
       ".agent/workflow/scribe/README.md",
