@@ -2,7 +2,7 @@ CONVERSATION CHATGPT PUBLIQUE EXTRAITE
 ================================================================================================
 Titre : Continuation projet LLM
 URL publique : https://chatgpt.com/share/6a55289f-b540-83ea-a397-0183fd86f5a4
-Date d'extraction : 2026-07-13T18:36:58+00:00
+Date d'extraction : 2026-07-13T18:38:58+00:00
 Nombre de messages : 1385
 ================================================================================================
 
