@@ -1,0 +1,14 @@
+table_entries=98432
+root_type=dict
+root_keys=['loaderData', 'actionData', 'errors']
+linear_matches=[('$.loaderData.routes/share.$shareId.($action).serverResponse.data.linear_conversation', 3831)]
+selected_linear_path=$.loaderData.routes/share.$shareId.($action).serverResponse.data.linear_conversation
+linear_entries=3831
+linear_sample_keys=["['id', 'children']", "['id', 'message', 'parent', 'children']", "['id', 'message', 'parent', 'children']", "['id', 'message', 'parent', 'children']", "['id', 'message', 'parent', 'children']"]
+all_role_counts={'': 1, 'system': 163, 'user': 158, 'tool': 1607, 'assistant': 1902}
+messages=1385
+user_messages=158
+assistant_messages=1227
+txt_bytes=2095184
+first_preview="yo j'ai besoin de toi on a attent notre fin de session dan sal denrier conversation ce qui a induit que nous ttion obliger de commencer une autre ocnversation! mais pour ne pas tout perdre j'a copier tout le contnue de cette conversation atteinte dans la source:[Correction Scribe+Graphify pour les PETITS LLM — Protocole, Contournement et Assainissement (V2.15.x)]! est tu pret poru aller la lire au complet afin de t'en impregner et de t'ne rapplee rpour qu eon continue! aisinment la ou onous nous somme arreter ?"
+last_preview='The output of this plugin was redacted.'
