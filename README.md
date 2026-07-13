@@ -35,12 +35,16 @@ python .agent/workflow/scribe/scribe tenor-init --type cli
 
 Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; l'installateur forcé n'est jamais appelé et la réparation du bundle reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle quand nécessaire.
 
+Invariant terrain V2.16.2 : une purge requise réinitialise le runtime projet-lié mais préserve `.agent/state/outputs/` byte-for-byte. La destination canonique gagne lors d'un conflit avec un output legacy, qui est déplacé sous `_legacy_migrated/`. Un Graphify préservé doit encore réussir les contrôles root/fingerprint avant toute readiness.
+
 ## Ordre de vérité V2.16
 
 ```text
 RESOLVE
 CLASSIFY
-RESET_IF_REQUIRED
+RESET_RUNTIME_IF_REQUIRED
+PRESERVE_CANONICAL_OUTPUTS
+MIGRATE_AND_QUARANTINE_LEGACY_CONFLICTS
 ADOPT_PROJECT
 ADOPT_MEMORY
 VERIFY_GRAPH
@@ -60,6 +64,8 @@ La branche V2.16 a prouvé :
 
 - nouvelle installation, même projet et relocation sûre ;
 - préservation exacte de la mémoire SCRIBE cible ;
+- purge runtime sans suppression des outputs canoniques ;
+- quarantaine des conflits legacy sans écrasement canonique ;
 - Graphify réel au format `nodes + links` ainsi que compatibilité `nodes + edges` ;
 - serveur MCP local non destructif ;
 - concurrence et atomicité sur Linux, macOS et Windows ;
@@ -71,6 +77,7 @@ Le gate encore volontairement ouvert avant fusion est la preuve dans un **host L
 ## Documents canoniques
 
 - Autorité V2.16 : `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md`
+- Contrat de préservation : `.agent/docs/V2.16_DATA_PRESERVATION.md`
 - Skill de démarrage : `.agent/skills/init-tenor/SKILL.md`
 - Règles machine : `.agent/rules/tenor-init-v2.json`
 - Résultats terrain : `.agent/docs/V2.16_TERRAIN_FINDINGS.md`
