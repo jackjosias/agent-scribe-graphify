@@ -12,6 +12,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 MCP_DIR = HERE.parent
@@ -253,13 +254,20 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         call_tool("register_agent", agent_id=agent_id, host_tool="opencode")
         before = call_tool("before_task", agent_id=agent_id, request="fix bug", intent="write", resource="code.py")
         task_id, token = before["task_id"], before["context_token"]
-        scribe = call_tool(
-            "scribe_query",
-            agent_id=agent_id,
-            task_id=task_id,
-            context_token=token,
-            query="some logic",
-        )
+
+        irrelevant = mcp.server.ok({
+            "ok": False,
+            "verdict": "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE",
+            "result": {"returncode": 0, "stdout": "unrelated historical result"},
+        })
+        with mock.patch.object(mcp, "_BASE_SCRIBE_QUERY", return_value=irrelevant):
+            scribe = call_tool(
+                "scribe_query",
+                agent_id=agent_id,
+                task_id=task_id,
+                context_token=token,
+                query="some logic",
+            )
         self.assertEqual(scribe["verdict"], "SCRIBE_HISTORY_ABSENT_FIRST_WRITE_DISCOVERY_REQUIRED")
         call_tool("graphify_query", agent_id=agent_id, task_id=task_id, context_token=token, query="some logic", resource="code.py")
 
