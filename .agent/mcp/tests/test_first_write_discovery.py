@@ -25,6 +25,7 @@ class FirstWriteDiscoveryGateTest(unittest.TestCase):
             "status": "active",
             "scribe_done": True,
             "scribe_result_count": 0,
+            "scribe_result_resources": "FIRST_WRITE_NO_HISTORY:src/new_feature.py",
             "scribe_record_done": False,
             "scribe_record_path": "",
             "requires_graphify": True,
@@ -54,8 +55,52 @@ class FirstWriteDiscoveryGateTest(unittest.TestCase):
         target.write_text(json.dumps(payload), encoding="utf-8")
         return str(target.relative_to(root))
 
+    def test_legacy_zero_count_context_is_not_reclassified(self):
+        projected = server_ext.task_context._canonical_task({
+            "intent": "write",
+            "scribe_done": True,
+            "scribe_result_count": 0,
+            "scribe_result_resources": "src/legacy.py",
+        })
+        self.assertEqual(projected["scribe_result_count"], 1)
+        self.assertFalse(projected["scribe_history_absent"])
+        self.assertTrue(projected["scribe_result_count_legacy_assumed_ready"])
+
+    def test_explicit_marker_preserves_zero_count(self):
+        projected = server_ext.task_context._canonical_task({
+            "intent": "write",
+            "scribe_done": True,
+            "scribe_result_count": 0,
+            "scribe_result_resources": "FIRST_WRITE_NO_HISTORY:src/new_feature.py",
+        })
+        self.assertEqual(projected["scribe_result_count"], 0)
+        self.assertTrue(projected["scribe_history_absent"])
+        self.assertEqual(projected["scribe_history_resource"], "src/new_feature.py")
+
+    def test_mark_scribe_done_writes_explicit_marker(self):
+        with mock.patch.object(
+            server_ext.task_context._impl,
+            "mark_scribe_done",
+            return_value={"scribe_result_count": 0, "memory_hash": "abc"},
+        ) as marker:
+            result = server_ext.task_context.mark_scribe_done(
+                "agent-first-write",
+                "task-first-write",
+                "token",
+                result_count=0,
+                result_resources="src/new_feature.py",
+            )
+        self.assertTrue(result["scribe_history_absent"])
+        marker.assert_called_once_with(
+            "agent-first-write",
+            "task-first-write",
+            "token",
+            result_count=0,
+            result_resources="FIRST_WRITE_NO_HISTORY:src/new_feature.py",
+        )
+
     def test_relevant_scribe_history_uses_normal_path(self):
-        status = self._status(scribe_result_count=2)
+        status = self._status(scribe_result_count=2, scribe_result_resources="src/new_feature.py")
         with mock.patch.object(server_ext.task_context, "get_task_context", return_value=status):
             self.assertIsNone(
                 server_ext._first_write_discovery_gate(
