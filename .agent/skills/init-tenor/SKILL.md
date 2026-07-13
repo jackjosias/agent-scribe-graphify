@@ -47,6 +47,7 @@ Le but est qu'un petit modèle discipliné bénéficie de réflexes durables san
 ## Invariants non négociables
 
 1. Le manifest d'installation et le root courant décident de l'identité du projet avant SCRIBE.
+1b. Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` est strictement en lecture seule des fichiers suivis : l'installateur forcé n'est jamais appelé et aucun `AGENTS.md` / `.agent/rules/scribe.md` / `.graphifyignore` / `.agent/.gitignore` n'est réécrit ; la réparation du bundle reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
 2. `AGENT-MEMOIRE_PROJECT_STATUS.scribe` ne décide jamais si un projet est nouveau.
 3. Une relocation purge uniquement l'état copié lié à l'ancien root et conserve la mémoire canonique de la destination.
 4. `server_entry.py` ne purge ni n'initialise ; il retourne `TENOR_INIT_REQUIRED` tant que l'installation locale n'est pas finalisée.

@@ -75,6 +75,20 @@ SCRIBE_MEMORY_ADOPT
 SCRIBE_MEMORY_CREATE
 ```
 
+## SAME_PROJECT read-only session invariant
+
+On `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` is strictly tracked-file read-only. It MUST NOT call the forced installer (`run_installer(force=True)`) and MUST NOT rewrite any tracked configuration or documentation file (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`).
+
+Allowed mutations are confined to the operational runtime layer under `.agent/state`: presences, locks, proof store, runtime reports, manifests and the Graphify placeholder when no application code exists. SCRIBE, Graphify, doctor and runtime state are still verified.
+
+Bundle drift in the managed files is *surfaced as a warning and never silently repaired* — bundle repair stays explicit and separate (`scribe install --force`). This is the V2.16.1 terrain fix for the confirmed defect where `bootstrap_project()` rewrote tracked files on every `SAME_PROJECT` session init.
+
+Invariant (single sentence):
+
+> SAME_PROJECT session init is tracked-file read-only; bundle repair is explicit.
+
+`NEW_INSTALLATION`, `RELOCATED_PROJECT` and `LEGACY_INSTALLATION` keep the bundle install when required. The regression is covered by `test_scribe_bootstrap.py::test_same_project_session_init_is_tracked_file_read_only` and `test_new_installation_still_calls_installer`.
+
 ## Local transaction
 
 Installation states:
@@ -294,6 +308,7 @@ Isolated minimal project:
 - Graphify missing blocked false readiness;
 - real Graphify schema identified as `nodes + links`;
 - second TENOR INIT became `SAME_PROJECT` without repurge;
+- `SAME_PROJECT` session init is tracked-file read-only (V2.16.1: installer/agent-gitignore no longer rewrite tracked files);
 - local MCP tools listed successfully.
 
 Isolated copy of `algowebsite`:

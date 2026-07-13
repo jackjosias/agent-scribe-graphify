@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Sequence
 
 from scribe_doctor_lib import run_doctor
-from scribe_install import Installer
+from scribe_install import Installer, replace_managed_block
 from scribe_output_paths import graphify_out_dir, migrate_all_legacy_outputs, scribe_out_dir
 from scribe_state import AGENT_TYPES, check_sync, update_state_after_write
 
@@ -178,6 +178,47 @@ def run_installer(project_root: Path, dry_run: bool) -> int:
     return Installer(SCRIBE_ROOT, project_root, force=True, dry_run=dry_run, with_root_adapters=False).run()
 
 
+def _detect_managed_drift(project_root: Path, report: BootstrapReport) -> None:
+    """Read-only bundle drift detection for SAME_PROJECT sessions.
+
+    Surfaces drift in generated managed files as a warning. It never repairs:
+    bundle repair stays explicit and separate (run the installer with --force).
+    Any failure here is non-fatal — drift detection must never break bootstrap.
+    """
+    try:
+        from scribe_install_templates import (
+            AGENTS_END,
+            AGENTS_START,
+            GRAPHIFY_END,
+            GRAPHIFY_START,
+            LEGACY_AGENTS_MARKERS,
+            LEGACY_GRAPHIFY_MARKERS,
+            render_agents_block,
+            render_graphify_block,
+            render_scribe_rule,
+        )
+    except Exception:  # noqa: BLE001 — drift detection must never break bootstrap
+        return
+    managed = [
+        (project_root / "AGENTS.md", AGENTS_START, AGENTS_END, render_agents_block(), LEGACY_AGENTS_MARKERS),
+        (project_root / ".graphifyignore", GRAPHIFY_START, GRAPHIFY_END, render_graphify_block(), LEGACY_GRAPHIFY_MARKERS),
+        (project_root / ".agent" / "rules" / "scribe.md", None, None, render_scribe_rule(), ()),
+    ]
+    for path, start, end, block, legacy in managed:
+        if not path.is_file():
+            continue
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        expected = block if start is None else replace_managed_block(existing, start, end, block, legacy)
+        if existing != expected:
+            report.warnings.append(
+                f"Bundle drift detected in {path.relative_to(project_root)}; "
+                f"repair is explicit and separate: run `scribe install --force`. No silent repair applied."
+            )
+
+
 def has_application_code(project_root: Path) -> bool:
     if any((project_root / marker).exists() for marker in APP_MARKER_FILES):
         return True
@@ -301,11 +342,19 @@ def bootstrap_project(
     project_changed = bool(_plan_attr(installation_plan, "project_changed", classification != TENOR_INIT_SAME_PROJECT))
     report = BootstrapReport(classification, project_changed, memory_action)
 
-    install_code = run_installer(project_root, dry_run=dry_run)
-    if install_code != 0:
-        report.warnings.append("Rootless bundle install reported conflicts.")
+    if classification == TENOR_INIT_SAME_PROJECT:
+        # SAME_PROJECT session init is tracked-file read-only.
+        # Never call the forced installer; never rewrite tracked config/docs.
+        # Runtime mutations under .agent/state (presences, locks, proof store,
+        # runtime reports, manifests) remain allowed below.
+        report.actions.append("SAME_PROJECT read-only session init (installer skipped)")
+        _detect_managed_drift(project_root, report)
     else:
-        report.actions.append("rootless install verified")
+        install_code = run_installer(project_root, dry_run=dry_run)
+        if install_code != 0:
+            report.warnings.append("Rootless bundle install reported conflicts.")
+        else:
+            report.actions.append("rootless install verified")
     if dry_run:
         report.scribe_status = "dry-run"
         return report
@@ -334,8 +383,13 @@ def bootstrap_project(
         return report
 
     migrate_all_legacy_outputs(project_root)
-    ensure_agent_gitignore(project_root)
-    report.actions.append(".agent gitignore ready")
+    if classification == TENOR_INIT_SAME_PROJECT:
+        # .agent/.gitignore is a tracked file; on SAME_PROJECT it is already
+        # installed and must not be rewritten. Bundle repair stays explicit.
+        report.actions.append(".agent gitignore skipped (SAME_PROJECT read-only)")
+    else:
+        ensure_agent_gitignore(project_root)
+        report.actions.append(".agent gitignore ready")
     ensure_scribe_out(project_root)
     report.actions.append("scribe-out ready")
 

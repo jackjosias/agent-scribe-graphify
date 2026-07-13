@@ -79,6 +79,19 @@
     "portability_check",
     "graphify_required_check"
   ],
+  "same_project_session_invariant": {
+    "statement": "SAME_PROJECT session init is tracked-file read-only; bundle repair is explicit.",
+    "tracked_files_read_only": true,
+    "forced_installer_skipped_on_same_project": true,
+    "agent_gitignore_skipped_on_same_project": true,
+    "bundle_drift_surfaced_as_warning": true,
+    "bundle_repair_command": "scribe install --force",
+    "allowed_runtime_mutations": [
+      ".agent/state presences/locks/proof_store/runtime_reports/manifests",
+      "Graphify placeholder when no application code is present"
+    ],
+    "new_relocated_legacy_installation_keep_bundle_install": true
+  },
   "local_server_gate": {
     "server_entry_is_non_destructive": true,
     "not_ready_exit_code": 78,

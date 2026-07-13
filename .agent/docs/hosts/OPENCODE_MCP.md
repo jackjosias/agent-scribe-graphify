@@ -29,6 +29,8 @@ The local mechanical initialization remains:
 .agent/workflow/scribe/scribe tenor-init --type cli
 ```
 
+Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis ; l'installateur forcé n'est jamais appelé (voir `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md`).
+
 ## Preferred project-local configuration
 
 Create or update `opencode.jsonc` at the project root without removing unrelated MCP servers:

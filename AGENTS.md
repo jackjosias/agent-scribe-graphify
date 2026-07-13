@@ -60,3 +60,4 @@ TENOR_INIT_READY
 
 When the architecture or workflow changes, update these surfaces and their generators in the same change. Historical `.old` files and old dated baselines are not authoritative.
 <!-- SCRIBE-PORTABLE-WORKFLOW:END -->
+- Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; l'installateur forcé n'est jamais appelé et la réparation du bundle reste explicite (`scribe install --force`).

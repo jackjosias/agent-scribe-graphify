@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from scribe_test_utils import load_script_module
 
@@ -198,6 +203,143 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertTrue(any("Graphify not ready" in error for error in errors))
             self.assertTrue(any("graph --project-build --timeout 180" in error for error in errors))
             self.assertFalse((root / ".agent" / "state" / "outputs" / "graphify-out" / "GRAPHIFY_READY.json").exists())
+
+    def test_same_project_session_init_is_tracked_file_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agents = root / "AGENTS.md"
+            scribe_rule = root / ".agent" / "rules" / "scribe.md"
+            graphify_ignore = root / ".graphifyignore"
+            scribe_rule.parent.mkdir(parents=True, exist_ok=True)
+            agents.write_text("SENTINEL-AGENTS-NO-TOUCH\n", encoding="utf-8")
+            scribe_rule.write_text("SENTINEL-SCRIBE-RULE-NO-TOUCH\n", encoding="utf-8")
+            graphify_ignore.write_text("SENTINEL-GRAPHIFYIGNORE-NO-TOUCH\n", encoding="utf-8")
+            agents_hash = hashlib.sha256(agents.read_bytes()).hexdigest()
+            scribe_rule_hash = hashlib.sha256(scribe_rule.read_bytes()).hexdigest()
+            graphify_ignore_hash = hashlib.sha256(graphify_ignore.read_bytes()).hexdigest()
+
+            scribe_path = create_scribe_from_template(root)
+            update_state_after_write(
+                scribe_path,
+                "existing-agent",
+                "cli",
+                "JOURNAL-000",
+                ["PAT-GRAPH-001", "JOURNAL-000"],
+                "install",
+            )
+
+            with mock.patch.object(scribe_bootstrap, "run_installer") as installer:
+                report = self.run_bootstrap(
+                    root,
+                    classification="TENOR_INIT_SAME_PROJECT",
+                    memory_action="SCRIBE_MEMORY_ADOPT",
+                    project_changed=False,
+                )
+
+            installer.assert_not_called()
+
+            self.assertEqual(agents.read_text(encoding="utf-8"), "SENTINEL-AGENTS-NO-TOUCH\n")
+            self.assertEqual(scribe_rule.read_text(encoding="utf-8"), "SENTINEL-SCRIBE-RULE-NO-TOUCH\n")
+            self.assertEqual(graphify_ignore.read_text(encoding="utf-8"), "SENTINEL-GRAPHIFYIGNORE-NO-TOUCH\n")
+            self.assertEqual(hashlib.sha256(agents.read_bytes()).hexdigest(), agents_hash)
+            self.assertEqual(hashlib.sha256(scribe_rule.read_bytes()).hexdigest(), scribe_rule_hash)
+            self.assertEqual(hashlib.sha256(graphify_ignore.read_bytes()).hexdigest(), graphify_ignore_hash)
+
+            self.assertEqual(report.scribe_status, "adopted")
+            self.assertFalse(report.new_project)
+            self.assertEqual(report.errors, [])
+            self.assertEqual(report.doctor_code, 0)
+            self.assertIn("SAME_PROJECT read-only session init (installer skipped)", report.actions)
+
+    def test_new_installation_still_calls_installer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agents = root / "AGENTS.md"
+            scribe_rule = root / ".agent" / "rules" / "scribe.md"
+            graphify_ignore = root / ".graphifyignore"
+            scribe_rule.parent.mkdir(parents=True, exist_ok=True)
+            agents.write_text("SENTINEL-AGENTS\n", encoding="utf-8")
+            scribe_rule.write_text("SENTINEL-SCRIBE-RULE\n", encoding="utf-8")
+            graphify_ignore.write_text("SENTINEL-GRAPHIFYIGNORE\n", encoding="utf-8")
+
+            scribe_path = create_scribe_from_template(root)
+            update_state_after_write(
+                scribe_path,
+                "existing-agent",
+                "cli",
+                "JOURNAL-000",
+                ["PAT-GRAPH-001", "JOURNAL-000"],
+                "install",
+            )
+
+            with mock.patch.object(scribe_bootstrap, "run_installer", return_value=0) as installer:
+                report = self.run_bootstrap(
+                    root,
+                    classification="TENOR_INIT_NEW_INSTALLATION",
+                    memory_action="SCRIBE_MEMORY_ADOPT",
+                    project_changed=True,
+                )
+
+            installer.assert_called_once()
+            self.assertIn("rootless install verified", report.actions)
+
+
+    def test_same_project_signals_drift_without_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agents = root / "AGENTS.md"
+            scribe_rule = root / ".agent" / "rules" / "scribe.md"
+            graphify_ignore = root / ".graphifyignore"
+            scribe_rule.parent.mkdir(parents=True, exist_ok=True)
+            agents.write_text("SENTINEL-AGENTS-NO-TOUCH\n", encoding="utf-8")
+            scribe_rule.write_text("SENTINEL-SCRIBE-RULE-NO-TOUCH\n", encoding="utf-8")
+            graphify_ignore.write_text("SENTINEL-GRAPHIFYIGNORE-NO-TOUCH\n", encoding="utf-8")
+            scribe_path = create_scribe_from_template(root)
+            update_state_after_write(scribe_path, "existing-agent", "cli", "JOURNAL-000", ["JOURNAL-000"], "install")
+            with mock.patch.object(scribe_bootstrap, "run_installer") as installer:
+                report = self.run_bootstrap(root, classification="TENOR_INIT_SAME_PROJECT", memory_action="SCRIBE_MEMORY_ADOPT", project_changed=False)
+            installer.assert_not_called()
+            self.assertEqual(report.scribe_status, "adopted")
+            self.assertEqual(report.errors, [])
+            self.assertEqual(report.doctor_code, 0)
+            drift_warnings = [w for w in report.warnings if "Bundle drift detected" in w]
+            self.assertTrue(drift_warnings, "expected at least one drift warning")
+            self.assertTrue(all("scribe install --force" in w for w in drift_warnings))
+            self.assertEqual(agents.read_text(encoding="utf-8"), "SENTINEL-AGENTS-NO-TOUCH\n")
+
+    def test_same_project_with_missing_or_corrupt_managed_files_is_still_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scribe_path = create_scribe_from_template(root)
+            update_state_after_write(scribe_path, "existing-agent", "cli", "JOURNAL-000", ["JOURNAL-000"], "install")
+            (root / "AGENTS.md").mkdir()
+            with mock.patch.object(scribe_bootstrap, "run_installer") as installer:
+                report = self.run_bootstrap(root, classification="TENOR_INIT_SAME_PROJECT", memory_action="SCRIBE_MEMORY_ADOPT", project_changed=False)
+            installer.assert_not_called()
+            self.assertEqual(report.scribe_status, "adopted")
+            self.assertEqual(report.errors, [])
+            self.assertEqual(report.doctor_code, 0)
+
+    def test_drift_warning_references_supported_install_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            agents = root / "AGENTS.md"
+            scribe_rule = root / ".agent" / "rules" / "scribe.md"
+            graphify_ignore = root / ".graphifyignore"
+            scribe_rule.parent.mkdir(parents=True, exist_ok=True)
+            agents.write_text("SENTINEL-AGENTS\n", encoding="utf-8")
+            scribe_rule.write_text("SENTINEL-SCRIBE-RULE\n", encoding="utf-8")
+            graphify_ignore.write_text("SENTINEL-GRAPHIFYIGNORE\n", encoding="utf-8")
+            scribe_path = create_scribe_from_template(root)
+            update_state_after_write(scribe_path, "existing-agent", "cli", "JOURNAL-000", ["JOURNAL-000"], "install")
+            with mock.patch.object(scribe_bootstrap, "run_installer"):
+                report = self.run_bootstrap(root, classification="TENOR_INIT_SAME_PROJECT", memory_action="SCRIBE_MEMORY_ADOPT", project_changed=False)
+            self.assertTrue(any("scribe install --force" in w for w in report.warnings))
+            repo_launcher = Path(__file__).resolve().parent.parent / "scribe"
+            repo_root = Path(__file__).resolve().parents[5]
+            result = subprocess.run([sys.executable, str(repo_launcher), "install", "--help"], cwd=repo_root, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--force", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

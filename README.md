@@ -33,6 +33,8 @@ python .agent/workflow/scribe/scribe tenor-init --type cli
 
 `bootstrap` reste une primitive interne/legacy. Il n'est plus l'autorité publique d'installation, de relocation ou de reprise V2.16.
 
+Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; l'installateur forcé n'est jamais appelé et la réparation du bundle reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle quand nécessaire.
+
 ## Ordre de vérité V2.16
 
 ```text

@@ -109,3 +109,7 @@ Une douleur, cause racine, régression ou approche rejetée durable devient SCAR
 - `.agent/` n'est versionné que lors d'une maintenance intentionnelle de l'outillage.
 - Toute évolution d'architecture doit synchroniser les surfaces listées dans `.agent/docs/DOCUMENTATION_SYNC_POLICY.md` et leurs générateurs.
 - Les anciens baselines datés, fichiers `.old` et exemples pré-V2.16 sont historiques, jamais normatifs.
+
+## Invariant SAME_PROJECT (V2.16.1)
+
+Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` n'appelle jamais l'installateur forcé et ne réécrit aucun fichier suivi de configuration ou documentation. La dérive du bundle est signalée en warning et jamais réparée silencieusement ; la réparation reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
