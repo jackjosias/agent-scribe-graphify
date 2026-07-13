@@ -42,6 +42,10 @@ _LEGACY_STATE_NAMES = {
     "redteam",
     "backups",
 }
+# Outputs contain canonical/generated evidence that must survive a runtime purge.
+# Graphify content is preserved for losslessness but must still pass the existing
+# root/fingerprint readiness checks before TENOR_INIT_READY can be emitted.
+_PRESERVED_STATE_DIR_NAMES = {"outputs"}
 _PROJECT_MARKERS = (
     ".git",
     "README.md",
@@ -310,6 +314,13 @@ def inspect_installation_state(project_root: Path) -> dict[str, Any]:
     }
 
 
+def _remove_state_child(child: Path) -> None:
+    if child.is_symlink() or child.is_file():
+        child.unlink()
+    else:
+        shutil.rmtree(child)
+
+
 def purge_project_bound_state(project_root: Path, *, attempts: int = 5, initial_backoff_seconds: float = 0.05) -> dict[str, Any]:
     root = project_root.resolve()
     state_dir = _state_dir(root)
@@ -324,14 +335,27 @@ def purge_project_bound_state(project_root: Path, *, attempts: int = 5, initial_
     last_error = ""
     for attempt in range(max(1, attempts)):
         try:
-            if state_dir.exists():
-                shutil.rmtree(state_dir)
+            preserved: list[str] = []
+            state_dir.mkdir(parents=True, exist_ok=True)
+            children = tuple(state_dir.iterdir())
+            # Validate every preserved surface before deleting any project-bound
+            # runtime child. Unsafe output paths therefore fail closed without a
+            # partial purge.
+            for child in children:
+                if child.name in _PRESERVED_STATE_DIR_NAMES and (child.is_symlink() or not child.is_dir()):
+                    raise OSError(f"refusing unsafe preserved state path: {child}")
+            for child in children:
+                if child.name in _PRESERVED_STATE_DIR_NAMES:
+                    preserved.append(str(child.relative_to(root)))
+                    continue
+                _remove_state_child(child)
             (state_dir / "install").mkdir(parents=True, exist_ok=True)
             return {
                 "ok": True,
                 "verdict": PROJECT_BOUND_STATE_PURGED,
                 "state_dir": str(state_dir),
                 "install_dir": str(state_dir / "install"),
+                "preserved_state_dirs": preserved,
                 "attempts": attempt + 1,
             }
         except OSError as exc:
