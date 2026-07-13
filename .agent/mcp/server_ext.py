@@ -19,7 +19,10 @@ for _name, _value in _IMPL_NAMESPACE.items():
     globals()[_name] = _value
 
 from runtime import first_write_hardening  # noqa: E402
+from runtime import first_write_gate_binding  # noqa: E402
+
 first_write_hardening.install(server, _IMPL_NAMESPACE)
+first_write_gate_binding.install(server)
 
 scribe_query = server.TOOLS["scribe_query"]
 workflow_next = server.TOOLS["workflow_next"]
