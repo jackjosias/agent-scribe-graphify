@@ -1,0 +1,13 @@
+html_bytes=8336571
+title=Continuation projet LLM
+article_turn_nodes=0
+all_turn_nodes=0
+role_nodes=0
+user_message_nodes=0
+markdown_nodes=0
+messages=0
+user_messages=0
+assistant_messages=0
+txt_bytes=412
+first_preview=''
+last_preview=''
