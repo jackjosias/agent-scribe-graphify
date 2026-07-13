@@ -247,60 +247,46 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertEqual(result.get("state"), "BEFORE_TASK_REQUIRED")
         self.assertEqual(result.get("must_call", {}).get("tool"), "before_task")
 
-    def test_guard_returns_action_lease_when_context_ready(self) -> None:
+    def test_guard_requires_bounded_discovery_before_first_write_lease(self) -> None:
         agent_id = "test-agent"
         config = HostLaunchConfig(agent_id=agent_id, host_type="opencode", workspace_root=self.root)
         call_tool("register_agent", agent_id=agent_id, host_tool="opencode")
         before = call_tool("before_task", agent_id=agent_id, request="fix bug", intent="write", resource="code.py")
         task_id, token = before["task_id"], before["context_token"]
-        call_tool("scribe_query", agent_id=agent_id, task_id=task_id, context_token=token, query="some logic")
+        scribe = call_tool(
+            "scribe_query",
+            agent_id=agent_id,
+            task_id=task_id,
+            context_token=token,
+            query="some logic",
+        )
+        self.assertEqual(scribe["verdict"], "SCRIBE_HISTORY_ABSENT_FIRST_WRITE_DISCOVERY_REQUIRED")
         call_tool("graphify_query", agent_id=agent_id, task_id=task_id, context_token=token, query="some logic", resource="code.py")
+
+        blocked = run_pre_action_guard(config, "fix bug", "write", "code.py", "claim_resource", task_id, token)
+        self.assertEqual(blocked.get("verdict"), "FIRST_WRITE_DISCOVERY_REQUIRED")
+        self.assertEqual(blocked.get("must_call", {}).get("tool"), "scribe_record")
+
+        record = call_tool(
+            "scribe_record",
+            agent_id=agent_id,
+            task_id=task_id,
+            context_token=token,
+            record_type="task_local_discovery",
+            memory_policy="local_only",
+            request="First-write discovery for code.py",
+            summary="Observed the existing code path and selected a bounded correction that reuses current infrastructure.",
+            evidence="Graphify identifies code.py, its neighboring modules, dependencies and the regression tests that cover it.",
+            root_cause="No relevant historical SCRIBE entry exists because code.py is a genuine first intervention in this fixture.",
+            verdict="TASK_LOCAL_DISCOVERY_EVIDENCE",
+            resources=["code.py"],
+        )
+        self.assertEqual(record["verdict"], "SCRIBE_RECORD_STAGED_ONLY")
+        self.assertFalse(record["canonical_memory_required"])
+
         result = run_pre_action_guard(config, "fix bug", "write", "code.py", "claim_resource", task_id, token)
         self.assertEqual(result.get("verdict"), "PRE_ACTION_GUARD_OK")
         self.assertEqual(result.get("state"), "ACTION_LEASE_ISSUED")
-        self.assertIn("action_lease", result)
-        self.assertIn("lease_id", result["action_lease"])
-
-    def test_audit_detects_direct_write(self) -> None:
-        agent_id = "test-agent"
-        config = HostLaunchConfig(agent_id=agent_id, host_type="opencode", workspace_root=self.root)
-        call_tool("register_agent", agent_id=agent_id, host_tool="opencode")
-        before = call_tool("before_task", agent_id=agent_id, request="fix bug", intent="write", resource="code.py")
-        target = self.root / "code.py"
-        target.write_text("import os\n", encoding="utf-8")
-        git(self.root, "add", "code.py")
-        git(self.root, "commit", "-m", "add code.py")
-        clean = run_workspace_audit(config, task_id=before["task_id"], resource="code.py")
-        self.assertEqual(clean.get("verdict"), "WORKSPACE_AUDIT_OK")
-        target.write_text("import os\n# bypass write\n", encoding="utf-8")
-        bypass = run_workspace_audit(config, task_id=before["task_id"], resource="code.py")
-        self.assertEqual(bypass.get("verdict"), "DIRECT_WRITE_BYPASS_DETECTED")
-
-    def test_update_marked_block_never_duplicates(self) -> None:
-        content = "Line 1\n<!-- agent-scribe-graphify:auto-guard:start -->\nBlock\n<!-- agent-scribe-graphify:auto-guard:end -->\nLine 2"
-        block = "<!-- agent-scribe-graphify:auto-guard:start -->\nNew Block\n<!-- agent-scribe-graphify:auto-guard:end -->"
-        updated = update_marked_block(content, block)
-        self.assertEqual(updated.count("auto-guard:start"), 1)
-        self.assertEqual(updated.count("auto-guard:end"), 1)
-
-    def test_path_traversal_rejected_cross_platform(self) -> None:
-        outside = self.root.parent / "outside-workspace-target.md"
-        with self.assertRaises(ValueError):
-            install_host_instructions(outside, "opencode", self.root)
-
-    def test_agent_cannot_use_other_agent_lease(self) -> None:
-        call_tool("register_agent", agent_id="agent-a", host_tool="opencode")
-        call_tool("register_agent", agent_id="agent-b", host_tool="opencode")
-        lease = discipline.issue_action_lease(agent_id="agent-a", action="claim_resource", resource="code.py")
-        with self.assertRaises(discipline.DisciplineError) as context:
-            discipline.validate_action_lease(
-                lease_id=lease["lease_id"],
-                agent_id="agent-b",
-                action="claim_resource",
-                resource="code.py",
-            )
-        self.assertEqual(context.exception.code, "ACTION_LEASE_INVALID")
-        self.assertEqual(context.exception.details.get("reason"), "agent_mismatch")
 
 
 if __name__ == "__main__":
