@@ -1,4 +1,4 @@
-name: Temporary public ChatGPT stream export
+name: Temporary public ChatGPT final export
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  export-stream:
+  export-final:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,13 +32,13 @@ jobs:
       - name: Decode linear public conversation
         run: python tmp_tools/stream_extract.py
 
-      - name: Classify assistant messages
-        run: python tmp_tools/inspect_messages.py
+      - name: Build clean visible-message transcript
+        run: python tmp_tools/final_export.py
 
-      - name: Commit stream export result
+      - name: Commit final extraction result
         run: |
           git config user.name "chat-export-bot"
           git config user.email "chat-export-bot@users.noreply.github.com"
-          git add tmp_stream_inspect tmp_stream_export tmp_message_inspect
-          git commit -m "chore(tmp): store assistant visibility classification" || true
+          git add tmp_stream_inspect tmp_stream_export tmp_final_export
+          git commit -m "chore(tmp): store final clean public transcript" || true
           git push origin HEAD:tmp/chat-export-6a55289f-20260713
