@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import shutil
@@ -19,17 +18,46 @@ MCP_DIR = ROOT / ".agent" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-import server_ext as mcp
-from runtime import (
-    db,
-    direct_fs_tripwire,
-    discipline,
-    graphify_readiness,
-    installation_state,
-    patch_queue,
-    task_context,
-)
+from runtime import graphify_readiness, installation_state
 from _strict_cleanup import remove_tree_strict
+
+
+_SEQUENTIAL_LAUNCHER = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+mcp_dir = Path(os.environ["MCP_LOCK_TEST_ENTRY"]).resolve().parent
+sys.path.insert(0, str(mcp_dir))
+import server_ext as mcp
+
+ipc_dir = Path(os.environ["MCP_LOCK_TEST_IPC"])
+sequence = 1
+while True:
+    if (ipc_dir / "stop").is_file():
+        raise SystemExit(0)
+    request_path = ipc_dir / f"{sequence}.request.json"
+    if not request_path.is_file():
+        time.sleep(0.005)
+        continue
+    try:
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        response = mcp.handle(request)
+    except BaseException as exc:
+        response = {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {"code": -32000, "message": f"{type(exc).__name__}: {exc}"},
+        }
+    response_tmp = ipc_dir / f"{sequence}.response.tmp"
+    response_path = ipc_dir / f"{sequence}.response.json"
+    response_tmp.write_text(json.dumps(response), encoding="utf-8")
+    response_tmp.replace(response_path)
+    request_path.unlink(missing_ok=True)
+    sequence += 1
+"""
 
 
 _RACE_LAUNCHER = r"""
@@ -63,11 +91,6 @@ print(json.dumps(response), flush=True)
 
 class MultiAgentResourceLockTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._old_cwd = Path.cwd()
-        self._old_root = mcp.server.ROOT
-        self._old_agent_dir = mcp.server.AGENT_DIR
-        self._old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
-        self._old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
@@ -92,37 +115,50 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         fixture = graphify_readiness.write_smoke_fixture(self.root)
         self.assertTrue(fixture["ok"], fixture)
 
-        os.environ.update(self._env)
-        os.chdir(self.root)
-        mcp.server.ROOT = self.root.resolve()
-        mcp.server.AGENT_DIR = self.root / ".agent"
-        importlib.reload(db)
-        importlib.reload(patch_queue)
-        importlib.reload(task_context)
-        importlib.reload(discipline)
-        importlib.reload(direct_fs_tripwire)
-        mcp.db = db
-        mcp.patch_queue = patch_queue
-        mcp.task_context = task_context
-        mcp.discipline = discipline
-        mcp.direct_fs_tripwire = direct_fs_tripwire
-        db.init_db(self.root)
-        discipline.ensure_schema()
+        self._ipc_dir = self.root / ".agent" / "state" / "runtime" / f"test-ipc-{uuid.uuid4().hex}"
+        self._ipc_dir.mkdir(parents=True, exist_ok=False)
+        self._sequence = 0
+        server_env = {
+            **self._env,
+            "MCP_LOCK_TEST_ENTRY": str(self.entry),
+            "MCP_LOCK_TEST_IPC": str(self._ipc_dir),
+        }
+        self._server_proc = subprocess.Popen(
+            [sys.executable, "-c", _SEQUENTIAL_LAUNCHER],
+            cwd=str(self.root),
+            env=server_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
     def tearDown(self) -> None:
-        os.chdir(self._old_cwd)
-        mcp.server.ROOT = self._old_root
-        mcp.server.AGENT_DIR = self._old_agent_dir
-        if self._old_root_env is None:
-            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        try:
+            self._stop_server()
+        finally:
+            remove_tree_strict(self.tmp.name)
+            self.tmp.cleanup()
+
+    def _stop_server(self) -> None:
+        proc = self._server_proc
+        if proc.poll() is None:
+            (self._ipc_dir / "stop").write_text("stop\n", encoding="utf-8")
+            try:
+                stdout, stderr = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+                try:
+                    stdout, stderr = proc.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate(timeout=10)
         else:
-            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self._old_root_env
-        if self._old_fixture_env is None:
-            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
-        else:
-            os.environ[graphify_readiness.FIXTURE_ENV] = self._old_fixture_env
-        remove_tree_strict(self.tmp.name)
-        self.tmp.cleanup()
+            stdout, stderr = proc.communicate(timeout=10)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"persistent MCP test server exited {proc.returncode}; "
+                f"stdout={stdout[-1000:]}; stderr={stderr[-1000:]}"
+            )
 
     @staticmethod
     def _decode_tool_response(raw: dict[str, Any]) -> dict[str, Any]:
@@ -132,12 +168,36 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         return result
 
     def call(self, tool: str, **args: object) -> dict[str, Any]:
-        raw = mcp.handle({
+        self._sequence += 1
+        request = {
             "jsonrpc": "2.0",
-            "id": f"multi-agent-{tool}",
+            "id": f"multi-agent-{self._sequence}-{tool}",
             "method": "tools/call",
             "params": {"name": tool, "arguments": args},
-        })
+        }
+        request_tmp = self._ipc_dir / f"{self._sequence}.request.tmp"
+        request_path = self._ipc_dir / f"{self._sequence}.request.json"
+        response_path = self._ipc_dir / f"{self._sequence}.response.json"
+        request_tmp.write_text(json.dumps(request), encoding="utf-8")
+        request_tmp.replace(request_path)
+
+        deadline = time.monotonic() + 30.0
+        while not response_path.is_file():
+            returncode = self._server_proc.poll()
+            if returncode is not None:
+                stdout, stderr = self._server_proc.communicate(timeout=10)
+                raise RuntimeError(
+                    f"persistent MCP test server exited {returncode}; "
+                    f"stdout={stdout[-1000:]}; stderr={stderr[-1000:]}"
+                )
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"persistent MCP call timed out: {tool}")
+            time.sleep(0.005)
+
+        try:
+            raw = json.loads(response_path.read_text(encoding="utf-8"))
+        finally:
+            response_path.unlink(missing_ok=True)
         return self._decode_tool_response(raw)
 
     def race_lock_claims(
