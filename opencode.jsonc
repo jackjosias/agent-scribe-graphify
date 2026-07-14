@@ -1,0 +1,12 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "agent-scribe-graphify": {
+      "type": "local",
+      "command": ["python3", ".agent/mcp/server_entry.py"],
+      "cwd": ".",
+      "enabled": true,
+      "timeout": 20000
+    }
+  }
+}

@@ -20,6 +20,8 @@ The local project skill is read first. Mechanical initialization:
 
 Prefer a trusted project-local `.codex/config.toml` rather than a global path to another checkout. TENOR owns one delimited managed block for this server, including project-relative cwd and binding environment:
 
+For this checkout, the binding was stabilized by using the absolute project root in the managed block during diagnosis. That removes ambiguity about whether Codex resolves relative paths from the repository root or from `.codex/`. Prefer the absolute-root form when proving the first working binding for a moved or freshly reloaded host, then keep the documented managed block in sync.
+
 ```toml
 # agent-scribe-graphify:host-config:start
 [mcp_servers."agent-scribe-graphify"]
