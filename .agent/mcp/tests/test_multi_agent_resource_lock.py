@@ -19,6 +19,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 from runtime import graphify_readiness, installation_state
+from _strict_cleanup import remove_tree_strict
 
 
 class MultiAgentResourceLockTest(unittest.TestCase):
@@ -48,11 +49,12 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         self.assertTrue(fixture["ok"], fixture)
 
     def tearDown(self) -> None:
+        remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
 
     def call(self, tool: str, **args: object) -> dict[str, Any]:
         proc = subprocess.run(
-            ["python3", str(self.entry), "--call", tool, "--args", json.dumps(args)],
+            [sys.executable, str(self.entry), "--call", tool, "--args", json.dumps(args)],
             cwd=str(self.root),
             env=self._env,
             text=True,
@@ -501,7 +503,9 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=30)
+
+        self.assertFalse(any(t.is_alive() for t in threads), "lock race worker did not terminate")
 
         self.assertEqual(len(errors), 0, f"errors during lock race: {errors}")
         self.assertEqual(len(results), 2, f"expected 2 lock results, got {results}")
@@ -514,12 +518,12 @@ class MultiAgentResourceLockTest(unittest.TestCase):
 
     def test_23_concurrent_claim_atomicity_repeated(self) -> None:
         """Race 10 times to validate atomicity under repeated contention."""
+        agent_a = "race-repeat-a"
+        agent_b = "race-repeat-b"
+        ctx_a = self.ready_write(agent_a)
+        ctx_b = self.ready_write(agent_b)
         for i in range(10):
             with self.subTest(round=i):
-                agent_a = f"race-a-{i}"
-                agent_b = f"race-b-{i}"
-                ctx_a = self.ready_write(agent_a)
-                ctx_b = self.ready_write(agent_b)
                 results: list[dict[str, Any]] = []
                 errors: list[str] = []
                 barrier = threading.Barrier(2)
@@ -541,7 +545,11 @@ class MultiAgentResourceLockTest(unittest.TestCase):
                 for t in threads:
                     t.start()
                 for t in threads:
-                    t.join()
+                    t.join(timeout=30)
+                self.assertFalse(
+                    any(t.is_alive() for t in threads),
+                    f"round {i}: lock race worker did not terminate",
+                )
                 self.assertEqual(len(errors), 0, f"round {i}: {errors}")
                 self.assertEqual(len(results), 2, f"round {i}: expected 2 results, got {results}")
                 winners = [r for r in results if r.get("ok")]
