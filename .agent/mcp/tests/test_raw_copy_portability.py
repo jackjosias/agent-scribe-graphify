@@ -39,10 +39,19 @@ def _copy_complete_agent(source: Path, target: Path) -> None:
     destination = target / ".agent"
     if destination.exists():
         shutil.rmtree(destination)
+
+    source_agent = (source / ".agent").resolve()
+
+    def copy_ignore(directory: str, names: list[str]) -> set[str]:
+        ignored = set(shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")(directory, names))
+        if Path(directory).resolve() == source_agent / "state":
+            ignored.add("smoke")
+        return ignored
+
     shutil.copytree(
         source / ".agent",
         destination,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"),
+        ignore=copy_ignore,
     )
 
 
@@ -127,8 +136,12 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         server = parsed["mcp"][host_config.SERVER_NAME]
         self.assertEqual(server["command"], ["python" if sys.platform == "win32" else "python3", ".agent/mcp/server_entry.py"])
         self.assertEqual(server["cwd"], ".")
-        self.assertEqual(parsed["permission"]["edit"], "ask")
-        self.assertEqual(parsed["permission"]["bash"], "ask")
+        self.assertEqual(parsed["permission"]["edit"], "deny")
+        self.assertEqual(parsed["permission"]["bash"]["*"], "deny")
+        self.assertEqual(
+            parsed["permission"]["bash"][".agent/workflow/scribe/scribe tenor-init --type cli --host opencode"],
+            "allow",
+        )
 
         second = host_config.configure_host(target, explicit="opencode")
         self.assertEqual(second["verdict"], host_config.HOST_CONFIG_READY)

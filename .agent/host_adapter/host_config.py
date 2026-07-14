@@ -413,10 +413,17 @@ def _configure_opencode(path: Path, binding_id: str) -> bool:
     changed_bash = False
     if current_mcp.get(SERVER_NAME) != expected_server:
         updated, changed_mcp = _upsert_nested_jsonc(updated, "mcp", SERVER_NAME, expected_server)
-    if current_permissions.get("edit") != "ask":
-        updated, changed_edit = _upsert_nested_jsonc(updated, "permission", "edit", "ask")
-    if current_permissions.get("bash") != "ask":
-        updated, changed_bash = _upsert_nested_jsonc(updated, "permission", "bash", "ask")
+    if current_permissions.get("edit") != "deny":
+        updated, changed_edit = _upsert_nested_jsonc(updated, "permission", "edit", "deny")
+    safe_bash = {
+        "*": "deny",
+        ".agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+        "python .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+        "python3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+        "py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+    }
+    if current_permissions.get("bash") != safe_bash:
+        updated, changed_bash = _upsert_nested_jsonc(updated, "permission", "bash", safe_bash)
     _load_jsonc(updated)
     changed = changed_mcp or changed_edit or changed_bash or not path.exists()
     if changed:

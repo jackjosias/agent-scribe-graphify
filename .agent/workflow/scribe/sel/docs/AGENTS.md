@@ -23,6 +23,7 @@ Mechanical command:
 - Application graph: `.agent/state/outputs/graphify-out/`.
 - SCRIBE bundle graph: `.agent/state/outputs/scribe-out/bundle-graph/`.
 - Root `graphify-out/` is legacy-only.
+- Never run `graphify update .` or `graphify watch` in a portable application project. Use MCP `graphify_project_build` after host binding or the bounded SCRIBE project-build command before binding.
 - Do not mix application and bundle graphs.
 - `.agent/`, `.agents/`, `.codex/`, generated outputs, SCRIBE memory and host-rule surfaces must remain excluded from the application graph where appropriate.
 
@@ -108,6 +109,11 @@ release claim and lock
 finish_task
 workflow_next -> READY_FOR_NEXT_TASK
 ```
+
+Machine intent is restricted to `read`, `write`, `delete`. One `agent_id` owns
+at most one active task and cannot be replaced or retired to escape HARD_STOP.
+A multi-file task rescopes sequentially only after the previous file has an
+MCP applied-patch receipt.
 
 For read-only or research work, use the smallest safe tier and do not manufacture write ceremony.
 

@@ -115,6 +115,12 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("write", result["prompt"])
 
+    def test_descriptive_fix_alias_is_canonicalized_to_write(self) -> None:
+        result = ttp.generate_task_prompt(task="fix auth", intent="fix")
+        self.assertTrue(result["ok"])
+        self.assertIn("Intent : write.", result["prompt"])
+        self.assertNotIn("Intent : fix.", result["prompt"])
+
     def test_resource_provided(self) -> None:
         result = ttp.generate_task_prompt(task="fix auth", resource="src/auth/login.ts")
         self.assertTrue(result["ok"])
@@ -130,7 +136,8 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         result = ttp.generate_task_prompt(task="fix auth", model_tier="small")
         self.assertTrue(result["ok"])
         self.assertIn("Mode petit modele", result["prompt"])
-        self.assertIn("lecture/analyse/proposition uniquement", result["prompt"])
+        self.assertIn("protocole MCP integral", result["prompt"])
+        self.assertIn("Aucun Edit/Bash natif", result["prompt"])
 
     def test_large_model_tier_default(self) -> None:
         result = ttp.generate_task_prompt(task="fix auth", model_tier="large")
@@ -182,7 +189,7 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertIn("Mode NANO", result["prompt"])
 
     def test_full_intents_list(self) -> None:
-        for intent in ["read", "write", "refactor", "delete", "test", "debug"]:
+        for intent in ["read", "write", "delete"]:
             result = ttp.generate_task_prompt(task=f"task for {intent}", intent=intent)
             self.assertTrue(result["ok"], f"failed for intent={intent}")
             self.assertIn(intent, result["prompt"])
@@ -314,7 +321,7 @@ class TestE2ERealRuntime(unittest.TestCase):
         shutil.copytree(
             str(self._agent_src),
             str(self._tmpdir / ".agent"),
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "state"),
         )
         self._entry = str(self._tmpdir / ".agent" / "mcp" / "server_entry.py")
         # git init (server_ext.py may probe git repo)
@@ -335,12 +342,17 @@ class TestE2ERealRuntime(unittest.TestCase):
             ["git", "commit", "-m", "init"],
             cwd=str(self._tmpdir), capture_output=True,
         )
-        # graphify-out stub (graphify_required_check / scribe may need it)
-        graphify_out = self._tmpdir / "graphify-out"
-        graphify_out.mkdir(parents=True, exist_ok=True)
-        (graphify_out / "GRAPH_REPORT.md").write_text(
-            "# Graph Report\n\nStub for E2E.\n"
-        )
+        from runtime import graphify_readiness, installation_state
+
+        prepared = installation_state.ensure_fresh_installation_state(self._tmpdir)
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertTrue(installation_state.finalize_installation_state(self._tmpdir)["ok"])
+        self.assertTrue(graphify_readiness.write_smoke_fixture(self._tmpdir)["ok"])
+        self._runtime_env = {
+            **os.environ,
+            "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self._tmpdir),
+            graphify_readiness.FIXTURE_ENV: "1",
+        }
 
     def tearDown(self) -> None:
         import shutil
@@ -349,25 +361,23 @@ class TestE2ERealRuntime(unittest.TestCase):
 
     def test_e2e_tool_listed(self) -> None:
         import subprocess
-        env = {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
         proc = subprocess.run(
             [sys.executable, self._entry, "--list-tools"],
             capture_output=True, text=True, timeout=30,
-            env=env,
+            env=self._runtime_env, cwd=self._tmpdir,
         )
         self.assertEqual(proc.returncode, 0, f"stderr: {proc.stderr}")
         self.assertIn("tenor_task_prompt", proc.stdout)
 
     def test_e2e_tool_returns_ready(self) -> None:
         import subprocess
-        env = {k: v for k, v in os.environ.items() if k != "AGENT_SCRIBE_GRAPHIFY_ROOT"}
         proc = subprocess.run(
             [
                 sys.executable, self._entry, "--call", "tenor_task_prompt",
                 "--args", '{"task": "fix auth bug"}',
             ],
             capture_output=True, text=True, timeout=30,
-            env=env,
+            env=self._runtime_env, cwd=self._tmpdir,
         )
         self.assertEqual(
             proc.returncode, 0,

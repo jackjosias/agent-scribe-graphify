@@ -67,6 +67,11 @@ Canonical outputs live under:
 
 Real Graphify currently produces NetworkX node-link data with `nodes + links`; the historical supported representation is `nodes + edges`.
 
+The canonical path above is the only application graph authority. A bound host
+rebuilds through `graphify_project_build`; before binding use the bounded
+SCRIBE project-build command. Never run standalone `graphify update .` in the
+product root.
+
 If Graphify is not ready, run only the bounded action returned by TENOR INIT:
 
 ```bash
@@ -153,6 +158,10 @@ resource_lock_release
 finish_task
 workflow_next -> READY_FOR_NEXT_TASK
 ```
+
+Each stable `agent_id` may own only one active task. Retirement is refused while
+tasks, claims, locks or pending patches remain. Multi-file work stays in the
+same task and rescopes one exact file at a time after an applied-patch receipt.
 
 Rules:
 

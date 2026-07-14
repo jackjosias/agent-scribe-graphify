@@ -120,6 +120,19 @@ workflow_next -> READY_FOR_NEXT_TASK
 
 Direct native writes are not an equivalent fallback.
 
+Machine invariants:
+
+- `intent` is exactly `read`, `write` or `delete`;
+- one stable `agent_id` owns at most one active task;
+- replacement registration/retirement cannot escape a HARD_STOP;
+- exact multi-file rescoping requires a prior MCP applied-patch receipt;
+- a `FIXED` SCRIBE record requires an applied-patch receipt and a clean tripwire.
+
+Graphify is rebuilt with `graphify_project_build` from a bound MCP host, or
+with `.agent/workflow/scribe/scribe graph --project-build --timeout 180` before
+host binding. Both publish only to `.agent/state/outputs/graphify-out/`.
+Standalone `graphify update .` and root `graphify-out/` are forbidden.
+
 ## Multi-agent startup
 
 Every terminal runs its own TENOR INIT. The shared bootstrap is serialized; each terminal receives a separate identity and proof.

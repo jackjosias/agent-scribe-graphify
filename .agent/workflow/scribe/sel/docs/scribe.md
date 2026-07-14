@@ -34,6 +34,12 @@ Canonical application graph:
 .agent/state/outputs/graphify-out/
 ```
 
+The portable project build is
+`.agent/workflow/scribe/scribe graph --project-build --timeout 180`, or MCP
+`graphify_project_build` after host binding. It builds from an isolated mirror.
+Root `graphify-out/`, `graphify update .` and `graphify watch` are legacy-only
+and forbidden in an application project.
+
 It answers:
 
 ```text
@@ -294,6 +300,9 @@ workflow_next -> READY_FOR_NEXT_TASK
 ```
 
 Native host shell/edit/write paths do not satisfy this workflow.
+
+Use only machine intents `read`, `write`, `delete`. One stable identity owns one
+active task. A `FIXED` record without an MCP applied-patch receipt is refused.
 
 ## Multi-agent ownership
 

@@ -12,7 +12,12 @@ from typing import Any
 MCP_DIR_FOR_LOCK = Path(__file__).resolve().parents[1] / "mcp"
 if str(MCP_DIR_FOR_LOCK) not in sys.path:
     sys.path.insert(0, str(MCP_DIR_FOR_LOCK))
-from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_busy_message, validation_runtime_lock
+from runtime.validation_lock import (
+    ValidationRuntimeBusy,
+    reset_validation_runtime_database,
+    validation_runtime_busy_message,
+    validation_runtime_lock,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
@@ -24,11 +29,7 @@ def fail(message: str) -> None:
 
 
 def clean_runtime(root: Path = ROOT) -> None:
-    runtime = root / ".agent" / "state" / "runtime"
-    for suffix in ("", "-wal", "-shm"):
-        path = runtime / f"coordination.sqlite{suffix}"
-        if path.exists():
-            path.unlink()
+    reset_validation_runtime_database(root)
 
 
 def clean_redteam() -> None:
@@ -312,10 +313,10 @@ def test_direct_fs_write() -> str:
 
 def test_direct_fs_bypass_detection() -> str:
     clean_runtime(); clean_redteam()
-    target = "hostile-direct.txt"
+    target = ".agent/mcp/tests/fixtures/direct_fs_tripwire_target.txt"
     direct = ROOT / target
+    original = direct.read_bytes()
     try:
-        direct.write_text("hostile original\n", encoding="utf-8")
         agent = bootstrap("redteam-tripwire-bypass")
         ctx = ready_context(agent, target, "redteam tripwire bypass")
         direct.write_text("tamper after snapshot\n", encoding="utf-8")
@@ -326,7 +327,7 @@ def test_direct_fs_bypass_detection() -> str:
         print("DIRECT_FS_BYPASS_NOT_DETECTED")
         return "MISSED"
     finally:
-        direct.unlink(missing_ok=True)
+        direct.write_bytes(original)
 
 
 def main() -> int:

@@ -14,6 +14,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[3]
+MCP_DIR = ROOT / ".agent" / "mcp"
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+
+from runtime import graphify_readiness, installation_state
 
 
 class StableAgentIdentityTest(unittest.TestCase):
@@ -21,21 +26,25 @@ class StableAgentIdentityTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
-        (self.root / ".agent" / "state" / "runtime").mkdir(parents=True, exist_ok=True)
-        graphify_dir = self.root / "graphify-out"
-        graphify_dir.mkdir(parents=True)
-        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
-        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("test project\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
         # Build subprocess env: inherit parent but pin the workspace root so
         # server_entry.py does NOT pick up a leaked AGENT_SCRIBE_GRAPHIFY_ROOT
         # from other test modules (e.g. test_lease_extend.py line 57).
-        self._sub_env = {**os.environ, "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)}
+        self._sub_env = {
+            **os.environ,
+            "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root),
+            graphify_readiness.FIXTURE_ENV: "1",
+        }
         subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True, env=self._sub_env)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True, env=self._sub_env)
         subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True, env=self._sub_env)
+        prepared = installation_state.ensure_fresh_installation_state(self.root)
+        self.assertTrue(prepared["ok"], prepared)
+        finalized = installation_state.finalize_installation_state(self.root)
+        self.assertTrue(finalized["ok"], finalized)
+        fixture = graphify_readiness.write_smoke_fixture(self.root)
+        self.assertTrue(fixture["ok"], fixture)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -79,6 +88,14 @@ class StableAgentIdentityTest(unittest.TestCase):
         self.assertEqual(first["verdict"], "BEFORE_TASK_OK")
         second = self.call("before_task", agent_id="agent-a", request="edit readme", intent="write", resource="README.md")
         self.assertEqual(second["verdict"], "ACTIVE_TASK_EXISTS")
+
+    def test_one_agent_cannot_open_a_replacement_task_on_another_resource(self) -> None:
+        self.register("agent-a")
+        first = self.call("before_task", agent_id="agent-a", request="edit readme", intent="write", resource="README.md")
+        self.assertEqual(first["verdict"], "BEFORE_TASK_OK", first)
+        second = self.call("before_task", agent_id="agent-a", request="inspect another file", intent="read", resource="other.txt")
+        self.assertEqual(second["verdict"], "ACTIVE_TASK_EXISTS", second)
+        self.assertEqual(second["must_call"]["tool"], "resume_task_context", second)
 
     def test_propose_patch_wrong_agent_returns_context_agent_mismatch(self) -> None:
         self.register("agent-a")

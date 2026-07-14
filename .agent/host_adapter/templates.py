@@ -14,7 +14,7 @@ Session entry contract:
 1. Human/LLM trigger: `{CANONICAL_TENOR_TRIGGER}`.
 2. Read the project-local `.agent/skills/init-tenor/SKILL.md` before global host instructions.
 3. Mechanical command: `{CANONICAL_TENOR_COMMAND}` from the current project root.
-4. If TENOR INIT returns a bounded Graphify build action, execute only that action and rerun TENOR INIT.
+4. If TENOR INIT returns a bounded Graphify build action, use the canonical command before host binding or MCP `graphify_project_build` after binding; never run `graphify update .` in the product root.
 5. Let TENOR manage only the verified project-local MCP entry; reconnect and rerun when it reports `HOST_RECONNECT_REQUIRED`.
 6. Verify the project-local MCP server, then prove that this host exposes the tools to the LLM.
 7. Prove MCP root binding; local `--list-tools` or shell JSON-RPC is not host visibility proof.
@@ -32,6 +32,8 @@ Before any code write/fix/refactor/delete/test:
 7. Direct file edit fallback is forbidden.
 8. A prose-only `done` without finish_task and READY_FOR_NEXT_TASK is not completion.
 9. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
+10. Use only machine intents `read`, `write`, `delete`; keep one stable agent_id and one active task_id until finish_task.
+11. Native Edit and Bash are denied in autonomous OpenCode sessions; do not replace the identity to escape a HARD_STOP.
 """
     return (
         "<!-- agent-scribe-graphify:auto-guard:start -->\n"

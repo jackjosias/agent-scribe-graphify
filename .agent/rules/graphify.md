@@ -2,61 +2,38 @@
 trigger: always_on
 ---
 
-```markdown
-# GRAPHIFY — RÈGLE ALWAYS-ON (PRIORITÉ MAXIMALE)
+# GRAPHIFY — CONTRAT PORTABLE ET HONNÊTE
 
-## ⚠️ INTERDICTION ABSOLUE — LIRE DES FICHIERS BRUTS SANS CONSULTER GRAPHIFY D'ABORD
+Graphify décrit la structure observée lors du dernier build validé. Il n’est
+jamais présumé « toujours frais » et aucun `watch` n’est présumé actif.
 
-Le graphe de connaissances est TOUJOURS À JOUR en temps réel.
-`graphify watch` tourne en permanence — chaque sauvegarde de fichier
-rebuilde le graphe instantanément via AST. Tu n'as JAMAIS un graphe périmé.
+## Sortie canonique unique
 
-**Cela signifie :**
-- `graphify-out/GRAPH_REPORT.md` = carte fraîche du projet RIGHT NOW
-- `graphify-out/graph.json` = structure complète RIGHT NOW
-- Lire des fichiers bruts quand Graphify existe = FAUTE PROFESSIONNELLE
-
-## RÉFLEXE OBLIGATOIRE — IF-THEN AUTOMATIQUE
-
-```
-SI tu t'apprêtes à lire un fichier pour comprendre la structure
-→ STOP → graphify query "..." D'ABORD
-
-SI tu t'apprêtes à grep pour trouver qui appelle quoi
-→ STOP → graphify path "A" "B" D'ABORD
-
-SI tu t'apprêtes à lire > 2 fichiers pour répondre
-→ STOP → graphify explain "X" D'ABORD
-
-SI graphify-out/GRAPH_REPORT.md existe
-→ LIS-LE EN PREMIER — avant README, avant SCRIBE, avant tout
+```text
+.agent/state/outputs/graphify-out/graph.json
+.agent/state/outputs/graphify-out/GRAPH_REPORT.md
+.agent/state/outputs/graphify-out/graph.html
+.agent/state/outputs/graphify-out/GRAPHIFY_READY.json
 ```
 
-## COMMANDES DISPONIBLES RIGHT NOW
+Root `graphify-out/` est legacy-only. Il ne doit être ni créé, ni lu comme
+source d’autorité, ni commité par l’agent.
 
-```bash
-graphify query "ta question"          # 200 tokens au lieu de 50 000
-graphify path "FonctionA" "FonctionB" # chemin exact entre 2 nœuds
-graphify explain "NomModule"          # explication complète d'un nœud
-```
+## Build autorisé
 
-## ÉCONOMIE RÉELLE
+- Host MCP lié : appeler `graphify_project_build(timeout_seconds=180)`.
+- Avant liaison MCP : exécuter `.agent/workflow/scribe/scribe graph --project-build --timeout 180`.
+- Interdit dans un projet portable `.agent` : `graphify .`, `graphify update .`,
+  `graphify watch`, ou toute écriture directe vers `graphify-out/`.
 
-```
-Lire 30 fichiers bruts  = ~50 000 tokens  = contexte saturé en 3 questions
-graphify query ciblée   = ~700 tokens     = contexte intact pour 50 questions
-                          Réduction : 71x
-```
+Le wrapper autorisé copie les sources dans un miroir isolé, exécute Graphify
+dans ce miroir, rebind les chemins au projet réel, publie transactionnellement
+la sortie canonique puis vérifie root et fingerprint.
 
-## STATUT DU WATCH
+## Consultation
 
-graphify watch est actif en permanence sur ce projet.
-Chaque fichier `.ts/.js/.py` sauvegardé → graphe rebuild en < 3 secondes.
-**Tu interroges TOUJOURS un graphe frais. Aucune excuse pour lire les fichiers bruts.**
-```
-
----
-
-**Pourquoi ça va changer le comportement ?**
-
-Le fichier `rules/graphify.md` est injecté par Antigravity **avant chaque réponse** — pas juste au démarrage. Avec une **interdiction explicite** ("lire des fichiers bruts = faute") plutôt qu'une simple recommandation, le LLM ne peut plus ignorer la règle sans la violer consciemment. C'est la différence entre *"tu devrais utiliser Graphify"* et *"tu n'as PAS LE DROIT de lire des fichiers si Graphify existe"*. 🎯
+Utiliser le tool MCP `graphify_query` avec `task_id` et `context_token`. Une
+sortie absente, stale, wrong-root, fixture, vide ou contradictoire bloque les
+mutations et exige le build canonique. Lire quelques fichiers ciblés reste
+autorisé lorsque le graphe ne suffit pas ; prétendre qu’un graphe est frais
+sans vérifier `GRAPHIFY_READY.json` est interdit.

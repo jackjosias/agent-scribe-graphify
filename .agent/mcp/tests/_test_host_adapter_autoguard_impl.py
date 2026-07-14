@@ -111,7 +111,7 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
             "workflow_next", "before_task", "discipline_ping", "scribe_query",
             "graphify_query", "pre_action_guard", "resource_lock_claim",
             "propose_patch", "apply_patch", "workspace_audit", "finish_task",
-            "tenor_init_bridge",
+            "tenor_init_bridge", "graphify_project_build",
         ):
             self.assertIn(tool, required)
 
@@ -120,6 +120,15 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertFalse(policy.validate_mcp_tools(["some_other_tool"]))
         verdict = policy.decide_host_safety_level(["some_other_tool"], {"workspace_write": True})
         self.assertEqual(verdict, HostVerdict.UNSAFE)
+
+    def test_opencode_native_mutation_surfaces_are_denied(self) -> None:
+        config = host_config._load_jsonc((self.root / "opencode.jsonc").read_text(encoding="utf-8"))
+        self.assertEqual(config["permission"]["edit"], "deny")
+        self.assertEqual(config["permission"]["bash"]["*"], "deny")
+        self.assertEqual(
+            config["permission"]["bash"][".agent/workflow/scribe/scribe tenor-init --type cli --host opencode"],
+            "allow",
+        )
 
     def test_policy_never_calls_normal_writable_host_safe(self) -> None:
         policy = HostPolicy(self.root)

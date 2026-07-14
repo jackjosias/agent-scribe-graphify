@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,12 @@ MCP_DIR = HERE.parent
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_busy_message, validation_runtime_lock
+from runtime.validation_lock import (
+    ValidationRuntimeBusy,
+    reset_validation_runtime_database,
+    validation_runtime_busy_message,
+    validation_runtime_lock,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -72,6 +78,8 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertIn("VALIDATION_RUNTIME_LOCK_ACQUIRED", text)
         self.assertIn("validation_runtime_busy_message", text)
         self.assertIn("clean_smoke_workspaces", text)
+        self.assertIn("SMOKE_CLEANUP_FAILED", text)
+        self.assertIn("os.path.lexists", text)
         self.assertIn("finally:", text)
 
     def test_07_redteam_smoke_uses_validation_lock(self) -> None:
@@ -98,6 +106,29 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         redteam_pos = text.index("enforcement_redteam_smoke.py")
         self.assertLess(lock_pos, smoke_pos)
         self.assertLess(smoke_pos, redteam_pos)
+
+    def test_10_reset_checkpoints_and_transactionally_clears_valid_wal_database(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        with sqlite3.connect(database) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("CREATE TABLE sample(value TEXT)")
+            connection.execute("INSERT INTO sample(value) VALUES('ok')")
+        reset_validation_runtime_database(self.root)
+        self.assertTrue(database.exists())
+        with sqlite3.connect(database) as connection:
+            self.assertEqual(connection.execute("PRAGMA quick_check").fetchone()[0], "ok")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
+
+    def test_11_reset_removes_malformed_database_and_sidecars(self) -> None:
+        runtime = self.root / ".agent" / "state" / "runtime"
+        database = runtime / "coordination.sqlite"
+        database.write_bytes(b"not sqlite")
+        (runtime / "coordination.sqlite-wal").write_bytes(b"broken wal")
+        (runtime / "coordination.sqlite-shm").write_bytes(b"broken shm")
+        reset_validation_runtime_database(self.root)
+        self.assertFalse(database.exists())
+        self.assertFalse((runtime / "coordination.sqlite-wal").exists())
+        self.assertFalse((runtime / "coordination.sqlite-shm").exists())
 
 
 

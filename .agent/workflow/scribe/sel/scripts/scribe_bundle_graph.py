@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 from scribe_output_paths import migrate_legacy_output, scribe_out_dir
@@ -28,6 +30,11 @@ DEFAULT_BUDGET = 1200
 PROJECT_BUILD_TIMEOUT = 180
 GRAPH_SKIP_DIRS = {"adapters", "graphify-out", "__pycache__", ".pytest_cache", ".mypy_cache", "vendor"}
 GRAPH_SKIP_PATTERNS = {"*.pyc", "*.pyo", "*.min.js", "*.min.css", "*.map"}
+PROJECT_GRAPH_SKIP_DIRS = {
+    ".agent", ".git", ".hg", ".svn", ".next", ".venv", "venv",
+    "node_modules", "vendor", "dist", "build", "coverage", "target",
+    "__pycache__", ".pytest_cache", ".mypy_cache", "graphify-out", "scribe-out",
+}
 
 
 def _load_readiness():
@@ -48,6 +55,83 @@ def bundle_graph_ignore(_directory: str, names: list[str]) -> set[str]:
 
 def copy_bundle_without_graph(target: Path) -> None:
     shutil.copytree(BUNDLE_ROOT, target, ignore=bundle_graph_ignore)
+
+
+def project_graph_ignore(directory: str, names: list[str]) -> set[str]:
+    base = Path(directory)
+    ignored: set[str] = set()
+    for name in names:
+        candidate = base / name
+        if name in PROJECT_GRAPH_SKIP_DIRS or candidate.is_symlink():
+            ignored.add(name)
+    return ignored
+
+
+def copy_project_for_graph(target: Path) -> None:
+    """Create an isolated, cross-platform source mirror for Graphify."""
+
+    shutil.copytree(
+        PROJECT_ROOT,
+        target,
+        ignore=project_graph_ignore,
+        copy_function=shutil.copy2,
+        symlinks=True,
+    )
+
+
+def _rebind_graphify_output(source_graph: Path, mirror: Path) -> None:
+    """Replace the temporary mirror root in public text artifacts."""
+
+    replacements = (
+        (str(mirror), str(PROJECT_ROOT)),
+        (str(mirror).replace("\\", "\\\\"), str(PROJECT_ROOT).replace("\\", "\\\\")),
+    )
+    for name in ("graph.json", "GRAPH_REPORT.md", "graph.html", "manifest.json"):
+        path = source_graph / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for old, new in replacements:
+            text = text.replace(old, new)
+        path.write_text(text, encoding="utf-8")
+    (source_graph / ".graphify_root").write_text(str(PROJECT_ROOT), encoding="utf-8")
+
+
+def _publish_project_graph(source_graph: Path) -> tuple[Path, Path | None]:
+    outputs = PROJECT_ROOT / ".agent" / "state" / "outputs"
+    outputs.mkdir(parents=True, exist_ok=True)
+    canonical = outputs / "graphify-out"
+    if canonical.is_symlink():
+        raise RuntimeError(f"refusing symlinked canonical Graphify output: {canonical}")
+    nonce = uuid.uuid4().hex
+    staging = outputs / f".graphify-out.next-{nonce}"
+    backup = outputs / f".graphify-out.previous-{nonce}"
+    shutil.copytree(source_graph, staging, symlinks=True)
+    previous: Path | None = None
+    try:
+        if canonical.exists():
+            os.replace(canonical, backup)
+            previous = backup
+        os.replace(staging, canonical)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+        if previous is not None and previous.exists() and not canonical.exists():
+            os.replace(previous, canonical)
+        raise
+    return canonical, previous
+
+
+def _restore_project_graph(canonical: Path, previous: Path | None) -> None:
+    failed = canonical.with_name(f".graphify-out.failed-{uuid.uuid4().hex}")
+    if canonical.exists():
+        os.replace(canonical, failed)
+    try:
+        if previous is not None and previous.exists():
+            os.replace(previous, canonical)
+    finally:
+        if failed.exists():
+            shutil.rmtree(failed, ignore_errors=True)
 
 
 def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int = PROJECT_BUILD_TIMEOUT) -> subprocess.CompletedProcess[str]:
@@ -100,23 +184,44 @@ def build_graph() -> int:
 def build_project_graph(timeout: int = PROJECT_BUILD_TIMEOUT) -> int:
     """Build, migrate, bind and revalidate the current project's Graphify graph."""
     print(f"TENOR_GRAPHIFY_BUILD_START root={PROJECT_ROOT} timeout={timeout}s", flush=True)
-    result = run_graphify_update(Path("."), cwd=PROJECT_ROOT, timeout=timeout)
-    if result.stdout.strip():
-        print(result.stdout.rstrip(), flush=True)
-    if result.returncode != 0:
-        print(f"TENOR_GRAPHIFY_BUILD_FAILED rc={result.returncode}", file=sys.stderr, flush=True)
-        return result.returncode
+    with tempfile.TemporaryDirectory(prefix="tenor-project-graph-") as tmp:
+        mirror = Path(tmp) / "project"
+        copy_project_for_graph(mirror)
+        result = run_graphify_update(mirror, cwd=mirror, timeout=timeout)
+        if result.stdout.strip():
+            print(result.stdout.rstrip(), flush=True)
+        if result.returncode != 0:
+            print(f"TENOR_GRAPHIFY_BUILD_FAILED rc={result.returncode}", file=sys.stderr, flush=True)
+            return result.returncode
+        source_graph = mirror / "graphify-out"
+        if not source_graph.is_dir():
+            print("TENOR_GRAPHIFY_BUILD_FAILED missing isolated graphify-out", file=sys.stderr, flush=True)
+            return 2
+        _rebind_graphify_output(source_graph, mirror)
+        try:
+            canonical, previous = _publish_project_graph(source_graph)
+        except Exception as exc:
+            print(f"TENOR_GRAPHIFY_PUBLISH_FAILED {exc}", file=sys.stderr, flush=True)
+            return 5
 
-    migrate_legacy_output(PROJECT_ROOT, "graphify-out")
     readiness = _load_readiness()
-    manifest = readiness.write_graphify_manifest(PROJECT_ROOT, kind="real", purpose="tenor_project_build")
-    if not manifest.get("ok"):
-        print(f"TENOR_GRAPHIFY_BIND_FAILED {manifest}", file=sys.stderr, flush=True)
-        return 3
-    verified = readiness.inspect_graphify_readiness(PROJECT_ROOT)
-    if not verified.ok:
-        print(f"TENOR_GRAPHIFY_VERIFY_FAILED {verified.to_dict()}", file=sys.stderr, flush=True)
-        return 4
+    try:
+        manifest = readiness.write_graphify_manifest(PROJECT_ROOT, kind="real", purpose="tenor_project_build")
+        if not manifest.get("ok"):
+            print(f"TENOR_GRAPHIFY_BIND_FAILED {manifest}", file=sys.stderr, flush=True)
+            _restore_project_graph(canonical, previous)
+            return 3
+        verified = readiness.inspect_graphify_readiness(PROJECT_ROOT)
+        if not verified.ok:
+            print(f"TENOR_GRAPHIFY_VERIFY_FAILED {verified.to_dict()}", file=sys.stderr, flush=True)
+            _restore_project_graph(canonical, previous)
+            return 4
+    except Exception:
+        _restore_project_graph(canonical, previous)
+        raise
+    if previous is not None and previous.exists():
+        shutil.rmtree(previous, ignore_errors=True)
+    migrate_legacy_output(PROJECT_ROOT, "graphify-out")
     print(
         f"TENOR_GRAPHIFY_READY nodes={verified.node_count} edges={verified.edge_count} "
         f"sources={verified.source_file_count}",

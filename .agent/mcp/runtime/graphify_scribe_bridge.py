@@ -49,7 +49,10 @@ def load_graph(workspace_root: Path) -> dict[str, Any]:
             raise BridgeError(ready.verdict, ready.reason)
     graph_path = _graph_path(root)
     if not graph_path.is_file():
-        raise BridgeError("GRAPH_JSON_MISSING", f"graphify graph.json not found at {graph_path}. Run `graphify update .` first.")
+        raise BridgeError(
+            "GRAPH_JSON_MISSING",
+            f"graphify graph.json not found at {graph_path}. Run `{graphify_readiness.PROJECT_BUILD_ACTION}` first.",
+        )
     try:
         data = json.loads(graph_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:

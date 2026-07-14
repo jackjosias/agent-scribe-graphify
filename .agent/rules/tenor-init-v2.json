@@ -81,7 +81,8 @@
     "finish_task",
     "tenor_init_bridge",
     "portability_check",
-    "graphify_required_check"
+    "graphify_required_check",
+    "graphify_project_build"
   ],
   "same_project_session_invariant": {
     "statement": "SAME_PROJECT session init does not repair the bundle; it may manage only the verified project-local MCP entry and its host-binding receipt.",
@@ -164,7 +165,20 @@
     "rejects_legacy_unbound_graph": true,
     "rejects_corrupt_partial_or_contradictory_graph": true,
     "empty_project_placeholder_allowed_only_while_no_application_code": true,
-    "bounded_build_command": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
+    "bounded_build_command": ".agent/workflow/scribe/scribe graph --project-build --timeout 180",
+    "host_bound_build_tool": "graphify_project_build",
+    "build_uses_isolated_source_mirror": true,
+    "root_graphify_out_creation_forbidden": true,
+    "canonical_output_only": ".agent/state/outputs/graphify-out/"
+  },
+  "task_machine_contract": {
+    "canonical_intents": ["read", "write", "delete"],
+    "descriptive_intent_forbidden": true,
+    "one_active_task_per_agent": true,
+    "replacement_identity_for_hard_stop_forbidden": true,
+    "retire_with_active_tasks_claims_locks_or_patches_forbidden": true,
+    "multi_file_rescope_requires_previous_applied_patch_receipt": true,
+    "fixed_record_requires_mcp_applied_patch_receipt": true
   },
   "loops": {
     "read_or_research": [
@@ -221,6 +235,9 @@
     "reads are concurrent",
     "writes require resource lock, claim, action lease and patch queue",
     "one agent cannot use another agent proof lease claim or lock",
+    "one agent owns at most one active task",
+    "a verified host cannot mint a replacement agent outside TENOR INIT",
+    "retirement is refused while tasks claims locks or patches remain",
     "do not finish with active claims locks or pending patches"
   ],
   "memory_policy": {
@@ -320,6 +337,8 @@
   "direct_tool_neutralization": {
     "direct_shell_write_edit_forbidden": true,
     "native_host_write_edit_must_be_disabled_permission_gated_or_detected": true,
+    "opencode_autonomous_edit_permission": "deny",
+    "opencode_autonomous_bash_permission": "deny",
     "defense_layers": [
       "host permissions",
       "project-local instructions",

@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -139,6 +140,46 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             migrated = list((canonical / "_legacy_migrated").rglob("same.txt"))
             self.assertEqual(len(migrated), 1)
             self.assertEqual(migrated[0].read_text(encoding="utf-8"), "legacy\n")
+
+    def test_project_graph_build_never_materializes_root_graphify_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copy_agent_bundle(root)
+            (root / "app.py").write_text("def answer():\n    return 42\n", encoding="utf-8")
+            scripts = root / ".agent" / "workflow" / "scribe" / "sel" / "scripts"
+            sys.path.insert(0, str(scripts))
+            try:
+                import scribe_bundle_graph
+
+                observed_targets: list[Path] = []
+
+                def fake_graphify(target: Path, **_: object) -> subprocess.CompletedProcess[str]:
+                    target_path = Path(target)
+                    observed_targets.append(target_path)
+                    self.assertNotEqual(target_path, Path("."), "project build must run in an isolated mirror")
+                    out = target_path / "graphify-out"
+                    out.mkdir(parents=True)
+                    (out / "graph.json").write_text(
+                        '{"nodes":[{"id":"answer"}],"edges":[]}\n', encoding="utf-8"
+                    )
+                    (out / "GRAPH_REPORT.md").write_text("# Graph\n", encoding="utf-8")
+                    (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+                    (out / ".graphify_root").write_text(str(target_path), encoding="utf-8")
+                    return subprocess.CompletedProcess(["graphify"], 0, stdout="ok\n")
+
+                with mock.patch.object(scribe_bundle_graph, "PROJECT_ROOT", root), mock.patch.object(
+                    scribe_bundle_graph, "run_graphify_update", side_effect=fake_graphify
+                ):
+                    status = scribe_bundle_graph.build_project_graph(timeout=30)
+
+                self.assertEqual(status, 0)
+                self.assertEqual(len(observed_targets), 1)
+                self.assertFalse((root / "graphify-out").exists())
+                canonical = root / ".agent" / "state" / "outputs" / "graphify-out"
+                self.assertTrue((canonical / "graph.json").is_file())
+                self.assertEqual((canonical / ".graphify_root").read_text(encoding="utf-8"), str(root))
+            finally:
+                sys.path = [entry for entry in sys.path if entry != str(scripts)]
 
 
 if __name__ == "__main__":

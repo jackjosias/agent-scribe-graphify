@@ -393,8 +393,9 @@ def preflight_apply_patch(
                 "reason": str(exc), "forbidden": LOCK_FORBIDDEN}
     try:
         patch_info = patch_queue.list_patches(target="", status="proposed")
-    except Exception:
-        return {"ok": False, "verdict": "PATCH_NOT_FOUND", "state": "HARD_STOP",
+    except Exception as exc:
+        return {"ok": False, "verdict": "PATCH_LOOKUP_FAILED", "state": "HARD_STOP",
+                "reason": f"patch queue lookup failed: {type(exc).__name__}: {exc}",
                 "forbidden": LOCK_FORBIDDEN}
     patch = None
     for p in patch_info.get("patches", []):

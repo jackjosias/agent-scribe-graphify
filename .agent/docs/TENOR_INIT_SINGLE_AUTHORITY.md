@@ -254,6 +254,32 @@ workflow_next -> READY_FOR_NEXT_TASK
 
 Native host shell/edit/write/apply-patch paths are not accepted as equivalent.
 
+Le champ machine `intent` est un enum strict : `read`, `write`, `delete`. La
+description libre reste dans `request`. Une identité ne possède qu'une tâche
+active ; elle ne peut ni s'enregistrer sous un nouveau nom ni se retirer avec
+des tâches, claims, locks ou patches actifs pour échapper à un HARD_STOP.
+
+Une tâche multi-fichier rescope séquentiellement avec
+`scope_task_resource`. Chaque rescopage exact exige le reçu d'un patch MCP
+appliqué sur la ressource précédente et l'absence de propriété en cours.
+
+Un record `FIXED`/`bugfix` exige un `task_id`, un `context_token`, au moins un
+reçu `apply_patch` et un tripwire propre. Un record JSON local n'est jamais une
+preuve de correction à lui seul.
+
+## Graphify sans sortie root
+
+Le build avant liaison utilise :
+
+```text
+.agent/workflow/scribe/scribe graph --project-build --timeout 180
+```
+
+Après liaison, le host appelle `graphify_project_build`. Le wrapper travaille
+dans un miroir isolé et publie uniquement sous
+`.agent/state/outputs/graphify-out/`. `graphify update .`, `graphify watch` et
+root `graphify-out/` sont interdits dans le projet portable.
+
 ## Host integration
 
 Correct order:

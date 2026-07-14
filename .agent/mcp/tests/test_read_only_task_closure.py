@@ -16,6 +16,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 from runtime import graphify_readiness, installation_state
+from runtime.validation_lock import reset_validation_runtime_database
 
 
 def fail(message: str) -> None:
@@ -23,9 +24,7 @@ def fail(message: str) -> None:
 
 
 def clean_runtime() -> None:
-    runtime = ROOT / ".agent" / "state" / "runtime"
-    for suffix in ("", "-wal", "-shm"):
-        (runtime / f"coordination.sqlite{suffix}").unlink(missing_ok=True)
+    reset_validation_runtime_database(ROOT)
 
 
 def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:

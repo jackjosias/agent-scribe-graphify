@@ -292,9 +292,9 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
     Called at server startup and before the first operation in each CLI run.
     Idempotent: safe to call on every request (migrations cache via applied_ids).
 
-    Fix #2: PRAGMA integrity_check is run on the first bootstrap of a session.
-    It is a full O(N) scan, so we gate it on a sentinel file to avoid running
-    it on every process startup under heavy concurrent load.
+    Fix #2: PRAGMA integrity_check is run on the first bootstrap of a process.
+    A failed check is terminal: continuing with corrupt coordination state can
+    fabricate ownership, patch or task verdicts.
     """
     p = paths(project_root)
 
@@ -303,7 +303,6 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
     # Integrity check: run at most once per process (not per-call).
     # Gate via a module-level flag so concurrent workers don't double-check.
     if not _init_db_checked.get(str(p["db"]), False):
-        _init_db_checked[str(p["db"])] = True
         try:
             with connect(project_root) as con:
                 result = con.execute("PRAGMA integrity_check").fetchone()
@@ -313,12 +312,16 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
                         p["db"],
                         result[0],
                     )
-                    # Do NOT raise here: surface as warning so server stays up.
-                    # In prod, the operator should restore from backup.
+                    raise CoordinationError(
+                        f"SQLITE_INTEGRITY_CHECK_FAILED: {result[0]}"
+                    )
                 else:
                     logger.debug("SQLite integrity_check OK: %s", p["db"])
+            _init_db_checked[str(p["db"])] = True
+        except CoordinationError:
+            raise
         except Exception as exc:  # noqa: BLE001
-            logger.warning("integrity_check error (non-fatal): %s", exc)
+            raise CoordinationError(f"SQLITE_INTEGRITY_CHECK_ERROR: {exc}") from exc
 
     return {
         "ok": True,
@@ -581,6 +584,101 @@ def require_agent_active(agent_id: str) -> Dict[str, Any]:
     return agent
 
 
+def agent_lifecycle_blockers(agent_id: str) -> Dict[str, int]:
+    """Count ownership that makes replacing or retiring an identity unsafe."""
+
+    if not agent_id:
+        raise CoordinationError("agent_id is required")
+    init_db()
+    counts = {
+        "active_tasks": 0,
+        "active_claims": 0,
+        "active_resource_locks": 0,
+        "pending_patches": 0,
+    }
+    statements = {
+        "active_tasks": (
+            "SELECT COUNT(*) FROM task_context_v2 "
+            "WHERE agent_id=? AND status='active' AND expires_at>=?",
+            (agent_id, now_ts()),
+        ),
+        "active_claims": (
+            "SELECT COUNT(*) FROM claims WHERE agent_id=? AND status='active'",
+            (agent_id,),
+        ),
+        "pending_patches": (
+            "SELECT COUNT(*) FROM patches_v2 "
+            "WHERE agent_id=? AND status IN ('proposed','conflict')",
+            (agent_id,),
+        ),
+    }
+    with connect() as con:
+        for key, (statement, params) in statements.items():
+            try:
+                counts[key] = int(con.execute(statement, params).fetchone()[0])
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+        for statement, params in (
+            (
+                "SELECT COUNT(*) FROM resource_exclusive_locks "
+                "WHERE agent_id=? AND expires_at>=?",
+                (agent_id, now_ts()),
+            ),
+            (
+                "SELECT COUNT(*) FROM resource_locks "
+                "WHERE agent_id=? AND status='active' AND expires_at>=?",
+                (agent_id, now_ts()),
+            ),
+        ):
+            try:
+                counts["active_resource_locks"] += int(con.execute(statement, params).fetchone()[0])
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+    counts["total"] = sum(counts.values())
+    return counts
+
+
+def workspace_mutation_blockers() -> Dict[str, int]:
+    """Count live ownership that makes a whole-project graph rebuild unsafe."""
+
+    init_db()
+    now = now_ts()
+    counts = {
+        "active_claims": 0,
+        "active_resource_locks": 0,
+        "pending_patches": 0,
+    }
+    statements = (
+        ("active_claims", "SELECT COUNT(*) FROM claims WHERE status='active' AND expires_at>=?", (now,)),
+        (
+            "active_resource_locks",
+            "SELECT COUNT(*) FROM resource_exclusive_locks WHERE expires_at>=?",
+            (now,),
+        ),
+        (
+            "active_resource_locks",
+            "SELECT COUNT(*) FROM resource_locks WHERE status='active' AND expires_at>=?",
+            (now,),
+        ),
+        (
+            "pending_patches",
+            "SELECT COUNT(*) FROM patches_v2 WHERE status IN ('proposed','conflict')",
+            (),
+        ),
+    )
+    with connect() as con:
+        for key, statement, params in statements:
+            try:
+                counts[key] += int(con.execute(statement, params).fetchone()[0])
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+    counts["total"] = sum(counts.values())
+    return counts
+
+
 def heartbeat(agent_id: str) -> Dict[str, Any]:
     if not agent_id:
         raise CoordinationError("agent_id is required")
@@ -614,6 +712,9 @@ def resume_agent(agent_id: str) -> Dict[str, Any]:
 def retire_agent(agent_id: str, reason: str = "") -> Dict[str, Any]:
     if not agent_id:
         raise CoordinationError("agent_id is required")
+    blockers = agent_lifecycle_blockers(agent_id)
+    if blockers["total"]:
+        raise CoordinationError("AGENT_RETIRE_ACTIVE_OWNERSHIP")
     with connect() as con:
         expire_stale(con)
         cur = con.execute(
@@ -626,6 +727,19 @@ def retire_agent(agent_id: str, reason: str = "") -> Dict[str, Any]:
             "UPDATE claims SET status='released', released_at=?, summary=? WHERE agent_id=? AND status='active'",
             (now_ts(), reason or "agent retired explicitly", agent_id),
         )
+        try:
+            con.execute(
+                "UPDATE resource_locks SET status='released' WHERE agent_id=? AND status='active'",
+                (agent_id,),
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+        try:
+            con.execute("DELETE FROM resource_exclusive_locks WHERE agent_id=?", (agent_id,))
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
         add_event(con, "agent.retire", {"reason": reason}, agent_id)
     return {"agent_id": agent_id, "status": "retired"}
 

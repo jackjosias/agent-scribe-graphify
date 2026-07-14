@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -13,6 +14,11 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[3]
+MCP_DIR = ROOT / ".agent" / "mcp"
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+
+from runtime import graphify_readiness, installation_state
 
 
 class MultiAgentResourceLockTest(unittest.TestCase):
@@ -20,20 +26,26 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
-        (self.root / ".agent" / "state" / "runtime").mkdir(parents=True, exist_ok=True)
-        gdir = self.root / "graphify-out"
-        gdir.mkdir(parents=True)
-        (gdir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (gdir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
-        (gdir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("line1\nline2\nline3\n", encoding="utf-8")
+        (self.root / "a.txt").write_text("a\n", encoding="utf-8")
+        (self.root / "b.txt").write_text("b\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
-        self._env = {**os.environ, "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)}
+        self._env = {
+            **os.environ,
+            "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root),
+            graphify_readiness.FIXTURE_ENV: "1",
+        }
         subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True, env=self._env)
-        subprocess.run(["git", "add", "README.md"], cwd=str(self.root), capture_output=True, env=self._env)
+        subprocess.run(["git", "add", "README.md", "a.txt", "b.txt"], cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=str(self.root), capture_output=True, env=self._env)
+        prepared = installation_state.ensure_fresh_installation_state(self.root)
+        self.assertTrue(prepared["ok"], prepared)
+        finalized = installation_state.finalize_installation_state(self.root)
+        self.assertTrue(finalized["ok"], finalized)
+        fixture = graphify_readiness.write_smoke_fixture(self.root)
+        self.assertTrue(fixture["ok"], fixture)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -187,10 +199,6 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         self.assertIn(lock_b.get("verdict"), ("RESOURCE_BUSY",), str(lock_b))
 
     def test_06_two_agents_different_files_can_lock(self) -> None:
-        (self.root / "a.txt").write_text("a\n", encoding="utf-8")
-        (self.root / "b.txt").write_text("b\n", encoding="utf-8")
-        subprocess.run(["git", "add", "a.txt", "b.txt"], cwd=str(self.root), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "ab"], cwd=str(self.root), capture_output=True)
         ctx_a = self.ready_write("agent-a", "a.txt")
         ctx_b = self.ready_write("agent-b", "b.txt")
         lock_a = self.call("resource_lock_claim", agent_id="agent-a", resource="a.txt",
@@ -542,3 +550,7 @@ class MultiAgentResourceLockTest(unittest.TestCase):
                 released = self.call("resource_lock_release", agent_id=winner["agent_id"],
                                      resource="README.md", lock_id=winner.get("lock_id", ""))
                 self.assertEqual(released.get("verdict"), "RESOURCE_LOCK_RELEASED", released)
+
+
+if __name__ == "__main__":
+    unittest.main()

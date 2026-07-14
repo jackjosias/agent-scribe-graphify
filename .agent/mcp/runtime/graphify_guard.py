@@ -198,8 +198,8 @@ current for the workspace.
 Then, from the project root:
 
 ```text
-graphify update .
-python .agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe graph --project-build --timeout 180
+.agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>
 ```
 
 The generated files must live in `.agent/state/outputs/graphify-out/` and include
@@ -232,7 +232,10 @@ def check_graphify_required(workspace_root: Path | str | None = None, host_type:
         write_result = write_graphify_install_guide(root, host_type)
         if write_result.get("ok"):
             guide = str(write_result["path"])
-    next_actions = [readiness.next_action or "graphify update .", "python .agent/workflow/scribe/scribe tenor-init --type cli"]
+    next_actions = [
+        readiness.next_action or graphify_readiness.PROJECT_BUILD_ACTION,
+        ".agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>",
+    ]
     return {
         "ok": False,
         "verdict": readiness.verdict,

@@ -34,6 +34,7 @@ _REQUIRED_TOOLS = (
     "tenor_init_bridge",
     "portability_check",
     "graphify_required_check",
+    "graphify_project_build",
 )
 _GUARD_BLOCK_START = "<!-- agent-scribe-graphify:auto-guard:start -->"
 _GUARD_BLOCK_END = "<!-- agent-scribe-graphify:auto-guard:end -->"

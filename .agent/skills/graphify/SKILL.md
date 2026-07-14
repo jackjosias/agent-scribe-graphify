@@ -8,6 +8,31 @@ trigger: /graphify
 
 Turn any folder of files into a navigable knowledge graph with community detection, an honest audit trail, and three outputs: interactive HTML, GraphRAG-ready JSON, and a plain-language GRAPH_REPORT.md.
 
+## Portable `.agent` authority — hard stop before the legacy pipeline
+
+When the current project contains `.agent/workflow/scribe/scribe`, this file is
+documentation for the upstream standalone Graphify skill only. Do **not** run
+any command below that writes root `graphify-out/`, including `graphify .`,
+`graphify update .`, `mkdir -p graphify-out`, `graphify watch`, or redirects to
+`graphify-out/*`.
+
+Use exactly one of these portable surfaces instead:
+
+```text
+MCP host already bound: graphify_project_build(timeout_seconds=180)
+Before host binding:    .agent/workflow/scribe/scribe graph --project-build --timeout 180
+```
+
+The portable wrapper builds in an isolated mirror and publishes only to:
+
+```text
+.agent/state/outputs/graphify-out/
+```
+
+Root `graphify-out/` is legacy evidence. TENOR may migrate it safely, but an
+agent must never create it in an application project. This rule overrides every
+standalone command and output path in the remainder of this skill.
+
 ## Usage
 
 ```

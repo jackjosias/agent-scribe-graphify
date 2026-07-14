@@ -55,6 +55,10 @@ jobs:
           .agent/mcp/runtime/graphify_readiness.py
           .agent/mcp/runtime/graphify_guard.py
           .agent/mcp/runtime/graphify_scribe_bridge.py
+          .agent/mcp/runtime/_task_context_first_write_impl.py
+          .agent/mcp/runtime/task_context.py
+          .agent/mcp/runtime/db.py
+          .agent/mcp/_server_ext_impl.py
           .agent/mcp/server_entry.py
           .agent/host_adapter/policy.py
           .agent/host_adapter/launcher.py
@@ -91,6 +95,10 @@ jobs:
               ("graphify_readiness", ".agent/mcp/tests/test_graphify_readiness.py"),
               ("scribe_bootstrap", ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"),
               ("host_adapter", ".agent/mcp/tests/test_host_adapter_autoguard.py"),
+              ("tenor_task_prompt", ".agent/mcp/tests/test_tenor_task_prompt.py"),
+              ("stable_agent_identity", ".agent/mcp/tests/test_stable_agent_identity.py"),
+              ("multi_agent_resource_lock", ".agent/mcp/tests/test_multi_agent_resource_lock.py"),
+              ("terrain_enforcement", ".agent/mcp/tests/test_v216_terrain_enforcement.py"),
           ]
           output_dir = Path(os.environ["V216_LOG_DIR"])
           output_dir.mkdir(parents=True, exist_ok=True)

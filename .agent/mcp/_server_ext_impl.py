@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -74,6 +76,8 @@ _BASE_SCRIBE_QUERY = server.scribe_query
 _BASE_GRAPHIFY_QUERY = server.graphify_query
 _BASE_FINISH_TASK = server.finish_task
 _BASE_CLAIM_RESOURCE = server.claim_resource
+_BASE_REGISTER_AGENT = server.register_agent
+_BASE_RETIRE_AGENT = server.retire_agent
 _DELETE_INTENTS = {"delete", "remove"}
 _SCRIBE_VERDICTS = {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}
 _GRAPHIFY_VERDICTS = {"GRAPHIFY_QUERY_DONE", "GRAPHIFY_UNAVAILABLE"}
@@ -85,6 +89,7 @@ _CANONICAL_MEMORY_TERMINAL_VERDICTS = {"CANONICAL_MEMORY_PROMOTED", "CANONICAL_M
 _CANONICAL_MEMORY_BLOCKING_VERDICTS = {"CANONICAL_MEMORY_REQUIRED", "CANONICAL_MEMORY_SKIP_REJECTED"}
 _WRITE_OR_DECISION_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove", "decision"}
 _MUTATING_CONTEXT_INTENTS = {"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "create", "delete", "remove"}
+_CANONICAL_INTENTS = ["read", "write", "delete"]
 
 _GENERIC_TOKENS: frozenset = frozenset({
     "file", "files", "code", "main", "index", "core", "utils", "util",
@@ -310,6 +315,24 @@ def _track_loop(agent_id: str, resource: str, verdict: str) -> Dict[str, Any] | 
 
 
 def _before_task_agent_block(agent_id: str, code: str) -> Dict[str, Any]:
+    if code in {"AGENT_ID_REQUIRED", "AGENT_UNKNOWN_OR_UNREGISTERED"} and _host_process_binding_verified():
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_REQUIRED",
+            "state": "HARD_STOP",
+            "reason": "The verified host has no bridged active identity. Re-run canonical TENOR INIT; never mint a replacement agent.",
+            "agent_id": agent_id,
+            "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli --host $AGENT_MCP_HOST",
+            "after_success_must_call": {
+                "tool": "tenor_init_bridge",
+                "args": {
+                    "agent_session_id": agent_id or "<agent-id-from-tenor-init>",
+                    "host_tool": os.environ.get("AGENT_MCP_HOST", "unknown"),
+                    "model_name": "",
+                },
+            },
+            "forbidden": ["register_agent", "retire_agent", "before_task", "direct_file_edit"],
+        })
     if code == "AGENT_ID_REQUIRED":
         return server.ok({
             "verdict": "AGENT_ID_REQUIRED",
@@ -342,6 +365,71 @@ def _before_task_agent_block(agent_id: str, code: str) -> Dict[str, Any]:
     })
 
 
+def _host_process_binding_verified() -> bool:
+    if not _HOST_BINDING_AVAILABLE:
+        return False
+    try:
+        result = _verify_host_process_binding(
+            server.ROOT,
+            environ=os.environ,
+            claimed_host=os.environ.get("AGENT_MCP_HOST", ""),
+        )
+    except Exception:
+        return False
+    return bool(result.get("ok"))
+
+
+def register_agent(host_tool: str, model_name: str = "", agent_id: str | None = None) -> Dict[str, Any]:
+    """Keep the TENOR-bridged identity stable inside a verified host process."""
+
+    if not _host_process_binding_verified():
+        return _BASE_REGISTER_AGENT(host_tool=host_tool, model_name=model_name, agent_id=agent_id)
+    existing = db.get_agent(agent_id or "") if agent_id else None
+    if not existing or str(existing.get("status") or "") == "retired":
+        return server.ok({
+            "ok": False,
+            "verdict": "AGENT_REGISTRATION_REQUIRES_TENOR_INIT",
+            "state": "HARD_STOP",
+            "reason": "A verified host cannot mint a replacement identity. Re-run TENOR INIT and bridge the session.",
+            "agent_id": agent_id or "",
+            "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli --host $AGENT_MCP_HOST",
+            "after_success_must_call": {
+                "tool": "tenor_init_bridge",
+                "args": {
+                    "agent_session_id": agent_id or "<agent-id-from-tenor-init>",
+                    "host_tool": host_tool or "unknown",
+                    "model_name": model_name or "",
+                },
+            },
+            "forbidden": ["register_agent", "retire_agent", "before_task", "direct_file_edit"],
+        })
+    return server.ok({
+        "verdict": "AGENT_REGISTERED",
+        "state": "AGENT_IDENTITY_STABLE",
+        "agent": existing,
+        "idempotent": True,
+    })
+
+
+def retire_agent(agent_id: str, reason: str = "") -> Dict[str, Any]:
+    blockers = db.agent_lifecycle_blockers(agent_id)
+    if blockers["total"]:
+        return server.ok({
+            "ok": False,
+            "verdict": "AGENT_RETIRE_REFUSED_ACTIVE_OWNERSHIP",
+            "state": "HARD_STOP",
+            "reason": "An identity with active tasks, claims, locks or patches cannot be retired to escape a workflow stop.",
+            "agent_id": agent_id,
+            "blockers": blockers,
+            "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": "<active-task-id>"}},
+            "forbidden": ["retire_agent", "register_agent", "before_task", "direct_file_edit"],
+        })
+    try:
+        return _BASE_RETIRE_AGENT(agent_id=agent_id, reason=reason)
+    except db.CoordinationError as exc:
+        return server.ok({"ok": False, "verdict": str(exc), "state": "HARD_STOP", "agent_id": agent_id})
+
+
 def before_task(request: str, agent_id: str = "", intent: str = "", resource: str = "") -> Dict[str, Any]:
     try:
         db.require_agent_active(agent_id)
@@ -355,6 +443,37 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             pass
         return _before_task_agent_block(agent_id, code)
 
+    try:
+        canonical_intent = task_context.require_machine_intent(intent)
+    except task_context.TaskContextError as exc:
+        return server.ok({
+            "ok": False,
+            "verdict": exc.code,
+            "state": "HARD_STOP",
+            "reason": "before_task accepts a bounded machine intent, never descriptive prose.",
+            "intent": (intent or "").strip(),
+            "allowed_intents": exc.details.get("allowed_intents", sorted(_CANONICAL_INTENTS)),
+            "forbidden": _PRE_CONTEXT_FORBIDDEN,
+        })
+
+    active_tasks = [
+        task for task in task_context.list_tasks(agent_id=agent_id, status="active").get("tasks", [])
+        if int(task.get("expires_at") or 0) >= int(time.time())
+    ]
+    if active_tasks:
+        active = active_tasks[0]
+        return server.ok({
+            "ok": False,
+            "verdict": "ACTIVE_TASK_EXISTS",
+            "state": "ACTIVE_TASK_EXISTS",
+            "reason": "One agent identity may own only one active task. Resume it; do not create a replacement task or identity.",
+            "agent_id": agent_id,
+            "resource": str(active.get("resource") or ""),
+            "intent": str(active.get("intent") or ""),
+            "must_call": {"tool": "resume_task_context", "args": {"agent_id": agent_id, "task_id": str(active.get("task_id") or "")}},
+            "forbidden": ["before_task", "register_agent", "retire_agent", "claim_resource", "propose_patch", "apply_patch", "delete_resource", "finish_task", "direct_file_edit"],
+        })
+
     result = _BASE_BEFORE_TASK(request=request, agent_id=agent_id)
     payload = json.loads(result["content"][0]["text"])
     if payload.get("verdict") != "BEFORE_TASK_OK":
@@ -363,9 +482,9 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
         context = task_context.create_task_context(
             agent_id=agent_id,
             request=request,
-            intent=intent or "",
+            intent=canonical_intent,
             resource=resource or "",
-            requires_graphify=_requires_graphify(request, intent, resource),
+            requires_graphify=_requires_graphify(request, canonical_intent, resource),
         )
     except task_context.TaskContextError as exc:
         if exc.code == "ACTIVE_TASK_EXISTS":
@@ -381,7 +500,8 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             })
         raise _context_error(exc) from exc
     payload.update(context)
-    if direct_fs_tripwire.is_mutating_intent(intent or ""):
+    payload["intent"] = canonical_intent
+    if direct_fs_tripwire.is_mutating_intent(canonical_intent):
         snapshot = direct_fs_tripwire.workspace_snapshot(
             server.ROOT, context["task_id"], agent_id, resource or ""
         )
@@ -391,7 +511,7 @@ def before_task(request: str, agent_id: str = "", intent: str = "", resource: st
             context["task_id"],
             agent_id,
             request=request,
-            intent=intent or "",
+            intent=canonical_intent,
             resource=resource or "",
         )
         payload["canonical_memory_gate"] = {"verdict": canonical_snapshot["verdict"]}
@@ -1006,8 +1126,54 @@ def scribe_record(
 ) -> Dict[str, Any]:
     if not agent_id:
         raise server.ToolError("agent_id is required")
-    now = int(time.time())
     merged_resources = resources if resources is not None else touched_resources
+    completion_claim = (
+        (record_type or "").strip().lower() in {"bugfix", "bug_fix", "fix"}
+        or (verdict or "").strip().upper() in {"FIXED", "RESOLVED", "PATCH_APPLIED_CONFIRMED"}
+    )
+    if completion_claim:
+        if not task_id or not context_token:
+            return server.ok({
+                "ok": False,
+                "verdict": "SCRIBE_RECORD_TASK_CONTEXT_REQUIRED",
+                "state": "HARD_STOP",
+                "reason": "A bugfix/completion record must be bound to the active task and context token.",
+            })
+        try:
+            task_data = task_context.verify_active_context(agent_id, task_id, context_token)
+        except task_context.TaskContextError as exc:
+            raise _context_error(exc) from exc
+        if task_context.normalize_intent(str(task_data.get("intent") or "")) not in {"write", "delete"}:
+            return server.ok({
+                "ok": False,
+                "verdict": "SCRIBE_RECORD_MUTATING_TASK_REQUIRED",
+                "state": "HARD_STOP",
+                "task_id": task_id,
+            })
+        patch_ids = direct_fs_tripwire.applied_patch_ids(server.ROOT, task_id, agent_id)
+        if not patch_ids:
+            return server.ok({
+                "ok": False,
+                "verdict": "SCRIBE_RECORD_MCP_PATCH_RECEIPT_REQUIRED",
+                "state": "HARD_STOP",
+                "reason": "A FIXED/bugfix record requires at least one applied MCP patch receipt.",
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "applied_patch_ids": [],
+                "forbidden": ["scribe_record", "finish_task", "git_commit", "git_push", "direct_file_edit"],
+            })
+        audit = direct_fs_tripwire.detect_unauthorized_mutations(server.ROOT, task_id, agent_id)
+        if audit.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+            return server.ok({
+                "ok": False,
+                "verdict": direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED,
+                "state": "HARD_STOP",
+                "reason": "A completion record cannot certify a workspace containing unauthorized mutations.",
+                "task_id": task_id,
+                "suspects": audit.get("suspects", []),
+                "forbidden": ["scribe_record", "finish_task", "git_commit", "git_push", "direct_file_edit"],
+            })
+    now = int(time.time())
     policy = canonical_memory_gate.derive_memory_policy(record_type or "", memory_policy or "", request or "", summary or "", verdict or "")
     required = canonical_memory_gate.policy_requires_canonical_promotion(policy)
     payload = {
@@ -1219,13 +1385,7 @@ def pre_action_guard(
             "forbidden": _LEASE_FORBIDDEN,
         })
 
-    # Graphify Mandatory Guard: block writes if Graphify is not ready.
-    normalized_intent = (intent or "").strip().lower()
-    if normalized_intent in discipline.WRITE_INTENTS or normalized_intent in _WRITE_OR_DECISION_INTENTS:
-        guard_block = _enforce_graphify_guard()
-        if guard_block is not None:
-            return guard_block
-
+    tdata: Dict[str, Any] | None = None
     if task_id:
         try:
             tdata = task_context.task_status(task_id)
@@ -1244,7 +1404,20 @@ def pre_action_guard(
                 "forbidden": _LEASE_FORBIDDEN,
             })
 
-    normalized = (intent or "").strip().lower()
+    if tdata and tdata.get("status") == "active":
+        intent = str(tdata.get("intent") or "")
+        if not safe_resource:
+            safe_resource = str(tdata.get("resource") or "")
+
+    # Graphify Mandatory Guard: authorization uses the stored machine intent,
+    # never caller-supplied descriptive prose.
+    normalized_intent = task_context.normalize_intent(intent)
+    if normalized_intent in {"write", "delete"}:
+        guard_block = _enforce_graphify_guard()
+        if guard_block is not None:
+            return guard_block
+
+    normalized = normalized_intent
     action_aliases = {"edit": "propose_patch", "write": "propose_patch", "delete": "delete_resource", "finish": "finish_task"}
     normalized_action = action_aliases.get(planned_action, planned_action)
     needs_context = normalized_action in {"claim_resource", "propose_patch", "apply_patch", "delete_resource", "finish_task"}
@@ -1606,6 +1779,12 @@ def workflow_next(
                 last_verdict = "GRAPHIFY_QUERY_DONE" if task_data.get("requires_graphify") else "SCRIBE_QUERY_DONE"
             last = _last(last_verdict)
 
+        if task_data and task_data.get("status") == "active":
+            intent = str(task_data.get("intent") or "")
+            normalized = task_context.normalize_intent(intent)
+            if not resource:
+                resource = str(task_data.get("resource") or "")
+
     if task_data and task_data.get("status") == "active" and direct_fs_tripwire.is_mutating_intent(task_data.get("intent") or ""):
         tripwire = direct_fs_tripwire.detect_unauthorized_mutations(
             server.ROOT, task_id, agent_id, resource=resource or ""
@@ -1818,6 +1997,79 @@ def wait_for_tasks(
             return server.ok({"verdict": "WAIT_TIMEOUT", "tasks": tasks, "unfinished": unfinished, "count": len(tasks), "timeout_seconds": timeout})
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
+def graphify_project_build(timeout_seconds: int = 180) -> Dict[str, Any]:
+    """Build Graphify through the canonical isolated project wrapper."""
+
+    timeout = int(timeout_seconds)
+    if timeout < 1 or timeout > 3600:
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_TIMEOUT_INVALID",
+            "state": "HARD_STOP",
+            "reason": "timeout_seconds must be between 1 and 3600.",
+        })
+    ownership = db.workspace_mutation_blockers()
+    if ownership["total"]:
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_ACTIVE_OWNERSHIP",
+            "state": "HARD_STOP",
+            "reason": "Release active product claims before rebuilding the project graph.",
+            "ownership": ownership,
+        })
+    command = [
+        sys.executable,
+        str(server.ROOT / ".agent" / "workflow" / "scribe" / "scribe"),
+        "graph",
+        "--project-build",
+        "--timeout",
+        str(timeout),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(server.ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout + 30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout if isinstance(exc.stdout, str) else ""
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_TIMEOUT",
+            "state": "HARD_STOP",
+            "output": output[-20000:],
+        })
+    output = completed.stdout or ""
+    if completed.returncode != 0:
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_PROJECT_BUILD_FAILED",
+            "state": "HARD_STOP",
+            "returncode": completed.returncode,
+            "output": output[-20000:],
+        })
+    readiness = _gg.graphify_readiness.inspect_graphify_readiness(server.ROOT) if _gg is not None else None
+    if readiness is None or not readiness.ok:
+        return server.ok({
+            "ok": False,
+            "verdict": getattr(readiness, "verdict", "GRAPHIFY_VERIFY_UNAVAILABLE"),
+            "state": "HARD_STOP",
+            "output": output[-20000:],
+            "readiness": readiness.to_dict() if readiness is not None else {},
+        })
+    return server.ok({
+        "ok": True,
+        "verdict": "GRAPHIFY_PROJECT_BUILD_OK",
+        "state": "GRAPHIFY_READY",
+        "output": output[-20000:],
+        "readiness": readiness.to_dict(),
+    })
+
+
 def _schema_props(base: Dict[str, Any], extra: Dict[str, str]) -> Dict[str, Any]:
     schema = json.loads(json.dumps(base))
     props = schema.setdefault("properties", {})
@@ -1827,11 +2079,21 @@ def _schema_props(base: Dict[str, Any], extra: Dict[str, str]) -> Dict[str, Any]
     return schema
 
 
+def _with_intent_enum(schema: Dict[str, Any]) -> Dict[str, Any]:
+    result = json.loads(json.dumps(schema))
+    result.setdefault("properties", {})["intent"] = {
+        "type": "string",
+        "enum": list(_CANONICAL_INTENTS),
+        "description": "Canonical machine intent; descriptive prose is forbidden.",
+    }
+    return result
+
+
 def tool_schema(name: str) -> Dict[str, Any]:
     if name == "before_task":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"intent": "string", "resource": "string"})
+        return _with_intent_enum(_schema_props(_BASE_TOOL_SCHEMA(name), {"intent": "string", "resource": "string"}))
     if name == "workflow_next":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"})
+        return _with_intent_enum(_schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string"}))
     if name == "resume_task_context":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}}, "additionalProperties": False}
     if name == "root_hygiene_status":
@@ -1854,7 +2116,7 @@ def tool_schema(name: str) -> Dict[str, Any]:
             }, "additionalProperties": False,
         }, {})
     if name == "finish_task":
-        return _schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string", "canonical_memory_skip_reason": "string"})
+        return _with_intent_enum(_schema_props(_BASE_TOOL_SCHEMA(name), {"task_id": "string", "context_token": "string", "action_lease_id": "string", "intent": "string", "canonical_memory_skip_reason": "string"}))
     if name == "scribe_commit_gate_status":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}}, "required": ["agent_id", "task_id", "context_token"], "additionalProperties": False}
     if name == "scribe_commit_gate_resolve":
@@ -1919,7 +2181,13 @@ def tool_schema(name: str) -> Dict[str, Any]:
     if name == "discipline_ping":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "phase": {"type": "string"}, "resource": {"type": "string"}}, "additionalProperties": False}
     if name == "pre_action_guard":
-        return {"type": "object", "properties": {"agent_id": {"type": "string"}, "request": {"type": "string"}, "intent": {"type": "string"}, "resource": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}, "planned_action": {"type": "string"}}, "additionalProperties": False}
+        return _with_intent_enum({"type": "object", "properties": {"agent_id": {"type": "string"}, "request": {"type": "string"}, "intent": {"type": "string"}, "resource": {"type": "string"}, "task_id": {"type": "string"}, "context_token": {"type": "string"}, "planned_action": {"type": "string"}}, "additionalProperties": False})
+    if name == "graphify_project_build":
+        return {
+            "type": "object",
+            "properties": {"timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}},
+            "additionalProperties": False,
+        }
     if name == "workspace_audit":
         return {"type": "object", "properties": {"agent_id": {"type": "string"}, "task_id": {"type": "string"}, "resource": {"type": "string"}}, "additionalProperties": False}
     if name == "workflow_snapshot":
@@ -2737,6 +3005,8 @@ if not getattr(server, "_EXT_REGISTERED", False):
 
     server.workflow_next = workflow_next
     server.workflow_snapshot = workflow_snapshot
+    server.register_agent = register_agent
+    server.retire_agent = retire_agent
     server.before_task = before_task
     server.resume_task_context = resume_task_context
     server.claim_resource = claim_resource
@@ -2755,7 +3025,10 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.runtime_backup_status = runtime_backup_status
     server.runtime_backup_cleanup = runtime_backup_cleanup
     server.root_hygiene_status = root_hygiene_status
+    server.graphify_project_build = graphify_project_build
     server.tool_schema = tool_schema
+    server.TOOLS["register_agent"] = register_agent
+    server.TOOLS["retire_agent"] = retire_agent
     server.TOOLS["workflow_next"] = workflow_next
     server.TOOLS["workflow_snapshot"] = workflow_snapshot
     server.TOOLS["before_task"] = before_task
@@ -2777,6 +3050,7 @@ if not getattr(server, "_EXT_REGISTERED", False):
     server.TOOLS["runtime_backup_status"] = runtime_backup_status
     server.TOOLS["runtime_backup_cleanup"] = runtime_backup_cleanup
     server.TOOLS["root_hygiene_status"] = root_hygiene_status
+    server.TOOLS["graphify_project_build"] = graphify_project_build
     server.TOOLS["discipline_ping"] = discipline_ping
     server.TOOLS["pre_action_guard"] = pre_action_guard
     server.TOOLS["workspace_audit"] = workspace_audit

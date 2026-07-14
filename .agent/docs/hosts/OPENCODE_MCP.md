@@ -53,8 +53,14 @@ Create or update `opencode.jsonc` at the project root without removing unrelated
     }
   },
   "permission": {
-    "edit": "ask",
-    "bash": "ask"
+    "edit": "deny",
+    "bash": {
+      "*": "deny",
+      ".agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow"
+    }
   }
 }
 ```
@@ -79,8 +85,14 @@ Windows example:
     }
   },
   "permission": {
-    "edit": "ask",
-    "bash": "ask"
+    "edit": "deny",
+    "bash": {
+      "*": "deny",
+      ".agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow"
+    }
   }
 }
 ```
@@ -90,6 +102,17 @@ Do not handcraft `AGENT_MCP_BINDING_ID`: TENOR creates it and commits `.agent/st
 Do not add an absolute path to the source repository `agent-scribe-graphify`. The server must be the copied project-local `.agent/mcp/server_entry.py`.
 
 Do not edit global/user OpenCode config without explicit permission. If a global entry already exists, inspect it and ask before disabling or removing it. Never remove unrelated servers such as Chrome DevTools.
+
+`ask` n'est pas une barrière suffisante en mode OpenCode `--auto`, où les
+demandes sont approuvées automatiquement. Le profil autonome V2.16 refuse donc
+le tool natif `edit` et refuse par défaut toute commande `bash`. Seules les
+quatre formes exactes, sans suffixe shell, de TENOR INIT ci-dessus restent
+autorisées afin qu'une nouvelle session puisse obtenir sa preuve et son identité
+stable sur Linux, macOS ou Windows. Les mutations passent par `propose_patch` et
+`apply_patch`; la reconstruction structurelle passe par
+`graphify_project_build`. Une validation native qui n'existe pas encore sous
+forme de tool borné doit être exécutée par l'utilisateur dans un terminal
+séparé et ne peut pas être prétendue par le modèle.
 
 ## Reconnect requirement
 
@@ -129,6 +152,7 @@ finish_task
 tenor_init_bridge
 portability_check
 graphify_required_check
+graphify_project_build
 ```
 
 OpenCode registers MCP tools alongside built-in tools. The terrain proof must come from the actual OpenCode tool interface/call trace, not from local CLI output.

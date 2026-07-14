@@ -31,6 +31,12 @@ Sous Windows :
 py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
+Sous OpenCode autonome, le profil project-local refuse tout `edit` natif et
+toute commande shell sauf les formes exactes de cette commande TENOR INIT. Ne
+lui ajoute ni redirection, ni pipe, ni `&&`, ni `;` : un suffixe ferait refuser
+la commande. Les reconstructions Graphify passent ensuite par le tool MCP
+`graphify_project_build`, jamais par un shell global.
+
 `bootstrap` est une primitive interne/legacy. Il ne constitue plus l'entrée publique d'installation, de relocation ou de reprise V2.16.
 
 ## Finalité
@@ -152,6 +158,7 @@ finish_task
 tenor_init_bridge
 portability_check
 graphify_required_check
+graphify_project_build
 ```
 
 # PHASE 3 — ADAPTATEUR DU HOST
@@ -245,6 +252,13 @@ Après `TENOR_INIT_READY` :
 TENOR TASK:: <objectif>
 ```
 
+Le contrat machine n'accepte que `intent=read`, `intent=write` ou
+`intent=delete`. La demande humaine complète reste dans `request`; elle ne doit
+jamais être recopiée dans `intent`. Un agent conserve le même `agent_id` et un
+seul `task_id` actif jusqu'à `finish_task`. `register_agent`, `retire_agent` ou
+un nouveau `before_task` ne sont pas des mécanismes de récupération d'un
+HARD_STOP.
+
 Ordre minimal d'une écriture :
 
 ```text
@@ -266,6 +280,15 @@ finish_task
 workflow_next -> READY_FOR_NEXT_TASK
 ```
 
+Une tâche multi-fichier utilise `scope_task_resource` séquentiellement. Le
+passage au fichier suivant exige un reçu `apply_patch` du fichier précédent et
+zéro claim, lock ou patch en attente.
+
+Si Graphify doit être reconstruit après la liaison du host, appeler
+`graphify_project_build(timeout_seconds=180)`. Avant liaison, utiliser seulement
+`.agent/workflow/scribe/scribe graph --project-build --timeout 180`. Ne jamais
+exécuter `graphify update .` ni créer `graphify-out/` à la racine.
+
 Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision pertinente, l'agent indique comment cette entrée modifie son plan. S'il n'existe aucun contexte pertinent, il le dit sans inventer.
 
 # INTERDICTIONS
@@ -279,6 +302,9 @@ Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision p
 - lire massivement des fichiers quand Graphify suffit
 - interroger SCRIBE puis ignorer le résultat
 - écrire via shell/Edit/write_file/apply_patch natif hors MCP
+- créer un agent ou une tâche de remplacement pour contourner un HARD_STOP
+- utiliser un intent descriptif au lieu de read|write|delete
+- lancer graphify update . ou graphify watch dans le projet portable
 - utiliser la lease, le proof ou le claim d'un autre agent
 - présenter un shell JSON-RPC comme preuve de visibilité host
 - supprimer le lock d'un propriétaire vivant

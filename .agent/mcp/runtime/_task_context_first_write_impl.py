@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - direct script/import compatibility
 TaskContextError = _impl.TaskContextError
 DEFAULT_TTL_SECONDS = _impl.DEFAULT_TTL_SECONDS
 FIRST_WRITE_NO_HISTORY_PREFIX = "FIRST_WRITE_NO_HISTORY:"
+CANONICAL_INTENTS = ("read", "write", "delete")
 
 _READ_ALIASES = frozenset({
     "read",
@@ -55,6 +56,26 @@ def normalize_intent(intent: str) -> str:
     if value in _DELETE_ALIASES:
         return "delete"
     return value
+
+
+def require_machine_intent(intent: str) -> str:
+    """Return one canonical machine intent or fail before state is created.
+
+    Exact aliases remain accepted for compatibility (for example ``fix`` or
+    ``inspect``), but descriptive prose is not a machine contract.  Persisting
+    free-form text here makes every later authorization comparison ambiguous.
+    """
+
+    canonical = normalize_intent(intent)
+    if canonical not in CANONICAL_INTENTS:
+        raise TaskContextError(
+            "TASK_INTENT_ENUM_REQUIRED",
+            {
+                "intent": (intent or "").strip(),
+                "allowed_intents": sorted(CANONICAL_INTENTS),
+            },
+        )
+    return canonical
 
 
 # Backward-compatible internal name used by older modules/tests.
@@ -101,7 +122,7 @@ def create_task_context(
     requires_graphify: bool = False,
     ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
-    canonical = normalize_intent(intent)
+    canonical = require_machine_intent(intent)
     result = _impl.create_task_context(
         agent_id,
         request,

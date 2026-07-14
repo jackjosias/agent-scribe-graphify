@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 _VALID_MODES = frozenset({"NANO", "QUICK", "STANDARD", "CRITICAL"})
-_VALID_INTENTS = frozenset({"read", "write", "refactor", "delete", "test", "debug"})
+_VALID_INTENTS = frozenset({"read", "write", "delete"})
+_READ_ALIASES = frozenset({"read", "inspect", "query", "research", "explain"})
+_WRITE_ALIASES = frozenset({"write", "edit", "patch", "modify", "code", "fix", "refactor", "test", "debug", "create"})
+_DELETE_ALIASES = frozenset({"delete", "remove"})
 _VALID_MODEL_TIERS = frozenset({"small", "large", "unknown"})
 
 _DEFAULT_MODE = "STANDARD"
@@ -25,6 +28,7 @@ Avant toute action :
 3. Donne le prochain tool MCP obligatoire.
 4. Respecte agent-scribe-graphify.
 5. Aucune ecriture directe.
+6. Garde exactement le meme agent_id et le meme task_id jusqu a finish_task.
 
 Pour toute modification de code :
 - utilise SCRIBE pour le contexte ;
@@ -32,6 +36,7 @@ Pour toute modification de code :
 - utilise pre_action_guard avant toute action sensible ;
 - utilise action_lease_id quand necessaire ;
 - applique les changements uniquement via le workflow MCP ;
+- si Graphify doit etre reconstruit, appelle graphify_project_build ; n execute jamais graphify update . ;
 - termine avec workspace_audit, scribe_record, puis scribe_promote_record si le record est durable, et finish_task.
 
 Si tu ne peux pas appeler les tools MCP, STOP et affiche exactement :
@@ -58,7 +63,13 @@ def normalize_intent(intent: str) -> str:
     if not intent:
         return _DEFAULT_INTENT
     i = intent.strip().lower()
-    return i if i in _VALID_INTENTS else _DEFAULT_INTENT
+    if i in _READ_ALIASES:
+        return "read"
+    if i in _WRITE_ALIASES:
+        return "write"
+    if i in _DELETE_ALIASES:
+        return "delete"
+    return _DEFAULT_INTENT
 
 
 def normalize_model_tier(tier: str) -> str:
@@ -92,8 +103,8 @@ def generate_task_prompt(
 
     if normalized_tier == "small":
         parts.append(
-            "ALERTE : Mode petit modele : lecture/analyse/proposition uniquement. "
-            "Pas d ecriture directe.\n"
+            "ALERTE : Mode petit modele : protocole MCP integral, une seule action machine a la fois. "
+            "Aucun Edit/Bash natif, aucune identite ou tache de remplacement.\n"
         )
 
     parts.append(
