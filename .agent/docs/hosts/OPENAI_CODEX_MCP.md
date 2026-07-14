@@ -13,18 +13,31 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 The local project skill is read first. Mechanical initialization:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type cli --host codex-cli
 ```
 
 ## Preferred project scope
 
-Prefer a trusted project-local `.codex/config.toml` rather than a global path to another checkout. The configured command must launch the current project's:
+Prefer a trusted project-local `.codex/config.toml` rather than a global path to another checkout. TENOR owns one delimited managed block for this server, including project-relative cwd and binding environment:
 
-```bash
-python3 .agent/mcp/server_entry.py
+```toml
+# agent-scribe-graphify:host-config:start
+[mcp_servers."agent-scribe-graphify"]
+command = "python3"
+args = [".agent/mcp/server_entry.py"]
+cwd = "."
+enabled = true
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+[mcp_servers."agent-scribe-graphify".env]
+AGENT_MCP_HOST = "codex-cli"
+AGENT_MCP_BINDING_ID = "<generated-by-TENOR>"
+AGENT_SCRIBE_GRAPHIFY_ROOT = "."
+# agent-scribe-graphify:host-config:end
 ```
 
-Do not point Codex at the source repository's `.agent`. Do not modify `~/.codex/config.toml` without explicit permission.
+Do not handcraft the binding id. TENOR records it with the config hash, returns `HOST_RECONNECT_REQUIRED` after a change, and issues no session proof until Codex is restarted/reconnected and TENOR is rerun. Do not point Codex at the source repository's `.agent`. Do not modify `~/.codex/config.toml` without explicit permission.
 
 ## Required proof
 
@@ -36,12 +49,11 @@ Then prove root binding with a sentinel hash and call:
 tenor_init_bridge(
   agent_session_id="<TENOR session>",
   host_tool="codex",
-  model_name="<active model>",
-  proof_token="<TENOR proof>"
+  model_name="<active model>"
 )
 ```
 
-Only `TENOR_INIT_BRIDGE_OK` plus host/root proof permits `TENOR_INIT_READY`.
+The bound server atomically consumes its one-time proof without printing a bearer token. `TENOR_INIT_BRIDGE_OK` has `MCP_BRIDGE_ONLY` scope; only it plus host/root proof permits `TENOR_INIT_READY`.
 
 ## Native mutation audit
 

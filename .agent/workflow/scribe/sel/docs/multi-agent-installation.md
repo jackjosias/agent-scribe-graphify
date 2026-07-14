@@ -17,7 +17,7 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 The deterministic command is:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 `tenor-init` is the only public V2.16 installation/relocation/recovery authority. `bootstrap` is internal/legacy and must not be used as a normal startup or bypass.
@@ -49,7 +49,8 @@ When `.agent` is copied from project A to project B:
 
 - preserve B's `AGENT-MEMOIRE_PROJECT_STATUS.scribe` when present;
 - purge only copied `.agent/state/` bound to A;
-- reject A's sessions, proofs, claims, locks, outputs and root bindings;
+- reject A's sessions, proofs, claims, locks and root bindings;
+- preserve copied canonical outputs byte-for-byte but refuse to trust Graphify until B's root/fingerprint validation passes;
 - preserve the portable engine;
 - write B's manifest in `preparing` then `ready` only after all local gates pass;
 - rebuild Graphify for B when required.
@@ -79,22 +80,22 @@ A larger bound may be supplied explicitly for a large codebase. Do not launch hi
 After local readiness:
 
 ```bash
-python .agent/mcp/server_entry.py --list-tools
+python3 .agent/mcp/server_entry.py --list-tools
 ```
 
-This proves only the local server. It does not prove the host model sees the tools.
+This proves only the local server. A manually piped JSON-RPC call does not prove the host model sees the tools either.
 
 ## Host gate
 
 For the actual host:
 
-1. read the matching guide under `.agent/docs/hosts/`;
-2. prefer project-local configuration;
-3. reconnect/restart when required;
-4. prove tools visible in the host LLM interface;
+1. detect the exact host and read its matching guide;
+2. let TENOR configure only a verified project-local OpenCode/Claude/Codex entry;
+3. reconnect/restart and rerun TENOR when required;
+4. prove tools visible in the host LLM interface and validate the binding receipt/config hash;
 5. prove root binding with matching sentinel/hash;
-6. call `tenor_init_bridge` with the session proof;
-7. obtain `TENOR_INIT_READY`.
+6. call `tenor_init_bridge`; its one-time proof is consumed server-side;
+7. obtain `TENOR_INIT_READY` only from the actual host after all gates.
 
 Until then:
 
@@ -111,7 +112,7 @@ Expected behavior:
 
 - one shared initialization transaction at a time;
 - six distinct `agent_id` values;
-- six distinct proof tokens;
+- six distinct server-side one-time proofs;
 - six distinct leases;
 - one shared runtime SQLite;
 - one shared canonical SCRIBE;

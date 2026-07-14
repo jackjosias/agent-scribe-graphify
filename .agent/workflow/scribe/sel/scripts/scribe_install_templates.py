@@ -65,13 +65,13 @@ def render_scribe_rule() -> str:
         Commande mécanique depuis la racine du projet :
 
         ```bash
-        {BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown>
+        {BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
         ```
 
         Sous Windows :
 
         ```powershell
-        python .agent/workflow/scribe/scribe tenor-init --type cli
+        py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
         ```
 
         `tenor-init` est l'unique autorité publique d'installation, de relocation et de reprise. `bootstrap` est une primitive interne/legacy et ne doit jamais remplacer TENOR INIT dans un bundle V2.16.
@@ -86,11 +86,13 @@ def render_scribe_rule() -> str:
         4. adopter ou créer la mémoire SCRIBE de destination ;
         5. vérifier ou demander le build Graphify borné ;
         6. finaliser le manifest local ;
-        7. vérifier le serveur MCP local ;
-        8. vérifier la visibilité réelle des tools dans le host ;
-        9. prouver le root binding ;
-        10. bridger la session indépendante ;
-        11. produire `TENOR_INIT_READY`.
+        7. détecter et configurer uniquement le host project-local vérifié ;
+        8. exiger une reconnexion puis une nouvelle init si la configuration change ;
+        9. vérifier le serveur MCP local ;
+        10. vérifier la visibilité réelle des tools dans le host ;
+        11. prouver le root binding ;
+        12. bridger la session indépendante avec la preuve serveur one-shot ;
+        13. produire `TENOR_INIT_READY`.
 
         Tant que les tools ne sont pas visibles dans le host réel, le verdict maximal est :
 
@@ -98,7 +100,7 @@ def render_scribe_rule() -> str:
         LOCAL_INIT_READY_HOST_MCP_UNBOUND
         ```
 
-        `python .agent/mcp/server_entry.py --list-tools` ne prouve jamais la visibilité host.
+        `python3 .agent/mcp/server_entry.py --list-tools` ou un JSON-RPC lancé depuis un shell ne prouve jamais la visibilité host.
 
         ## Graphify et SCRIBE
 
@@ -141,7 +143,7 @@ def render_scribe_rule() -> str:
         - Le bootstrap partagé est sérialisé.
         - `TENOR_INIT_SAME_PROJECT` ne purge jamais la coordination active.
         - Les agents partagent runtime SQLite, SCRIBE et Graphify.
-        - Ils ne partagent jamais `agent_id`, proof token, action lease, claim ou resource lock propriétaire.
+        - Ils ne partagent jamais `agent_id`, preuve serveur one-shot, action lease, claim ou resource lock propriétaire.
         - Toute clôture laisse zéro claim, lock ou patch en attente.
 
         ## Mémoire causale
@@ -161,7 +163,7 @@ def render_scribe_rule() -> str:
 
         ## Invariant SAME_PROJECT (V2.16.1)
 
-        Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` n'appelle jamais l'installateur forcé et ne réécrit aucun fichier suivi de configuration ou documentation. La dérive du bundle est signalée en warning et jamais réparée silencieusement ; la réparation reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
+        Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` n'appelle jamais l'installateur forcé et ne réécrit aucun fichier suivi du bundle. La dérive est signalée en warning ; la réparation reste explicite (`scribe install --force`). TENOR peut uniquement gérer l'entrée MCP project-local vérifiée et son reçu de binding. `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
 
         ## Invariant purge/migration sans perte (V2.16.2)
 
@@ -194,7 +196,7 @@ def render_scribe_adapter() -> str:
             scripts_dir = root / ".agent" / "workflow" / "scribe" / "sel" / "scripts"
             if len(sys.argv) < 2 or sys.argv[1] in {"-h", "--help"}:
                 print("Usage:")
-                print("  scribe tenor-init [--root PATH] [--agent NAME] [--type cli|extension|api|unknown]")
+                print("  scribe tenor-init [--root PATH] [--agent NAME] [--type cli|extension|api|unknown] [--host HOST|auto]")
                 print("  scribe bootstrap [--root PATH]  # internal/legacy primitive")
                 print("  scribe doctor|guard|install|clean|lock|sync|whoami|workflow|coordination")
                 print("  scribe hot|context|stats|explain|related|query|challenge|eval|compact|review-hot|promote|export|archive|dashboard")
@@ -351,7 +353,7 @@ def render_agents_block() -> str:
         Mechanical command from the current project root:
 
         ```bash
-        {BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown>
+        {BUNDLE_COMMAND} tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
         ```
 
         The project-local `{TENOR_SKILL_PATH}` and `{TENOR_RULE_PATH}` are authoritative. `bootstrap` is an internal/legacy primitive, not the public V2.16 installation authority.
@@ -366,6 +368,8 @@ def render_agents_block() -> str:
         adopt/create target SCRIBE
         verify/build and bind Graphify
         finalize local installation
+        detect/configure the verified project-local host
+        reconnect and rerun if host configuration changed
         verify local MCP
         verify tools visible in the real host
         prove MCP root binding
@@ -376,15 +380,16 @@ def render_agents_block() -> str:
         ### Hard rules
 
         - Never start product work before `TENOR_INIT_READY`.
-        - `server_entry.py --list-tools` proves only local MCP readiness, never host visibility.
+        - `server_entry.py --list-tools` and shell JSON-RPC prove only local MCP readiness, never host visibility.
         - Never read `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly for normal agent retrieval; use `{RAG_COMMAND}` or MCP `scribe_query`.
         - SCRIBE results must change the plan or be explicitly challenged; retrieval is not a checkbox.
         - Use Graphify before architecture or broad code changes; prefer targeted structure/blast-radius queries over mass file reads.
         - Every mutation requires `pre_action_guard`, an action lease, resource lock/claim, file hash, patch queue, `workspace_audit`, release and `finish_task`.
         - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.
         - A prose-only “done” without `finish_task` and `READY_FOR_NEXT_TASK` is not completion.
-        - Each terminal uses its own `agent_id`, proof token and lease. Agents share runtime, SCRIBE and Graphify, never identity or ownership credentials.
-        - `TENOR_INIT_SAME_PROJECT` is tracked-file read-only; bundle repair is explicit through `scribe install --force`.
+        - Each terminal uses its own `agent_id`, server-side one-time proof and lease. The full bearer token is never printed or persisted.
+        - `TENOR_INIT_SAME_PROJECT` never repairs the bundle; only the verified project-local MCP entry and binding receipt may be managed automatically.
+        - A complete raw copy of `.agent/` is a mandatory supported installation path on Linux, macOS and Windows; relocation is classified from the current root and manifest.
         - Runtime purge preserves `.agent/state/outputs/`; canonical output wins and conflicting legacy output is quarantined under `_legacy_migrated/`.
         - Preserved Graphify output is never trusted automatically; root/fingerprint readiness must pass again.
         - Graphify supports explicit `nodes + links` and historical `nodes + edges`; missing, stale, wrong-root, stub or contradictory graphs are rejected.

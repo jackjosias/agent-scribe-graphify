@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -21,7 +22,11 @@ from scribe_tenor_init import (
 _MCP_ROOT = Path(__file__).resolve().parents[4] / "mcp"
 if str(_MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(_MCP_ROOT))
+_AGENT_ROOT = Path(__file__).resolve().parents[4]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
 
+from host_adapter import host_config  # noqa: E402
 from runtime import graphify_readiness  # noqa: E402
 from runtime.tenor_init_orchestrator import (  # noqa: E402
     TENOR_INIT_ALREADY_RUNNING,
@@ -31,6 +36,22 @@ from runtime.tenor_init_orchestrator import (  # noqa: E402
     refresh_tenor_init_lock,
     tenor_init_lock,
 )
+
+_REQUIRED_LOCAL_MCP_TOOLS = {
+    "workflow_next",
+    "before_task",
+    "scribe_query",
+    "graphify_query",
+    "pre_action_guard",
+    "resource_lock_claim",
+    "claim_resource",
+    "file_hash",
+    "propose_patch",
+    "apply_patch",
+    "workspace_audit",
+    "finish_task",
+    "tenor_init_bridge",
+}
 
 
 def _flush(message: str) -> None:
@@ -136,6 +157,66 @@ def main() -> int:
                     flush=True,
                 )
                 return 5
+
+            lock = refresh_tenor_init_lock(lock, stage="configure_project_local_host")
+            _flush("TENOR_INIT_STAGE configure_project_local_host")
+            host_report = host_config.configure_host(project_root, explicit=args.host)
+            _flush(
+                "TENOR_INIT_HOST "
+                f"host={host_report.get('host_id', 'unknown')} "
+                f"verdict={host_report.get('verdict', 'HOST_CONFIG_INVALID')} "
+                f"guide={host_report.get('guide', '-') }"
+            )
+            if not host_report.get("ok"):
+                print(
+                    f"TENOR_INIT_HOST_BLOCKED verdict={host_report.get('verdict')} "
+                    f"reason={host_report.get('reason', '')} guide={host_report.get('guide', '-')}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 6
+            if host_report.get("restart_required"):
+                print(
+                    "HOST_RECONNECT_REQUIRED: project-local MCP configuration changed; "
+                    "restart/reconnect the detected host, then rerun TENOR INIT.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 76
+
+            lock = refresh_tenor_init_lock(lock, stage="verify_local_mcp_server")
+            _flush("TENOR_INIT_STAGE verify_local_mcp_server")
+            local_mcp = run_command(
+                (sys.executable, ".agent/mcp/server_entry.py", "--list-tools"),
+                project_root,
+            )
+            if local_mcp.returncode != 0:
+                print(
+                    "TENOR_INIT_LOCAL_MCP_FAILED "
+                    f"rc={local_mcp.returncode} stderr={local_mcp.stderr.strip()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 7
+            try:
+                listed = json.loads(local_mcp.stdout)
+                available = {
+                    str(item.get("name"))
+                    for item in listed.get("tools", [])
+                    if isinstance(item, dict) and item.get("name")
+                }
+            except (AttributeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                print(f"TENOR_INIT_LOCAL_MCP_INVALID_OUTPUT reason={exc}", file=sys.stderr, flush=True)
+                return 7
+            missing_tools = sorted(_REQUIRED_LOCAL_MCP_TOOLS - available)
+            if missing_tools:
+                print(
+                    f"TENOR_INIT_LOCAL_MCP_INCOMPLETE missing={','.join(missing_tools)}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 7
+            _flush(f"TENOR_INIT_LOCAL_MCP_READY tools={len(available)}")
     except TenorInitBusy as exc:
         owner = exc.lock.get("pid") or "unknown"
         started = exc.lock.get("created_at") or "unknown"
@@ -149,7 +230,16 @@ def main() -> int:
 
     _flush("TENOR_INIT_STAGE register_session_presence")
     write_presence(agent_id, args.agent_type, args.surface, DEFAULT_TTL_SECONDS, status="idle")
-    proof_token = _issue_proof(project_root, agent_id)
+    try:
+        _issue_proof(project_root, agent_id)
+        proof_issued = True
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"TENOR_INIT_PROOF_ISSUE_FAILED: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 5
 
     _flush("TENOR_INIT_STAGE load_scribe_and_graphify_context")
     rag = str(project_root / RAG_COMMAND)
@@ -185,7 +275,9 @@ def main() -> int:
         rag_journal=rag_journal,
         rag_scars=rag_scars,
         rag_ne_pas=rag_ne_pas,
-        proof_token=proof_token,
+        proof_issued=proof_issued,
+        host_report=host_report,
+        local_mcp=local_mcp,
     )
 
 

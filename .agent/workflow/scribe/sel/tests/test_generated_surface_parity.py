@@ -24,7 +24,8 @@ class GeneratedSurfaceParityTest(unittest.TestCase):
         expected = templates.render_agents_block()
 
         self.assertEqual(actual, expected)
-        self.assertIn("TENOR_INIT_SAME_PROJECT` is tracked-file read-only", expected)
+        self.assertIn("TENOR_INIT_SAME_PROJECT` never repairs the bundle", expected)
+        self.assertIn("complete raw copy of `.agent/` is a mandatory supported installation path", expected)
         self.assertIn("Default commit/push scope is the host product source", expected)
         self.assertIn(
             "keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits",

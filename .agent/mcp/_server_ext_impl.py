@@ -40,6 +40,12 @@ try:
 except Exception:
     _ttp = None  # type: ignore
 
+try:
+    from host_adapter.host_config import verify_host_process_binding as _verify_host_process_binding  # type: ignore
+    _HOST_BINDING_AVAILABLE = True
+except Exception:
+    _HOST_BINDING_AVAILABLE = False
+
 # Proof signer — non-circular TENOR proof verification (v0.2.15+)
 try:
     import sys as _sys
@@ -47,7 +53,11 @@ try:
     _SEL_SCRIPTS = _Path(__file__).parent.parent / "workflow" / "scribe" / "sel" / "scripts"
     if str(_SEL_SCRIPTS) not in _sys.path:
         _sys.path.insert(0, str(_SEL_SCRIPTS))
-    from proof_signer import verify_proof as _verify_proof, purge_expired_proofs as _purge_expired_proofs  # type: ignore
+    from proof_signer import (  # type: ignore
+        consume_agent_proof as _consume_agent_proof,
+        purge_expired_proofs as _purge_expired_proofs,
+        verify_proof as _verify_proof,
+    )
     _PROOF_SIGNER_AVAILABLE = True
 except Exception as _proof_import_exc:  # noqa: BLE001
     _PROOF_SIGNER_AVAILABLE = False
@@ -837,6 +847,14 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
     except task_context.TaskContextError as exc:
         raise _context_error(exc) from exc
 
+    # A task with a queued patch is mechanically unfinished regardless of the
+    # wider checkout state. Return this deterministic ownership verdict before
+    # the workspace-wide tripwire so unrelated concurrent activity cannot hide
+    # the actionable pending-patch gate.
+    pending = server._agent_pending_patches(agent_id)
+    if pending:
+        return server.ok({"verdict": "FINISH_REFUSED_PENDING_PATCHES", "pending_patches": pending})
+
     tripwire = direct_fs_tripwire.assert_no_unauthorized_mutations(
         server.ROOT, task_id, agent_id
     )
@@ -873,10 +891,6 @@ def finish_task(agent_id: str, summary: str = "", task_id: str = "", context_tok
                 "applied_patch_ids": patch_ids,
                 "forbidden": ["finish_task", "git_commit", "git_push", "direct_file_edit"],
             })
-
-    pending = server._agent_pending_patches(agent_id)
-    if pending:
-        return server.ok({"verdict": "FINISH_REFUSED_PENDING_PATCHES", "pending_patches": pending})
 
     claims = server._active_claims_for(agent_id)
     if claims["owned"]:
@@ -2036,9 +2050,12 @@ def tool_schema(name: str) -> Dict[str, Any]:
                 "agent_session_id": {"type": "string"},
                 "host_tool": {"type": "string"},
                 "model_name": {"type": "string"},
-                "proof_token": {"type": "string"},
+                "proof_token": {
+                    "type": "string",
+                    "description": "Deprecated compatibility path. Normal V2.16 host bridge consumes the server-side proof without exposing a token.",
+                },
             },
-            "required": ["agent_session_id", "proof_token"],
+            "required": ["agent_session_id"],
             "additionalProperties": False,
         }
     return _BASE_TOOL_SCHEMA(name)
@@ -2421,31 +2438,53 @@ def tenor_init_bridge(
     steps: list[dict[str, Any]] = []
     aid = agent_session_id.strip()
 
-    # Step 0 — proof_token is MANDATORY (V2.15.12)
-    if not proof_token or not proof_token.strip():
+    # Step 0 — a shell-launched local server is not host visibility proof.
+    if not _HOST_BINDING_AVAILABLE:
         return server.ok({
             "ok": False,
-            "verdict": "TENOR_INIT_BRIDGE_PROOF_REQUIRED",
-            "state": "HARD_STOP",
-            "reason": (
-                "proof_token is required. "
-                "Pass the proof_token directly to tenor_init_bridge (standalone verify_proof is diagnostic-only)."
-            ),
+            "verdict": "TENOR_INIT_BRIDGE_HOST_BINDING_UNAVAILABLE",
+            "state": "HOST_MCP_UNBOUND",
+            "reason": "Host binding verifier is unavailable; local JSON-RPC cannot establish host visibility.",
             "steps": steps,
         })
+    binding = _verify_host_process_binding(server.ROOT.resolve(), claimed_host=host_tool)
+    if not binding.get("ok"):
+        return server.ok({
+            "ok": False,
+            "verdict": "TENOR_INIT_BRIDGE_HOST_UNBOUND",
+            "state": "HOST_MCP_UNBOUND",
+            "reason": f"Host process binding failed: {binding.get('verdict', 'UNKNOWN')}",
+            "host_binding": binding,
+            "steps": steps,
+        })
+    bound_host = str(binding.get("host_id") or "unknown")
+    steps.append({
+        "step": "verify_host_process_binding",
+        "ok": True,
+        "verdict": binding.get("verdict", "HOST_PROCESS_BOUND"),
+        "host_id": bound_host,
+        "config_sha256": binding.get("config_sha256", ""),
+    })
+
+    # Step 1 — consume the proof atomically. The normal path never exposes it.
     if not _PROOF_SIGNER_AVAILABLE:
         return server.ok({
             "ok": False,
             "verdict": "TENOR_INIT_BRIDGE_PROOF_UNVERIFIABLE",
             "state": "HARD_STOP",
             "reason": (
-                "proof_token provided but proof_signer.py is not loaded. "
+                "proof_signer.py is not loaded. "
                 "Cannot verify TENOR proof. Host must NOT continue."
             ),
             "steps": steps,
         })
     try:
-        proof_result = _verify_proof(server.ROOT.resolve(), proof_token, aid)
+        if proof_token and proof_token.strip():
+            proof_result = _verify_proof(server.ROOT.resolve(), proof_token, aid)
+            proof_mode = "legacy_explicit_token"
+        else:
+            proof_result = _consume_agent_proof(server.ROOT.resolve(), aid)
+            proof_mode = "host_bound_server_side"
         if not proof_result.get("ok"):
             return server.ok({
                 "ok": False,
@@ -2461,6 +2500,7 @@ def tenor_init_bridge(
             "step": "verify_proof",
             "ok": True,
             "verdict": proof_result.get("verdict", "PROOF_VALID"),
+            "consumption_mode": proof_mode,
         })
     except Exception as exc:
         return server.ok({
@@ -2471,10 +2511,10 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 1 — register_agent
+    # Step 2 — register_agent
     try:
         agent_data = db.register_agent(
-            host_tool=host_tool or "unknown",
+            host_tool=bound_host,
             model_name=model_name or "",
             agent_id=aid,
         )
@@ -2493,7 +2533,7 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 2 — agent_status
+    # Step 3 — agent_status
     try:
         status_data = db.agent_status(aid)
         status_val = str(status_data.get("status", "") or "")
@@ -2519,7 +2559,7 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 3 — discipline_ping
+    # Step 4 — discipline_ping
     try:
         discipline.record_guard_ping(aid, phase="post-init", resource="")
         steps.append({
@@ -2536,8 +2576,8 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 4 — retire ghost agents from same host_tool (V2.15.12)
-    ghost_result = _retire_ghost_agents(aid, host_tool or "unknown")
+    # Step 5 — retire ghost agents from the same verified host.
+    ghost_result = _retire_ghost_agents(aid, bound_host)
     steps.append({
         "step": "retire_ghosts",
         "ok": ghost_result["status"] == "ok",
@@ -2555,8 +2595,11 @@ def tenor_init_bridge(
         "verdict": "TENOR_INIT_BRIDGE_OK",
         "state": "INIT_MCP_BRIDGE_COMPLETE",
         "agent_session_id": aid,
-        "host_tool": host_tool or "unknown",
+        "host_tool": bound_host,
         "model_name": model_name or "",
+        "host_binding": binding,
+        "ready_scope": "MCP_BRIDGE_ONLY",
+        "tenor_init_ready_must_be_reported_by_real_host_after_root_binding": True,
         "steps": steps,
         "retired_ghosts": [g["agent_id"] for g in ghost_result["retired"]] if ghost_result["retired"] else [],
         "ghost_cleanup_status": ghost_result["status"],

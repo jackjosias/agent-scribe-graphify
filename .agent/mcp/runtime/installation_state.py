@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -304,13 +306,28 @@ def inspect_installation_state(project_root: Path) -> dict[str, Any]:
     root = project_root.resolve()
     detection = detect_agent_relocation(root)
     ready = detection.get("verdict") == AGENT_INSTALLATION_CURRENT
+    action = portable_tenor_init_action(root)
     return {
         "ok": True,
         "ready": ready,
         "verdict": TENOR_INIT_GATE_READY if ready else TENOR_INIT_REQUIRED,
         "project_root": str(root),
         "detection": detection,
-        "next_action": "python .agent/workflow/scribe/scribe tenor-init --type cli" if not ready else "",
+        "next_action": action["display"] if not ready else "",
+        "next_action_argv": action["argv"] if not ready else [],
+    }
+
+
+def portable_tenor_init_action(project_root: Path | None = None) -> dict[str, Any]:
+    """Return a current-interpreter action without assuming a `python` alias."""
+
+    interpreter = sys.executable or ("python" if os.name == "nt" else "python3")
+    argv = [interpreter, ".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"]
+    display = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+    return {
+        "argv": argv,
+        "display": display,
+        "cwd": str(project_root.resolve()) if project_root is not None else ".",
     }
 
 

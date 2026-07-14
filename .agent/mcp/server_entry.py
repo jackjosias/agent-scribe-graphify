@@ -14,16 +14,18 @@ MCP_ROOT = SOURCE_ROOT / ".agent" / "mcp"
 if str(MCP_ROOT) not in sys.path:
     sys.path.insert(0, str(MCP_ROOT))
 
-from runtime.installation_state import inspect_installation_state  # noqa: E402
+from runtime.installation_state import inspect_installation_state, portable_tenor_init_action  # noqa: E402
 
 
 def _emit_gate_failure(gate: dict[str, object]) -> None:
+    action = portable_tenor_init_action(PROJECT_ROOT)
     payload = {
         "ok": False,
         "verdict": gate.get("verdict", "TENOR_INIT_REQUIRED"),
         "project_root": str(PROJECT_ROOT),
         "detection": gate.get("detection", {}),
-        "next_action": gate.get("next_action", "python .agent/workflow/scribe/scribe tenor-init --type cli"),
+        "next_action": gate.get("next_action") or action["display"],
+        "next_action_argv": gate.get("next_action_argv") or action["argv"],
     }
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr, flush=True)
 

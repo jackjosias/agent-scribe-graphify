@@ -18,6 +18,11 @@ from runtime.validation_lock import ValidationRuntimeBusy, validation_runtime_bu
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
+SMOKE_WORKSPACES = (
+    ROOT / "tmp-smoke-workflow",
+    ROOT / "tmp-smoke-symlink",
+    ROOT / "tmp-smoke-auth",
+)
 
 
 def fail(message: str) -> None:
@@ -43,6 +48,12 @@ def clean_runtime(root: Path = ROOT) -> None:
         path = runtime / f"coordination.sqlite{suffix}"
         if path.exists():
             path.unlink()
+
+
+def clean_smoke_workspaces() -> None:
+    """Remove only workspaces owned by this smoke, including failed-run residue."""
+    for path in SMOKE_WORKSPACES:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _smoke_env() -> dict[str, str]:
@@ -483,16 +494,21 @@ def smoke_tool_listing() -> None:
 def main() -> int:
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
-    prepare_tenor_gate(ROOT)
+    clean_smoke_workspaces()
     clean_runtime()
-    _ensure_graphify_stubs()
-    smoke_nominal_workflow()
-    smoke_bad_paths()
-    smoke_unregistered_patch()
-    smoke_portable_copy()
-    smoke_tool_listing()
-    print("MCP_SMOKE_ALL_OK")
-    return 0
+    try:
+        prepare_tenor_gate(ROOT)
+        _ensure_graphify_stubs()
+        smoke_nominal_workflow()
+        smoke_bad_paths()
+        smoke_unregistered_patch()
+        smoke_portable_copy()
+        smoke_tool_listing()
+        print("MCP_SMOKE_ALL_OK")
+        return 0
+    finally:
+        clean_smoke_workspaces()
+        clean_runtime()
 
 
 if __name__ == "__main__":

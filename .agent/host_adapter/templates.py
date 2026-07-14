@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 CANONICAL_TENOR_TRIGGER = "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]"
-CANONICAL_TENOR_COMMAND = ".agent/workflow/scribe/scribe tenor-init --type cli"
+CANONICAL_TENOR_COMMAND = ".agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>"
 
 
 def render_minimal_host_instructions(host_type: str = "unknown") -> str:
@@ -15,11 +15,12 @@ Session entry contract:
 2. Read the project-local `.agent/skills/init-tenor/SKILL.md` before global host instructions.
 3. Mechanical command: `{CANONICAL_TENOR_COMMAND}` from the current project root.
 4. If TENOR INIT returns a bounded Graphify build action, execute only that action and rerun TENOR INIT.
-5. Verify the project-local MCP server, then prove that this host exposes the tools to the LLM.
-6. Prove MCP root binding; local `--list-tools` alone is not host visibility proof.
-7. Register/bridge the independent agent session. Until then report `HOST_MCP_UNBOUND`.
-8. On `TENOR_INIT_SAME_PROJECT`, tracked configuration/documentation files are read-only; bundle repair is explicit via `scribe install --force`.
-9. Runtime purge preserves `.agent/state/outputs/`; preserved Graphify output must still pass root/fingerprint readiness before use.
+5. Let TENOR manage only the verified project-local MCP entry; reconnect and rerun when it reports `HOST_RECONNECT_REQUIRED`.
+6. Verify the project-local MCP server, then prove that this host exposes the tools to the LLM.
+7. Prove MCP root binding; local `--list-tools` or shell JSON-RPC is not host visibility proof.
+8. Register/bridge the independent agent session through the actual host-bound MCP process. Until then report `HOST_MCP_UNBOUND`.
+9. On `TENOR_INIT_SAME_PROJECT`, bundle repair is explicit via `scribe install --force`; only verified project-local MCP binding metadata may be managed automatically.
+10. Runtime purge preserves `.agent/state/outputs/`; preserved Graphify output must still pass root/fingerprint readiness before use.
 
 Before any code write/fix/refactor/delete/test:
 1. Call discipline_ping after session start, context compaction, MCP error, or before finish.

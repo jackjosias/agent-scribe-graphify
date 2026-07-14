@@ -9,20 +9,32 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Mechanical local initialization:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type cli --host claude-code
 ```
 
 `bootstrap` is internal/legacy, not the public start.
 
 ## Host configuration
 
-The historical project-local candidate is `.mcp.json`. Verify the current official Claude Code schema and installed version before editing. Configure the current project's STDIO server only:
+Claude Code supports project-scoped `.mcp.json` with `mcpServers`. TENOR merges only the current project's `agent-scribe-graphify` STDIO entry and preserves unrelated servers:
 
-```bash
-python3 .agent/mcp/server_entry.py
+```json
+{
+  "mcpServers": {
+    "agent-scribe-graphify": {
+      "command": "python3",
+      "args": [".agent/mcp/server_entry.py"],
+      "env": {
+        "AGENT_MCP_HOST": "claude-code",
+        "AGENT_MCP_BINDING_ID": "<generated-by-TENOR>",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": "."
+      }
+    }
+  }
+}
 ```
 
-Do not use an absolute path to another `.agent` checkout and do not edit user/global configuration without explicit permission.
+Do not handcraft the binding id. After TENOR returns `HOST_RECONNECT_REQUIRED`, restart/reconnect Claude Code and rerun TENOR INIT. Do not use an absolute path to another `.agent` checkout and do not edit user/global configuration without explicit permission.
 
 ## Required V2.16 proof
 
@@ -32,7 +44,7 @@ Then:
 
 1. compare a sentinel hash from the host workspace and MCP `file_hash`;
 2. require matching root;
-3. call `tenor_init_bridge` with the TENOR session/proof;
+3. call `tenor_init_bridge` with the TENOR session through the actual host-bound process; the server consumes its one-time proof without exposing a token;
 4. obtain `TENOR_INIT_BRIDGE_OK`;
 5. execute one complete MCP micro-write;
 6. audit native shell/edit bypass paths.

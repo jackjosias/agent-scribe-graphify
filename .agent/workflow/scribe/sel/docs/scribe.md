@@ -21,7 +21,7 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Canonical command:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 `bootstrap` is internal/legacy and is not the public V2.16 start.
@@ -301,7 +301,7 @@ Each agent owns:
 
 ```text
 agent_id
-proof token
+server-side one-time proof
 action leases
 claims
 resource locks

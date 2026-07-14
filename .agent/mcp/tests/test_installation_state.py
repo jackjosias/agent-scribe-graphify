@@ -240,6 +240,13 @@ class InstallationStateTest(unittest.TestCase):
             True,
         )
 
+    def test_31_next_action_uses_current_interpreter_not_bare_python(self) -> None:
+        gate = installation_state.inspect_installation_state(self.root)
+        argv = gate["next_action_argv"]
+        self.assertEqual(argv[0], sys.executable)
+        self.assertEqual(argv[1:], [".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"])
+        self.assertIn(sys.executable, gate["next_action"])
+
     def _copy_agent(self, old_root: Path, new_root: Path) -> None:
         if (new_root / ".agent").exists():
             import shutil

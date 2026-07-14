@@ -71,6 +71,8 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertIn("validation_runtime_lock", text)
         self.assertIn("VALIDATION_RUNTIME_LOCK_ACQUIRED", text)
         self.assertIn("validation_runtime_busy_message", text)
+        self.assertIn("clean_smoke_workspaces", text)
+        self.assertIn("finally:", text)
 
     def test_07_redteam_smoke_uses_validation_lock(self) -> None:
         text = (ROOT / ".agent" / "scripts" / "enforcement_redteam_smoke.py").read_text(encoding="utf-8")

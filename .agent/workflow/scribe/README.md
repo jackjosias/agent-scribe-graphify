@@ -13,16 +13,16 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 The project-local skill is read first. The deterministic command is:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 Windows:
 
 ```powershell
-python .agent/workflow/scribe/scribe tenor-init --type cli
+py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
-`tenor-init` is the public authority for installation, relocation and recovery. It classifies the project before touching SCRIBE, verifies Graphify, finalizes the installation, records a session and prints a machine proof.
+`tenor-init` is the public authority for installation, relocation and recovery. It classifies the project before touching SCRIBE, verifies Graphify, finalizes the installation, configures the verified project-local host entry, records a session and prints a redacted machine receipt.
 
 `bootstrap` remains an internal/legacy command. It must not be documented as the normal V2.16 start and must not be used to bypass `TENOR_INIT_REQUIRED`.
 
@@ -31,10 +31,10 @@ python .agent/workflow/scribe/scribe tenor-init --type cli
 After local init:
 
 ```bash
-python .agent/mcp/server_entry.py --list-tools
+python3 .agent/mcp/server_entry.py --list-tools
 ```
 
-This proves only the project-local MCP server can start. It does not prove the tools are visible to OpenCode, Codex, Cline, Cursor or another host.
+This proves only the project-local MCP server can start. Shell JSON-RPC is equally insufficient; the actual configured host process must prove the tools are visible.
 
 Global readiness requires:
 
@@ -124,7 +124,7 @@ Direct native writes are not an equivalent fallback.
 
 Every terminal runs its own TENOR INIT. The shared bootstrap is serialized; each terminal receives a separate identity and proof.
 
-Agents share runtime SQLite, SCRIBE, Graphify, claims, locks and patch queue, but never share `agent_id`, proof token, lease or ownership credentials.
+Agents share runtime SQLite, SCRIBE, Graphify, claims, locks and patch queue, but never share `agent_id`, server-side one-time proof, lease or ownership credentials.
 
 `TENOR_INIT_SAME_PROJECT` must never purge active coordination.
 
@@ -134,7 +134,7 @@ Primary gates:
 
 ```bash
 .agent/workflow/scribe/scribe-rag gate
-python .agent/scripts/validation_suite.py
+python3 .agent/scripts/validation_suite.py
 ```
 
 The V2.16 portability workflow covers Ubuntu, macOS and Windows. Linux deep validation covers integration/red-team scenarios and Git hygiene.

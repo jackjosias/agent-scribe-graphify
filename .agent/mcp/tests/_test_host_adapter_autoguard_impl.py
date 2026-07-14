@@ -23,6 +23,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import server_ext as mcp
+from host_adapter import host_config
 from host_adapter.instructions import install_host_instructions, update_marked_block, verify_instruction_installation
 from host_adapter.launcher import HostLaunchConfig, TENOR_INIT_REQUIRED, run_pre_action_guard, run_preflight, run_workspace_audit
 from host_adapter.policy import HostPolicy, HostVerdict
@@ -76,6 +77,8 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertTrue(prepared["ok"])
         self.assertTrue(installation_state.finalize_installation_state(self.root)["ok"])
         self.assertTrue(graphify_readiness.write_smoke_fixture(self.root)["ok"])
+        configured = host_config.configure_host(self.root, explicit="opencode")
+        self.assertTrue(configured["ok"], configured)
 
         mcp.server.ROOT = self.root.resolve()
         mcp.server.AGENT_DIR = self.root / ".agent"

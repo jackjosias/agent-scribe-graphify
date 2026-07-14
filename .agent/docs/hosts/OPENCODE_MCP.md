@@ -2,7 +2,7 @@
 
 ## Official source checked
 
-Last verified against the official OpenCode MCP documentation: 2026-07-12.
+Last verified against the official OpenCode MCP documentation: 2026-07-14.
 
 OpenCode supports local MCP servers under the `mcp` object in `opencode.jsonc`. A local server uses:
 
@@ -26,7 +26,7 @@ The project-local skill must be read before global OpenCode instructions.
 The local mechanical initialization remains:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type cli --host opencode
 ```
 
 Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis ; l'installateur forcé n'est jamais appelé (voir `.agent/docs/TENOR_INIT_SINGLE_AUTHORITY.md`).
@@ -43,9 +43,18 @@ Create or update `opencode.jsonc` at the project root without removing unrelated
       "type": "local",
       "command": ["python3", ".agent/mcp/server_entry.py"],
       "cwd": ".",
+      "environment": {
+        "AGENT_MCP_HOST": "opencode",
+        "AGENT_MCP_BINDING_ID": "<generated-by-TENOR>",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": "."
+      },
       "enabled": true,
       "timeout": 20000
     }
+  },
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
   }
 }
 ```
@@ -60,14 +69,23 @@ Windows example:
       "type": "local",
       "command": ["python", ".agent/mcp/server_entry.py"],
       "cwd": ".",
+      "environment": {
+        "AGENT_MCP_HOST": "opencode",
+        "AGENT_MCP_BINDING_ID": "<generated-by-TENOR>",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": "."
+      },
       "enabled": true,
       "timeout": 20000
     }
+  },
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
   }
 }
 ```
 
-`cwd: "."` is important: it binds the launched MCP process to the workspace opened by OpenCode instead of an old absolute checkout.
+Do not handcraft `AGENT_MCP_BINDING_ID`: TENOR creates it and commits `.agent/state/install/host-binding.json` with the current config hash. The examples show the schema only. `cwd: "."` binds the launched MCP process to the workspace opened by OpenCode instead of an old absolute checkout.
 
 Do not add an absolute path to the source repository `agent-scribe-graphify`. The server must be the copied project-local `.agent/mcp/server_entry.py`.
 
@@ -75,7 +93,7 @@ Do not edit global/user OpenCode config without explicit permission. If a global
 
 ## Reconnect requirement
 
-After editing `opencode.jsonc`, restart or reconnect OpenCode as required so it reloads MCP configuration. A new conversation may be necessary before the LLM sees the updated tool surface.
+When TENOR creates or changes `opencode.jsonc`, it returns `HOST_RECONNECT_REQUIRED` and does not issue a session proof. Restart or reconnect OpenCode so it reloads MCP configuration, then rerun TENOR INIT in a new host session.
 
 ## Local-only check
 
@@ -139,14 +157,13 @@ Do not continue to product work after a mismatch.
 
 ## Session bridge
 
-After tool visibility and root binding are proven, call:
+After tool visibility and root binding are proven, call through the MCP tool surface:
 
 ```text
 tenor_init_bridge(
   agent_session_id="<TENOR Agent session>",
   host_tool="opencode",
-  model_name="<active model>",
-  proof_token="<TENOR Proof token>"
+  model_name="<active model>"
 )
 ```
 
@@ -156,7 +173,7 @@ Required verdict:
 TENOR_INIT_BRIDGE_OK
 ```
 
-Only then may the session report:
+The server consumes the matching proof atomically; the full bearer token is never printed or persisted. A successful bridge has scope `MCP_BRIDGE_ONLY`. Only the actual OpenCode host, after its independent root proof, may report:
 
 ```text
 TENOR_INIT_READY

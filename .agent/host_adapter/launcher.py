@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
-from . import instructions as _instructions
+from . import host_config, instructions as _instructions
 from .policy import HostPolicy, HostVerdict
 
 _SAFE_MUST_CALL_TOOLS = frozenset({
@@ -113,12 +114,22 @@ def inspect_local_tenor_state(config: HostLaunchConfig) -> dict[str, Any]:
         installation_state = _runtime_modules(config.workspace_root)
         return installation_state.inspect_installation_state(config.workspace_root)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        argv = [
+            sys.executable,
+            ".agent/workflow/scribe/scribe",
+            "tenor-init",
+            "--type",
+            "cli",
+            "--host",
+            config.host_type or "auto",
+        ]
         return {
             "ok": False,
             "ready": False,
             "verdict": TENOR_INIT_REQUIRED,
             "reason": f"Cannot inspect local TENOR state: {exc}",
-            "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli",
+            "next_action": subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv),
+            "next_action_argv": argv,
         }
 
 
@@ -133,7 +144,17 @@ def run_local_tenor_init(
         return {"ok": False, "verdict": TENOR_INIT_REQUIRED, "reason": f"Missing TENOR CLI: {command}"}
     try:
         result = subprocess.run(
-            [sys.executable, str(command), "tenor-init", "--root", str(config.workspace_root), "--type", agent_type],
+            [
+                sys.executable,
+                str(command),
+                "tenor-init",
+                "--root",
+                str(config.workspace_root),
+                "--type",
+                agent_type,
+                "--host",
+                config.host_type or "auto",
+            ],
             cwd=str(config.workspace_root),
             env=build_guarded_environment(config),
             capture_output=True,
@@ -274,7 +295,28 @@ def run_preflight(
             "verdict": TENOR_INIT_REQUIRED,
             "state": "LOCAL_INIT_REQUIRED",
             "local_state": local_state,
-            "next_action": local_state.get("next_action") or ".agent/workflow/scribe/scribe tenor-init --type cli",
+            "next_action": local_state.get("next_action") or "Run TENOR INIT with the current interpreter and exact host id.",
+        }
+
+    configured_host = host_config.configure_host(
+        config.workspace_root,
+        explicit=config.host_type or "auto",
+    )
+    if not configured_host.get("ok"):
+        return {
+            "ok": False,
+            "verdict": configured_host.get("verdict", HOST_MCP_UNBOUND),
+            "state": "HOST_CONFIGURATION_BLOCKED",
+            "host_configuration": configured_host,
+            "next_action": f"Follow {configured_host.get('guide', '.agent/docs/hosts/README.md')}",
+        }
+    if configured_host.get("restart_required"):
+        return {
+            "ok": False,
+            "verdict": "HOST_RECONNECT_REQUIRED",
+            "state": "LOCAL_INIT_READY_HOST_RECONNECT_REQUIRED",
+            "host_configuration": configured_host,
+            "next_action": "Restart/reconnect the detected host, then rerun TENOR INIT.",
         }
 
     try:
@@ -320,6 +362,7 @@ def run_preflight(
         "capabilities": capabilities,
         "instruction_block_ok": installed,
         "instruction_repair_result": instruction_result,
+        "host_configuration": configured_host,
         "local_state": local_state,
         "next_action": "Verify these tools in the host LLM tool interface and prove the MCP root binding.",
     }
@@ -458,14 +501,18 @@ def run_tenor_init_bridge(
 ) -> dict[str, Any]:
     if not agent_session_id:
         return {"ok": False, "verdict": "TENOR_INIT_BRIDGE_INVALID", "reason": "agent_session_id is required"}
-    args: dict[str, Any] = {
+    del host_tool, model_name, proof_token
+    return {
+        "ok": False,
+        "verdict": "TENOR_INIT_BRIDGE_HOST_UNBOUND",
+        "state": HOST_MCP_UNBOUND,
+        "reason": (
+            "The local launcher cannot prove host MCP visibility. Call tenor_init_bridge "
+            "through the real host-visible MCP tool surface after reconnect."
+        ),
         "agent_session_id": agent_session_id,
-        "host_tool": host_tool or config.host_type or "unknown",
-        "model_name": model_name,
+        "host_id": config.host_type or "unknown",
     }
-    if proof_token:
-        args["proof_token"] = proof_token
-    return call_mcp_tool("tenor_init_bridge", args, config.workspace_root)
 
 
 def run_workspace_audit(config: HostLaunchConfig, task_id: str = "", resource: str = "") -> dict[str, Any]:

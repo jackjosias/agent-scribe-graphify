@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - "agent/v2-16-tenor-init-single-authority"
+      - "agent/v2-16-raw-copy-portability-staging"
       - "v2"
     paths:
       - ".agent/**"
@@ -49,6 +50,7 @@ jobs:
         run: >-
           python -m py_compile
           .agent/mcp/runtime/installation_state.py
+          .agent/mcp/runtime/owned_file_lock.py
           .agent/mcp/runtime/tenor_init_orchestrator.py
           .agent/mcp/runtime/graphify_readiness.py
           .agent/mcp/runtime/graphify_guard.py
@@ -57,7 +59,9 @@ jobs:
           .agent/host_adapter/policy.py
           .agent/host_adapter/launcher.py
           .agent/host_adapter/instructions.py
+          .agent/host_adapter/host_config.py
           .agent/host_adapter/templates.py
+          .agent/workflow/scribe/sel/scripts/proof_signer.py
           .agent/workflow/scribe/sel/scripts/scribe_bootstrap.py
           .agent/workflow/scribe/sel/scripts/scribe_tenor_init_v216.py
           .agent/workflow/scribe/sel/scripts/scribe_bundle_graph.py
@@ -82,6 +86,7 @@ jobs:
           tests = [
               ("cross_platform", ".agent/mcp/tests/test_v216_cross_platform.py"),
               ("tenor_init_orchestrator", ".agent/mcp/tests/test_tenor_init_orchestrator.py"),
+              ("raw_copy_portability", ".agent/mcp/tests/test_raw_copy_portability.py"),
               ("installation_output_preservation", ".agent/mcp/tests/test_installation_output_preservation.py"),
               ("graphify_readiness", ".agent/mcp/tests/test_graphify_readiness.py"),
               ("scribe_bootstrap", ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"),

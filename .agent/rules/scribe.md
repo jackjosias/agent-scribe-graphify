@@ -17,13 +17,13 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Commande mécanique depuis la racine du projet :
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 Sous Windows :
 
 ```powershell
-python .agent/workflow/scribe/scribe tenor-init --type cli
+py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 `tenor-init` est l'unique autorité publique d'installation, de relocation et de reprise. `bootstrap` est une primitive interne/legacy et ne doit jamais remplacer TENOR INIT dans un bundle V2.16.
@@ -38,11 +38,13 @@ TENOR INIT doit :
 4. adopter ou créer la mémoire SCRIBE de destination ;
 5. vérifier ou demander le build Graphify borné ;
 6. finaliser le manifest local ;
-7. vérifier le serveur MCP local ;
-8. vérifier la visibilité réelle des tools dans le host ;
-9. prouver le root binding ;
-10. bridger la session indépendante ;
-11. produire `TENOR_INIT_READY`.
+7. détecter et configurer uniquement le host project-local vérifié ;
+8. exiger une reconnexion puis une nouvelle init si la configuration change ;
+9. vérifier le serveur MCP local ;
+10. vérifier la visibilité réelle des tools dans le host ;
+11. prouver le root binding ;
+12. bridger la session indépendante avec la preuve serveur one-shot ;
+13. produire `TENOR_INIT_READY`.
 
 Tant que les tools ne sont pas visibles dans le host réel, le verdict maximal est :
 
@@ -50,7 +52,7 @@ Tant que les tools ne sont pas visibles dans le host réel, le verdict maximal e
 LOCAL_INIT_READY_HOST_MCP_UNBOUND
 ```
 
-`python .agent/mcp/server_entry.py --list-tools` ne prouve jamais la visibilité host.
+`python3 .agent/mcp/server_entry.py --list-tools` ou un JSON-RPC lancé depuis un shell ne prouve jamais la visibilité host.
 
 ## Graphify et SCRIBE
 
@@ -93,7 +95,7 @@ Les writes directs via shell, redirection, `tee`, `sed -i`, `cp`, `mv`, `rm`, ou
 - Le bootstrap partagé est sérialisé.
 - `TENOR_INIT_SAME_PROJECT` ne purge jamais la coordination active.
 - Les agents partagent runtime SQLite, SCRIBE et Graphify.
-- Ils ne partagent jamais `agent_id`, proof token, action lease, claim ou resource lock propriétaire.
+- Ils ne partagent jamais `agent_id`, preuve serveur one-shot, action lease, claim ou resource lock propriétaire.
 - Toute clôture laisse zéro claim, lock ou patch en attente.
 
 ## Mémoire causale
@@ -113,7 +115,7 @@ Une douleur, cause racine, régression ou approche rejetée durable devient SCAR
 
 ## Invariant SAME_PROJECT (V2.16.1)
 
-Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` n'appelle jamais l'installateur forcé et ne réécrit aucun fichier suivi de configuration ou documentation. La dérive du bundle est signalée en warning et jamais réparée silencieusement ; la réparation reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
+Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` n'appelle jamais l'installateur forcé et ne réécrit aucun fichier suivi du bundle. La dérive est signalée en warning ; la réparation reste explicite (`scribe install --force`). TENOR peut uniquement gérer l'entrée MCP project-local vérifiée et son reçu de binding. `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
 
 ## Invariant purge/migration sans perte (V2.16.2)
 

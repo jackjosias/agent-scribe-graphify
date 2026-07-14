@@ -25,13 +25,13 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Mechanical command from the current project root:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 Windows-compatible command:
 
 ```powershell
-python .agent/workflow/scribe/scribe tenor-init --type cli
+py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 The old `[[.agent/skills/init-tenor/SKILL.md]]` form is compatibility-only. New documentation and templates must emit the canonical trigger above.
@@ -75,17 +75,17 @@ SCRIBE_MEMORY_ADOPT
 SCRIBE_MEMORY_CREATE
 ```
 
-## SAME_PROJECT read-only session invariant
+## SAME_PROJECT bundle-integrity invariant
 
-On `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` is strictly tracked-file read-only. It MUST NOT call the forced installer (`run_installer(force=True)`) and MUST NOT rewrite any tracked configuration or documentation file (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`).
+On `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` MUST NOT call the forced installer (`run_installer(force=True)`) and MUST NOT rewrite tracked bundle files (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`).
 
-Allowed mutations are confined to the operational runtime layer under `.agent/state`: presences, locks, proof store, runtime reports, manifests and the Graphify placeholder when no application code exists. SCRIBE, Graphify, doctor and runtime state are still verified.
+Allowed mutations are confined to the operational runtime layer under `.agent/state`, plus the exact verified project-local MCP entry for the detected host. This narrow exception creates or updates only `agent-scribe-graphify` and its binding receipt; it preserves unrelated host settings and MCP servers. SCRIBE, Graphify, doctor and runtime state are still verified.
 
 Bundle drift in the managed files is *surfaced as a warning and never silently repaired* — bundle repair stays explicit and separate (`scribe install --force`). This is the V2.16.1 terrain fix for the confirmed defect where `bootstrap_project()` rewrote tracked files on every `SAME_PROJECT` session init.
 
 Invariant (single sentence):
 
-> SAME_PROJECT session init is tracked-file read-only; bundle repair is explicit.
+> SAME_PROJECT never repairs the bundle; project-local MCP binding is the sole managed configuration exception.
 
 `NEW_INSTALLATION`, `RELOCATED_PROJECT` and `LEGACY_INSTALLATION` keep the bundle install when required. The regression is covered by `test_scribe_bootstrap.py::test_same_project_session_init_is_tracked_file_read_only` and `test_new_installation_still_calls_installer`.
 
@@ -108,8 +108,10 @@ ADOPT_PROJECT
 ADOPT_MEMORY
 VERIFY_GRAPH
 FINALIZE_INSTALLATION
+DETECT_AND_CONFIGURE_VERIFIED_HOST
+RECONNECT_AND_RERUN_IF_CHANGED
 VERIFY_LOCAL_MCP
-CONFIGURE_AND_VERIFY_HOST
+VERIFY_ACTUAL_HOST_PROCESS_BINDING
 PROVE_ROOT_BINDING
 BRIDGE_SESSION
 TENOR_INIT_READY
@@ -126,11 +128,18 @@ A relocation from A to B:
 - purges only copied `.agent/state/` bound to A;
 - preserves the portable `.agent` engine;
 - preserves canonical SCRIBE memory already present in B;
-- rejects A's sessions, proofs, locks, outputs and bindings;
+- rejects A's sessions, proofs, locks and bindings;
+- preserves canonical outputs byte-for-byte while refusing stale Graphify until B's root/fingerprint validation passes;
 - writes B's installation manifest;
 - rebuilds derived state for B.
 
 Purge paths are validated, external symlinks are rejected and transient deletion failures use bounded backoff.
+
+## Complete raw-copy portability contract
+
+A byte-for-byte copy of the complete `.agent/` directory into an unrelated project is a mandatory supported installation path on Linux, macOS and Windows. No sync helper is required. TENOR compares the copied manifest root with the resolved destination root before consulting SCRIBE, purges only copied project-bound coordination state when relocation is proven, preserves an existing destination `AGENT-MEMOIRE_PROJECT_STATUS.scribe`, creates it only when absent, and never accepts a copied Graphify root/fingerprint as current without revalidation.
+
+The local next action is returned as structured argv using the running Python interpreter. A bare `python` command is not emitted on POSIX systems; Windows documentation uses `py -3` while host entries use the platform-resolved Python command.
 
 ## Multi-agent and six-terminal contract
 
@@ -141,7 +150,7 @@ The owned lock records nonce, PID, hostname, root, stage, creation time and hear
 Each terminal then receives an independent session. Agents share runtime, SCRIBE, Graphify and coordination data, but never share:
 
 - `agent_id`;
-- proof token;
+- server-side one-time proof;
 - action lease;
 - claim ownership;
 - resource-lock ownership.
@@ -251,16 +260,17 @@ Correct order:
 
 1. local TENOR INIT;
 2. Graphify ready;
-3. local MCP server listable;
-4. read the actual host guide;
-5. configure workspace-local integration when supported;
-6. restart/reconnect the host if required;
-7. prove tools are visible in the LLM interface;
-8. prove root binding;
-9. call `tenor_init_bridge`;
-10. obtain `TENOR_INIT_READY`.
+3. detect the real host from explicit identity, host environment or one unambiguous project marker;
+4. configure only the verified workspace-local integration for OpenCode, Claude Code or Codex;
+5. fail closed to the exact guide for any other or ambiguous host;
+6. restart/reconnect and rerun TENOR when configuration changed;
+7. prove tools are visible in the actual LLM interface;
+8. prove the MCP process binding from config environment, binding receipt and config hash;
+9. prove root binding;
+10. call `tenor_init_bridge`, which atomically consumes the server-side one-time proof;
+11. obtain `TENOR_INIT_READY` only from the real host after all checks.
 
-`server_entry.py --list-tools` never proves host visibility. Before host proof:
+`server_entry.py --list-tools` and manually piped shell JSON-RPC never prove host visibility. Before host proof:
 
 ```text
 HOST_MCP_UNBOUND
@@ -268,6 +278,10 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 ```
 
 No global/user configuration and no Chrome/DevTools installation is performed without real need and explicit permission.
+
+TENOR never prints or persists the full proof bearer token. `tenor_init_bridge` normally receives only `agent_session_id`, `host_tool` and `model_name`; the bound MCP server consumes the newest matching proof exactly once under an inter-process owned lock. The deprecated explicit `proof_token` argument remains compatibility-only.
+
+`TENOR_INIT_BRIDGE_OK` has scope `MCP_BRIDGE_ONLY`; it is not, by itself, permission to claim global readiness. The actual host must also prove tool visibility and matching root.
 
 ## Root binding
 
@@ -308,8 +322,11 @@ Isolated minimal project:
 - Graphify missing blocked false readiness;
 - real Graphify schema identified as `nodes + links`;
 - second TENOR INIT became `SAME_PROJECT` without repurge;
-- `SAME_PROJECT` session init is tracked-file read-only (V2.16.1: installer/agent-gitignore no longer rewrite tracked files);
+- `SAME_PROJECT` never repairs tracked bundle files (V2.16.1); only the verified project-local MCP entry is managed;
 - local MCP tools listed successfully.
+- complete raw-copy relocation and absent/present destination-memory cases covered by executable tests;
+- OpenCode comments/unrelated keys preserved by idempotent project-local configuration tests;
+- concurrent server-side proof issuance/consumption covered without token exposure.
 
 Isolated copy of `algowebsite`:
 

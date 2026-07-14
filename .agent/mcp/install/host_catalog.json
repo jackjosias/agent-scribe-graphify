@@ -13,12 +13,18 @@
     "codex-cli": {
       "kind": "cli",
       "config_scope": "user_or_project",
-      "manual_confirmation_required": true
+      "manual_confirmation_required": false,
+      "automatic_project_configuration": true,
+      "project_config": ".codex/config.toml",
+      "guide": ".agent/docs/hosts/OPENAI_CODEX_MCP.md"
     },
     "claude-code": {
       "kind": "cli",
       "config_scope": "user_or_project",
-      "manual_confirmation_required": true
+      "manual_confirmation_required": false,
+      "automatic_project_configuration": true,
+      "project_config": ".mcp.json",
+      "guide": ".agent/docs/hosts/CLAUDE_CODE_MCP.md"
     },
     "gemini-cli": {
       "kind": "cli",
@@ -28,7 +34,10 @@
     "opencode": {
       "kind": "cli",
       "config_scope": "opencode_config",
-      "manual_confirmation_required": true
+      "manual_confirmation_required": false,
+      "automatic_project_configuration": true,
+      "project_config": "opencode.jsonc",
+      "guide": ".agent/docs/hosts/OPENCODE_MCP.md"
     },
     "cursor": {
       "kind": "ide",

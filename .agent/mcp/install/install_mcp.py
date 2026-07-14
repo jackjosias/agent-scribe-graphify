@@ -11,6 +11,10 @@ INSTALL_DIR = THIS_FILE.parent
 AGENT_ROOT = THIS_FILE.parents[2]
 PROJECT_ROOT = AGENT_ROOT.parent
 CATALOG_PATH = INSTALL_DIR / "host_catalog.json"
+if str(AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(AGENT_ROOT))
+
+from host_adapter.host_config import configure_host, detect_host  # noqa: E402
 
 
 def load_catalog() -> dict:
@@ -19,7 +23,15 @@ def load_catalog() -> dict:
 
 def server_command() -> dict:
     server_path = AGENT_ROOT / "mcp" / "server_entry.py"
-    return {"name": "agent-scribe-graphify", "command": sys.executable or "python3", "args": [str(server_path)], "transport": "stdio", "cwd": str(PROJECT_ROOT)}
+    python_command = "python" if sys.platform == "win32" else "python3"
+    return {
+        "name": "agent-scribe-graphify",
+        "command": python_command,
+        "args": [".agent/mcp/server_entry.py"],
+        "transport": "stdio",
+        "cwd": ".",
+        "resolved_server": str(server_path),
+    }
 
 
 def generic_snippet() -> dict:
@@ -31,6 +43,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Assistant d'installation MCP agent-scribe-graphify")
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--host")
+    parser.add_argument("--apply", action="store_true", help="Apply only a verified project-local host recipe.")
     parser.add_argument("--doctor", action="store_true")
     args = parser.parse_args()
     catalog = load_catalog()
@@ -47,10 +60,15 @@ def main() -> int:
         if not recipe:
             print(json.dumps({"ok": False, "error": "unknown host", "known_hosts": sorted(catalog["hosts"])}, ensure_ascii=False, indent=2))
             return 2
-        print(json.dumps({"ok": True, "host": args.host, "recipe": recipe, "server": server_command(), "generic_json_snippet": generic_snippet(), "manual_confirmation_required": True}, ensure_ascii=False, indent=2))
+        if args.apply:
+            result = configure_host(PROJECT_ROOT, explicit=args.host)
+            print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if result.get("ok") else 2
+        print(json.dumps({"ok": True, "host": args.host, "recipe": recipe, "server": server_command(), "generic_json_snippet": generic_snippet(), "manual_confirmation_required": not bool(recipe.get("automatic_project_configuration"))}, ensure_ascii=False, indent=2))
         return 0
-    parser.print_help()
-    return 0
+    detection = detect_host(PROJECT_ROOT)
+    print(json.dumps(detection, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if detection.get("ok") else 2
 
 
 if __name__ == "__main__":

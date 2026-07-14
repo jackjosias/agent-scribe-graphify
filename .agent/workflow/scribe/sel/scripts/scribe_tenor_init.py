@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from scribe_bootstrap import bootstrap_project, print_report
 from scribe_coordination import active_claims_with_cleanup
@@ -210,12 +210,27 @@ def emit_report(
     rag_journal: CommandResult,
     rag_scars: CommandResult,
     rag_ne_pas: CommandResult,
-    proof_token: str = "",
+    proof_issued: bool = False,
+    host_report: dict[str, Any] | None = None,
+    local_mcp: CommandResult | None = None,
 ) -> int:
     state = state_summary(project_root)
     claims, cleaned = active_claims_with_cleanup()
-    status = "VALID" if bootstrap_ok and whoami.returncode == 0 and workflow_check.returncode == 0 and rag_context.returncode == 0 else "INVALID"
+    status = (
+        "LOCAL_VALID_HOST_UNBOUND"
+        if bootstrap_ok
+        and proof_issued
+        and local_mcp is not None
+        and local_mcp.returncode == 0
+        and whoami.returncode == 0
+        and workflow_check.returncode == 0
+        and rag_context.returncode == 0
+        else "INVALID"
+    )
     mode = "STANDARD"
+    host = host_report if isinstance(host_report, dict) else {}
+    host_id = str(host.get("host_id") or "unknown")
+    host_config_verdict = str(host.get("verdict") or "HOST_CONFIG_UNPROVEN")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("📋 SCRIBE-CHECK TENOR V4 — MACHINE PROOF")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -228,9 +243,16 @@ def emit_report(
     print(f"Blast radius node 1  : {graph['blast_radius']}")
     print(f"Agent session        : {agent_id}")
     print(f"Whoami proof         : {'OK' if whoami.returncode == 0 else 'FAIL'}")
-    print(f"Proof token          : {proof_token}")
-    print(f"Proof verify MCP     : verify_proof(token=<above>, agent_id='{agent_id}')")
+    print(f"Proof receipt        : {'SERVER_SIDE_ONE_TIME_READY' if proof_issued else 'UNAVAILABLE'}")
+    print("Proof exposure       : REDACTED — no bearer token is printed")
+    print("Proof verify MCP     : consumed server-side only by tenor_init_bridge in a bound host process")
     print(f"Agent type           : {agent_type}")
+    print(f"Host detected        : {host_id}")
+    print(f"Host config          : {host_config_verdict}")
+    print(f"Host guide           : {host.get('guide', '-')}")
+    print(f"MCP local server     : {'READY' if local_mcp is not None and local_mcp.returncode == 0 else 'FAILED_OR_UNPROVEN'}")
+    print("MCP tools host LLM   : UNPROVEN_IN_LOCAL_SHELL")
+    print("MCP root binding     : PENDING_REAL_HOST_CALL")
     print(f"Lock status          : {lock_summary()}")
     print(f"Last writer          : {state['last_writer']} ({state['last_writer_type']})")
     print(f"State sync           : {state['sync']}")
@@ -250,7 +272,8 @@ def emit_report(
     print(f"Workflow ack         : {'ACK_OK' if workflow_check.returncode == 0 else 'NON'}")
     print("MCP Chrome lu        : NON CONCERNE")
     print("Validation nav.      : N/A")
-    print("Prochaine action     : Attendre la premiere tache utilisateur; lancer preflight avant code")
+    print("Init status          : LOCAL_INIT_READY_HOST_MCP_UNBOUND")
+    print("Prochaine action     : reconnecter le host puis appeler tenor_init_bridge depuis sa vraie surface MCP")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print("")
     print("PREUVES COMMANDES")
@@ -268,7 +291,7 @@ def emit_report(
         print(line)
     for line in command_block("scribe-rag query ne_pas_reproposer", rag_ne_pas):
         print(line)
-    return 0 if status == "VALID" else 1
+    return 0 if status == "LOCAL_VALID_HOST_UNBOUND" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -280,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent", help="Stable agent id. Defaults to SCRIBE_AGENT_ID or generated presence id.")
     parser.add_argument("--type", dest="agent_type", default="cli", choices=sorted(AGENT_TYPES))
     parser.add_argument("--surface", default="tenor-init")
+    parser.add_argument("--host", default="auto", help="Host id or auto (opencode, codex-cli, claude-code, ...).")
     parser.add_argument("--skip-graphify", action="store_true", help=argparse.SUPPRESS)
     return parser
 
@@ -295,7 +319,12 @@ def main() -> int:
 
     # Issue signed proof token BEFORE bootstrap so the token exists even if bootstrap partially fails.
     # The token is project-bound (HMAC keyed to project root) and non-falsifiable.
-    proof_token = _issue_proof(project_root, agent_id)
+    try:
+        _issue_proof(project_root, agent_id)
+        proof_issued = True
+    except Exception as exc:  # noqa: BLE001
+        print(f"TENOR_INIT_PROOF_ISSUE_FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 5
 
     bootstrap_report = bootstrap_project(
         project_root,
@@ -314,6 +343,7 @@ def main() -> int:
     rag_scars = run_command((rag, "query", "SCAR TIER hot bug regression test_binding", "--limit", "5"), project_root)
     rag_ne_pas = run_command((rag, "query", "ne_pas_reproposer alternatives rejetees ghost", "--limit", "5"), project_root)
     graph = parse_graph_report(project_root / GRAPH_REPORT_PATH)
+    local_mcp = run_command((sys.executable, ".agent/mcp/server_entry.py", "--list-tools"), project_root)
     return emit_report(
         project_root=project_root,
         agent_id=agent_id,
@@ -327,7 +357,9 @@ def main() -> int:
         rag_journal=rag_journal,
         rag_scars=rag_scars,
         rag_ne_pas=rag_ne_pas,
-        proof_token=proof_token,
+        proof_issued=proof_issued,
+        host_report={"host_id": args.host, "verdict": "HOST_CONFIG_UNPROVEN"},
+        local_mcp=local_mcp,
     )
 
 

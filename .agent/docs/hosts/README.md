@@ -13,7 +13,7 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Mechanical local command:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 Host integration starts only after the local installation is ready and Graphify is valid.
@@ -21,14 +21,14 @@ Host integration starts only after the local installation is ready and Graphify 
 ## Universal host order
 
 ```text
-1. detect the real host
-2. read exactly that host's guide
-3. prefer workspace/project-local configuration
-4. restart or reconnect the host when required
-5. prove MCP tools visible to the LLM
-6. prove MCP root binding
-7. call tenor_init_bridge
-8. obtain TENOR_INIT_READY
+1. detect the real host from explicit identity, environment, or one project marker
+2. configure only the verified project-local entry for OpenCode, Claude Code or Codex
+3. fail closed to the exact guide for other or ambiguous hosts
+4. restart/reconnect and rerun TENOR when configuration changes
+5. prove MCP tools visible to the LLM in the actual host
+6. verify host-process binding and prove MCP root binding
+7. call tenor_init_bridge without exposing the proof bearer token
+8. obtain TENOR_INIT_READY only after the real host confirms every gate
 9. run one complete MCP micro-write
 10. test direct-write bypass behavior
 ```
@@ -45,7 +45,7 @@ A successful local command:
 python3 .agent/mcp/server_entry.py --list-tools
 ```
 
-proves only `MCP_LOCAL_SERVER_READY`. It does **not** prove that the host UI exposes the tools to the model.
+proves only `MCP_LOCAL_SERVER_READY`. It does **not** prove that the host UI exposes the tools to the model. Manually piping JSON-RPC through this process is still shell evidence, not host evidence.
 
 ## Minimum tool surface
 
@@ -88,10 +88,13 @@ A global config pointing to another checkout, an old copied `.agent`, or the sou
 ## Configuration policy
 
 - Prefer project/workspace-local configuration when the host supports it.
+- Automatic project-local writes are verified only for OpenCode (`opencode.jsonc`), Claude Code (`.mcp.json`) and Codex (`.codex/config.toml`).
+- Preserve unrelated keys, comments where the format permits, and unrelated MCP servers.
 - Do not edit global/user configuration without explicit permission.
 - Do not remove unrelated MCP servers such as Chrome DevTools.
 - Do not invent a config filename, schema or restart behavior.
 - Record whether the host requires restart, reconnect or new conversation.
+- Require config environment + binding receipt + current config hash before the bridge accepts the process as host-bound.
 - Treat every host guide's `UNKNOWN` fields as real open gates, not assumptions.
 
 ## Direct Tool Neutralization

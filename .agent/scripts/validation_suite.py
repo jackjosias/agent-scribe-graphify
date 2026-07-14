@@ -21,6 +21,7 @@ STEPS = (
     ("installation_state", [sys.executable, ".agent/mcp/tests/test_installation_state.py"]),
     ("installation_output_preservation", [sys.executable, ".agent/mcp/tests/test_installation_output_preservation.py"]),
     ("tenor_init_orchestrator", [sys.executable, ".agent/mcp/tests/test_tenor_init_orchestrator.py"]),
+    ("raw_copy_portability", [sys.executable, ".agent/mcp/tests/test_raw_copy_portability.py"]),
     ("v216_cross_platform", [sys.executable, ".agent/mcp/tests/test_v216_cross_platform.py"]),
     ("graphify_readiness", [sys.executable, ".agent/mcp/tests/test_graphify_readiness.py"]),
     ("graphify_scribe_bridge", [sys.executable, ".agent/tests/test_graphify_scribe_bridge.py"]),
@@ -39,6 +40,7 @@ STEPS = (
 _GRAPHIFY_SCOPED_STEPS = {
     "read_only_task_closure",
     "first_write_discovery",
+    "raw_copy_portability",
     "mcp_smoke",
     "enforcement_redteam_smoke",
 }

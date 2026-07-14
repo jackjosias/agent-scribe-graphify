@@ -22,18 +22,18 @@ Ce déclencheur oblige l'agent à lire d'abord le skill local du projet.
 La commande mécanique canonique, exécutée depuis la racine du projet, est :
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 Sous Windows :
 
 ```powershell
-python .agent/workflow/scribe/scribe tenor-init --type cli
+py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 `bootstrap` reste une primitive interne/legacy. Il n'est plus l'autorité publique d'installation, de relocation ou de reprise V2.16.
 
-Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init de session est strictement en lecture seule des fichiers suivis (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; l'installateur forcé n'est jamais appelé et la réparation du bundle reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle quand nécessaire.
+Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init ne répare jamais le bundle (`AGENTS.md`, `.agent/rules/scribe.md`, `.graphifyignore`, `.agent/.gitignore`) ; seule l'entrée MCP project-local vérifiée du host et son reçu de binding peuvent être gérés automatiquement. La réparation du bundle reste explicite (`scribe install --force`).
 
 Invariant terrain V2.16.2 : une purge requise réinitialise le runtime projet-lié mais préserve `.agent/state/outputs/` byte-for-byte. La destination canonique gagne lors d'un conflit avec un output legacy, qui est déplacé sous `_legacy_migrated/`. Un Graphify préservé doit encore réussir les contrôles root/fingerprint avant toute readiness.
 
@@ -49,14 +49,18 @@ ADOPT_PROJECT
 ADOPT_MEMORY
 VERIFY_GRAPH
 FINALIZE_INSTALLATION
+DETECT_AND_CONFIGURE_VERIFIED_HOST
+RECONNECT_AND_RERUN_IF_CHANGED
 VERIFY_LOCAL_MCP
-CONFIGURE_AND_VERIFY_HOST
+VERIFY_ACTUAL_HOST_PROCESS_BINDING
 PROVE_ROOT_BINDING
 BRIDGE_SESSION
 TENOR_INIT_READY
 ```
 
-Une commande locale `server_entry.py --list-tools` prouve seulement que le serveur MCP local est chargeable. Elle ne prouve jamais que les tools sont visibles par le modèle dans OpenCode, Codex, Cline, Cursor ou un autre host.
+Une commande locale `server_entry.py --list-tools` ou un JSON-RPC lancé manuellement au shell prouve seulement que le serveur MCP local est chargeable. Elle ne prouve jamais que les tools sont visibles par le modèle dans OpenCode, Codex, Cline, Cursor ou un autre host.
+
+La copie brute et complète de `.agent/` dans un autre projet est un chemin d'installation obligatoire sur Linux, macOS et Windows. TENOR détecte la relocation, préserve la mémoire SCRIBE de destination, invalide le binding Graphify copié et reconfigure le host project-local sans dépendre d'un outil de synchronisation.
 
 ## État actuel
 

@@ -22,13 +22,13 @@ L'ancien raccourci `[[.agent/skills/init-tenor/SKILL.md]]` peut être reconnu po
 Pour CI, scripts ou opérateurs humains, la commande peut être appelée directement :
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 Sous Windows :
 
 ```powershell
-python .agent/workflow/scribe/scribe tenor-init --type cli
+py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 `bootstrap` est une primitive interne/legacy. Il ne constitue plus l'entrée publique d'installation, de relocation ou de reprise V2.16.
@@ -44,17 +44,19 @@ python .agent/workflow/scribe/scribe tenor-init --type cli
 
 Le but est qu'un petit modèle discipliné bénéficie de réflexes durables sans lire toute la codebase ni oublier les cicatrices du projet.
 
+La copie brute et complète de `.agent/` dans n'importe quel projet compatible Linux, macOS ou Windows est un chemin d'installation obligatoire. Au premier TENOR INIT, le root courant, le manifest copié, la mémoire SCRIBE de destination et le fingerprint Graphify décident séparément s'il faut adopter, créer, purger l'ancien runtime ou reconstruire le graphe. Aucun outil de synchronisation externe n'est requis pour rendre cette copie portable.
+
 ## Invariants non négociables
 
 1. Le manifest d'installation et le root courant décident de l'identité du projet avant SCRIBE.
-1b. Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` est strictement en lecture seule des fichiers suivis : l'installateur forcé n'est jamais appelé et aucun `AGENTS.md` / `.agent/rules/scribe.md` / `.graphifyignore` / `.agent/.gitignore` n'est réécrit ; la réparation du bundle reste explicite (`scribe install --force`). `NEW_INSTALLATION` / `RELOCATED_PROJECT` / `LEGACY_INSTALLATION` conservent l'installation du bundle.
+1b. Sur `TENOR_INIT_SAME_PROJECT`, `bootstrap_project()` ne répare jamais le bundle : aucun `AGENTS.md` / `.agent/rules/scribe.md` / `.graphifyignore` / `.agent/.gitignore` n'est réécrit. TENOR peut uniquement créer ou mettre à jour l'entrée MCP project-local vérifiée du host détecté et son reçu `.agent/state/install/host-binding.json`; la réparation du bundle reste explicite (`scribe install --force`).
 2. `AGENT-MEMOIRE_PROJECT_STATUS.scribe` ne décide jamais si un projet est nouveau.
 3. Une relocation purge uniquement l'état copié lié à l'ancien root et conserve la mémoire canonique de la destination.
 4. `server_entry.py` ne purge ni n'initialise ; il retourne `TENOR_INIT_REQUIRED` tant que l'installation locale n'est pas finalisée.
 5. Un fichier Graphify présent n'est pas une preuve : le graphe doit être parseable, non-stub, lié au root et au fingerprint courants.
 6. Le schéma Graphify réel NetworkX utilise `nodes + links`; le format historique supporté utilise `nodes + edges`. Toute autre représentation doit être explicitement reconnue ou refusée.
 7. Une requête SCRIBE ou Graphify doit modifier le plan ou produire une contradiction auditable.
-8. Chaque terminal reçoit une session, un proof token et des leases distincts.
+8. Chaque terminal reçoit une session, une preuve serveur one-shot et des leases distincts. Le bearer token complet n'est ni imprimé ni persisté.
 9. Aucune écriture produit directe : locks, claims, lease, patch queue, audit et clôture MCP sont obligatoires.
 10. Une réponse prose « terminé » sans preuve terminale MCP n'est pas une fin.
 
@@ -63,7 +65,7 @@ Le but est qu'un petit modèle discipliné bénéficie de réflexes durables san
 Depuis le root qui contient `.agent/` :
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type cli
+.agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
 La commande doit émettre rapidement :
@@ -117,7 +119,7 @@ Pour une codebase très importante, le timeout peut être augmenté explicitemen
 Après succès local :
 
 ```bash
-python .agent/mcp/server_entry.py --list-tools
+python3 .agent/mcp/server_entry.py --list-tools
 ```
 
 Cette commande prouve seulement :
@@ -154,7 +156,9 @@ graphify_required_check
 
 # PHASE 3 — ADAPTATEUR DU HOST
 
-Détecter le host réel : OpenCode, Codex CLI, Claude Code, Cursor, Cline, VS Code/Copilot, Gemini CLI, Roo, Kilo, Windsurf ou unknown.
+TENOR détecte le host avec l'ordre d'autorité suivant : `--host` explicite, environnement du host, puis marqueur project-local non ambigu. Utiliser l'identifiant réel (`--host opencode`, `--host claude-code`, `--host codex-cli`) dès qu'il est connu ; `auto` échoue fermé si aucun host ou plusieurs hosts sont détectés.
+
+La configuration automatique project-local est vérifiée uniquement pour OpenCode (`opencode.jsonc`), Claude Code (`.mcp.json`) et Codex (`.codex/config.toml`). Pour Cursor, Cline, VS Code/Copilot, Gemini CLI, Roo, Kilo, Windsurf ou un host inconnu, TENOR s'arrête sur la fiche exacte au lieu d'inventer une configuration.
 
 Lire la fiche correspondante sous `.agent/docs/hosts/`. Ne jamais appliquer la configuration d'un host à un autre ni inventer un fichier de configuration.
 
@@ -166,9 +170,11 @@ Règles :
 - signaler tout redémarrage/reconnexion nécessaire ;
 - Chrome/DevTools n'est ajouté que si le host ou la tâche le requiert.
 
+Après une création ou modification de configuration, TENOR retourne `HOST_RECONNECT_REQUIRED` sans émettre de preuve de session. Redémarrer/reconnecter le host, puis relancer TENOR INIT depuis l'interface réelle du host.
+
 # PHASE 4 — VISIBILITÉ HOST ET ROOT BINDING
 
-Vérifier dans l'interface réelle du host que les tools MCP sont directement appelables par le modèle.
+Vérifier dans l'interface réelle du host que les tools MCP sont directement appelables par le modèle. Un `--list-tools` ou un appel JSON-RPC lancé manuellement depuis un shell ne constitue jamais cette preuve.
 
 Si cette preuve manque :
 
@@ -189,14 +195,13 @@ INIT_BLOCKED_MCP_WRONG_ROOT
 
 # PHASE 5 — BRIDGE DE SESSION
 
-Chaque terminal utilise l'`Agent session` et le `Proof token` émis par TENOR INIT, puis appelle :
+Depuis le processus MCP réellement lancé par la configuration du host, chaque terminal utilise son `Agent session` puis appelle :
 
 ```text
 tenor_init_bridge(
   agent_session_id="<Agent session>",
   host_tool="<host>",
-  model_name="<modèle>",
-  proof_token="<Proof token>"
+  model_name="<modèle>"
 )
 ```
 
@@ -206,7 +211,9 @@ Résultat attendu :
 TENOR_INIT_BRIDGE_OK
 ```
 
-Six terminaux partagent runtime SQLite, SCRIBE, Graphify, claims, locks et patch queue, mais ne partagent jamais identité, proof ou lease.
+Le serveur consomme atomiquement la preuve one-shot correspondante sans exposer de bearer token. Une compatibilité explicite avec l'ancien paramètre `proof_token` reste acceptée, mais ce n'est plus le chemin canonique.
+
+Six terminaux partagent runtime SQLite, SCRIBE, Graphify, claims, locks et patch queue, mais ne partagent jamais identité, preuve ou lease.
 
 # PHASE 6 — SUCCÈS TERMINAL
 
@@ -219,7 +226,7 @@ Graphify readiness verdict
 MCP local server ready
 MCP tools visible to host LLM
 MCP root binding
-Agent session bridged
+Agent session bridged (scope MCP_BRIDGE_ONLY)
 Active agents/claims/locks
 Next action
 ```
@@ -273,6 +280,7 @@ Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision p
 - interroger SCRIBE puis ignorer le résultat
 - écrire via shell/Edit/write_file/apply_patch natif hors MCP
 - utiliser la lease, le proof ou le claim d'un autre agent
+- présenter un shell JSON-RPC comme preuve de visibilité host
 - supprimer le lock d'un propriétaire vivant
 - déclarer terminé sans finish_task et READY_FOR_NEXT_TASK
 ```

@@ -16,7 +16,7 @@
     "direct_cli_allowed_for_ci_scripts_and_humans": true,
     "bootstrap_is_internal_or_legacy": true,
     "bootstrap_must_not_bypass_tenor_init": true,
-    "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>"
+    "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>"
   },
   "authority_order": [
     "resolve_current_project_root",
@@ -27,6 +27,8 @@
     "adopt_or_create_current_project_scribe",
     "verify_or_build_project_bound_graphify",
     "finalize_local_installation",
+    "detect_and_configure_verified_project_local_host",
+    "require_host_reconnect_when_configuration_changes",
     "list_local_mcp_tools",
     "resolve_host_adapter",
     "verify_tools_visible_to_host_llm",
@@ -35,10 +37,10 @@
     "report_TENOR_INIT_READY"
   ],
   "tenor_init_commands": {
-    "cli": ".agent/workflow/scribe/scribe tenor-init --type cli",
-    "extension": ".agent/workflow/scribe/scribe tenor-init --type extension",
-    "api": ".agent/workflow/scribe/scribe tenor-init --type api",
-    "windows_python": "python .agent/workflow/scribe/scribe tenor-init --type cli",
+    "cli": ".agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>",
+    "extension": ".agent/workflow/scribe/scribe tenor-init --type extension --host <host-id|auto>",
+    "api": ".agent/workflow/scribe/scribe tenor-init --type api --host <host-id|auto>",
+    "windows_python": "py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>",
     "graphify_build": ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
   },
   "installation_classifications": [
@@ -82,7 +84,7 @@
     "graphify_required_check"
   ],
   "same_project_session_invariant": {
-    "statement": "SAME_PROJECT session init is tracked-file read-only; bundle repair is explicit.",
+    "statement": "SAME_PROJECT session init does not repair the bundle; it may manage only the verified project-local MCP entry and its host-binding receipt.",
     "tracked_files_read_only": true,
     "forced_installer_skipped_on_same_project": true,
     "agent_gitignore_skipped_on_same_project": true,
@@ -90,6 +92,7 @@
     "bundle_repair_command": "scribe install --force",
     "allowed_runtime_mutations": [
       ".agent/state presences/locks/proof_store/runtime_reports/manifests",
+      "the exact verified project-local MCP entry and .agent/state/install/host-binding.json",
       "Graphify placeholder when no application code is present"
     ],
     "new_relocated_legacy_installation_keep_bundle_install": true
@@ -122,7 +125,8 @@
     "not_ready_exit_code": 78,
     "not_ready_verdict": "TENOR_INIT_REQUIRED",
     "must_not_retry_as_transient_failure": true,
-    "next_action": ".agent/workflow/scribe/scribe tenor-init --type cli",
+    "next_action_is_structured_argv_using_current_interpreter": true,
+    "bare_python_on_posix_forbidden": true,
     "list_tools_proves_only_local_server": true,
     "list_tools_does_not_prove_host_visibility": true
   },
@@ -213,7 +217,7 @@
     "shared bootstrap is serialized by an owned nonce lock",
     "fresh partial lock age falls back to filesystem mtime",
     "same project never purges active shared runtime",
-    "each agent uses a distinct agent_id and proof token",
+    "each agent uses a distinct agent_id and server-side one-time proof",
     "reads are concurrent",
     "writes require resource lock, claim, action lease and patch queue",
     "one agent cannot use another agent proof lease claim or lock",
@@ -250,10 +254,19 @@
   },
   "host_mcp_preflight": {
     "local_tenor_init_must_run_first": true,
+    "raw_copy_of_complete_agent_directory_is_mandatory_supported_input": true,
+    "automatic_project_local_configuration_verified_for": [
+      "OpenCode",
+      "Claude Code",
+      "Codex CLI"
+    ],
+    "other_or_ambiguous_hosts_fail_closed_to_exact_guide": true,
+    "configuration_change_requires_reconnect_and_fresh_tenor_init": true,
     "local_server_check_after_init": {
-      "command": "python .agent/mcp/server_entry.py --list-tools",
+      "command_posix": "python3 .agent/mcp/server_entry.py --list-tools",
+      "command_windows": "py -3 .agent/mcp/server_entry.py --list-tools",
       "meaning": "proves only that the project-local MCP server can start and list tools",
-      "does_not_prove": "tools are visible in the host LLM interface"
+      "does_not_prove": "tools are visible in the host LLM interface; shell JSON-RPC is not a host proof"
     },
     "host_visibility_check": {
       "must_be_verified_in_real_host_interface": true,
@@ -265,14 +278,27 @@
       "requires_host_and_mcp_sentinel_hash_match": true,
       "wrong_root_status": "INIT_BLOCKED_MCP_WRONG_ROOT"
     },
+    "host_process_binding": {
+      "requires_project_local_config_environment": true,
+      "requires_binding_manifest_match": true,
+      "requires_config_hash_match": true,
+      "ordinary_shell_process_fails_closed": true
+    },
+    "session_proof": {
+      "server_side_one_time": true,
+      "full_bearer_token_must_not_be_printed_or_persisted": true,
+      "consumption_is_atomic": true
+    },
     "when_tools_visible_and_root_bound": {
       "run_tenor_init_bridge": true,
       "required_bridge_verdict": "TENOR_INIT_BRIDGE_OK",
+      "bridge_scope": "MCP_BRIDGE_ONLY",
       "final_status": "TENOR_INIT_READY"
     }
   },
   "host_adapter_resolution": {
     "prefer_workspace_local_configuration": true,
+    "explicit_host_identity_precedes_environment_then_unambiguous_project_marker": true,
     "global_or_user_config_requires_explicit_permission": true,
     "absolute_path_to_another_project_forbidden": true,
     "restart_requirement_must_be_reported": true,
@@ -339,7 +365,7 @@
     "MCP root binding",
     "Host guide",
     "Agent session",
-    "Proof token",
+    "Server-side one-time proof receipt",
     "Active agents",
     "Active claims and locks",
     "Init status",

@@ -27,6 +27,14 @@ def copy_agent_bundle(target: Path) -> None:
     )
 
 
+def run_tenor_init(root: Path) -> subprocess.CompletedProcess[str]:
+    command = [".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli", "--host", "opencode"]
+    first = run_command(command, root)
+    if first.returncode == 76:
+        return run_command(command, root)
+    return first
+
+
 class TenorInitOutputHygieneTests(unittest.TestCase):
     def assert_root_outputs_absent(self, root: Path) -> None:
         self.assertFalse((root / "scribe-out").exists(), "root scribe-out must not remain")
@@ -37,8 +45,14 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             root = Path(tmp)
             copy_agent_bundle(root)
 
-            tenor_init = run_command([".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"], root)
+            tenor_init = run_tenor_init(root)
             self.assertEqual(tenor_init.returncode, 0, tenor_init.stderr + tenor_init.stdout)
+            self.assertIn("Proof receipt        : SERVER_SIDE_ONE_TIME_READY", tenor_init.stdout)
+            self.assertIn("Status init          : LOCAL_VALID_HOST_UNBOUND", tenor_init.stdout)
+            self.assertIn("MCP local server     : READY", tenor_init.stdout)
+            self.assertIn("Init status          : LOCAL_INIT_READY_HOST_MCP_UNBOUND", tenor_init.stdout)
+            self.assertNotIn("Proof token", tenor_init.stdout + tenor_init.stderr)
+            self.assertNotIn("v1.", tenor_init.stdout + tenor_init.stderr)
             self.assert_root_outputs_absent(root)
 
             scribe_out = root / ".agent" / "state" / "outputs" / "scribe-out"
@@ -63,7 +77,7 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             (legacy_scribe / "legacy-note.txt").write_text("keep me\n", encoding="utf-8")
             (legacy_graphify / "legacy-graph.json").write_text("{}\n", encoding="utf-8")
 
-            tenor_init = run_command([".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"], root)
+            tenor_init = run_tenor_init(root)
             self.assertEqual(tenor_init.returncode, 0, tenor_init.stderr + tenor_init.stdout)
             self.assert_root_outputs_absent(root)
 
@@ -100,7 +114,7 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             (root / "scribe-out").symlink_to(outside, target_is_directory=True)
             (root / "graphify-out").symlink_to(outside, target_is_directory=True)
 
-            tenor_init = run_command([".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"], root)
+            tenor_init = run_tenor_init(root)
             self.assertEqual(tenor_init.returncode, 0, tenor_init.stderr + tenor_init.stdout)
             self.assertTrue((root / "scribe-out").is_symlink())
             self.assertTrue((root / "graphify-out").is_symlink())
@@ -118,7 +132,7 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             legacy.mkdir()
             (legacy / "same.txt").write_text("legacy\n", encoding="utf-8")
 
-            tenor_init = run_command([".agent/workflow/scribe/scribe", "tenor-init", "--type", "cli"], root)
+            tenor_init = run_tenor_init(root)
             self.assertEqual(tenor_init.returncode, 0, tenor_init.stderr + tenor_init.stdout)
             self.assertFalse(legacy.exists())
             self.assertEqual((canonical / "same.txt").read_text(encoding="utf-8"), "canonical\n")

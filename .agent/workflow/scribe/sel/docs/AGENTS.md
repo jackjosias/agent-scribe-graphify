@@ -13,7 +13,7 @@ TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
 Mechanical command:
 
 ```bash
-.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
+.agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>
 ```
 
 `tenor-init` is the only public V2.16 installation/relocation/recovery authority. `bootstrap` is internal/legacy and may not be presented as the normal start.
@@ -50,7 +50,7 @@ The local server is non-destructive and returns exit code `78` with `TENOR_INIT_
 
 ## Host gate
 
-`python .agent/mcp/server_entry.py --list-tools` proves only local server readiness.
+`python3 .agent/mcp/server_entry.py --list-tools` and shell JSON-RPC prove only local server readiness.
 
 Before `TENOR_INIT_READY`, a real host must prove:
 
@@ -210,7 +210,7 @@ Bundle changes require:
 
 ```bash
 $SCRIBE_RAG gate
-python .agent/scripts/validation_suite.py
+python3 .agent/scripts/validation_suite.py
 git diff --check
 ```
 
