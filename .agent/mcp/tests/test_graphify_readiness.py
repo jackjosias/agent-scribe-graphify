@@ -257,6 +257,25 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         self.assertEqual(len(data["marker"]), 4096)
         orphans = [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
         self.assertEqual(orphans, [])
+        self.assertFalse(target.with_name(f".{target.name}.publish.lock").exists())
+
+    def test_atomic_replace_permission_retry_is_bounded(self) -> None:
+        attempts = 0
+
+        def always_denied(_src: str, _dst: str) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise PermissionError("sharing violation")
+
+        with mock.patch.object(os, "replace", always_denied), mock.patch.object(
+            time,
+            "sleep",
+        ) as sleeper:
+            with self.assertRaises(PermissionError):
+                readiness._atomic_replace("source.tmp", Path("destination.json"))
+        self.assertEqual(attempts, 10)
+        self.assertEqual(sleeper.call_count, 9)
+        self.assertTrue(all(call.args[0] <= 0.25 for call in sleeper.call_args_list))
 
     def test_write_doc_atomic_uses_exclusive_sibling_temp(self) -> None:
         target = self.root / "GRAPHIFY_INSTALL_GUIDE.md"

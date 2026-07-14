@@ -19,6 +19,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 from runtime import graphify_readiness, installation_state
+from _strict_cleanup import remove_tree_strict
 
 
 class StableAgentIdentityTest(unittest.TestCase):
@@ -47,6 +48,7 @@ class StableAgentIdentityTest(unittest.TestCase):
         self.assertTrue(fixture["ok"], fixture)
 
     def tearDown(self) -> None:
+        remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
 
     def call(self, tool: str, **args: object) -> dict[str, object]:

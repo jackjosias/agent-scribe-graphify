@@ -24,6 +24,7 @@ for path in (MCP_DIR, AGENT_DIR):
 
 from host_adapter import host_config
 from runtime import db, graphify_readiness, installation_state
+from _strict_cleanup import remove_tree_strict
 from unittest.mock import patch
 
 
@@ -68,6 +69,7 @@ class V216TerrainEnforcementTest(unittest.TestCase):
         self.assertEqual(registered["verdict"], "AGENT_REGISTERED", registered)
 
     def tearDown(self) -> None:
+        remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
 
     def call(self, tool: str, *, env: dict[str, str] | None = None, **args: object) -> dict[str, Any]:

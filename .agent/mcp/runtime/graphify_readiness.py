@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 try:
+    from .owned_file_lock import owned_file_lock
     from .state_paths import prepare_state_dirs
 except ImportError:
+    from owned_file_lock import owned_file_lock  # type: ignore
     from state_paths import prepare_state_dirs  # type: ignore
 
 MANIFEST_SCHEMA = "graphify_readiness_v1"
@@ -106,14 +108,14 @@ def _atomic_replace(src: str, dst: Path) -> None:
     re-raise. We never silently fall back to a non-atomic direct write.
     """
     last_exc: OSError | None = None
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             os.replace(src, str(dst))
             return
         except PermissionError as exc:
             last_exc = exc
-            if attempt < 4:
-                time.sleep(0.01 * (2 ** attempt))
+            if attempt < 9:
+                time.sleep(min(0.25, 0.01 * (2 ** attempt)))
                 continue
             raise
     if last_exc is not None:
@@ -122,20 +124,31 @@ def _atomic_replace(src: str, dst: Path) -> None:
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        _atomic_replace(temporary, path)
-    finally:
+    lock_path = path.with_name(f".{path.name}.publish.lock")
+    with owned_file_lock(
+        lock_path,
+        purpose=f"graphify-json-publish:{path.name}",
+        timeout_seconds=30.0,
+        stale_after_seconds=120.0,
+    ):
+        fd, temporary = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        )
         try:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        except OSError:
-            pass
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            _atomic_replace(temporary, path)
+        finally:
+            try:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def _iter_source_files(root: Path, max_files: int) -> tuple[list[tuple[str, int, int]], bool]:

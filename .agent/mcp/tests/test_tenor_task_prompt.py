@@ -18,6 +18,7 @@ if str(AGENT_DIR) not in sys.path:
 
 import server_ext as mcp
 from host_adapter import tenor_task_prompt as ttp
+from _strict_cleanup import remove_tree_strict
 
 
 def _json_payload(result: dict[str, Any]) -> dict[str, Any]:
@@ -355,9 +356,8 @@ class TestE2ERealRuntime(unittest.TestCase):
         }
 
     def tearDown(self) -> None:
-        import shutil
         if self._tmpdir and self._tmpdir.exists():
-            shutil.rmtree(str(self._tmpdir))
+            remove_tree_strict(self._tmpdir)
 
     def test_e2e_tool_listed(self) -> None:
         import subprocess
