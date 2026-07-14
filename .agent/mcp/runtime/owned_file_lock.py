@@ -4,6 +4,7 @@ import json
 import math
 import os
 import socket
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -16,6 +17,53 @@ class OwnedFileLockTimeout(TimeoutError):
         super().__init__(f"timed out waiting for owned lock: {path}")
         self.path = path
         self.owner = owner
+
+
+class OwnedFileLockReleaseError(RuntimeError):
+    def __init__(self, path: Path, owner: dict[str, Any]) -> None:
+        super().__init__(f"failed to release owned lock: {path}")
+        self.path = path
+        self.owner = owner
+
+
+_THREAD_LOCKS_GUARD = threading.Lock()
+_THREAD_LOCKS: dict[str, tuple[threading.Lock, int]] = {}
+
+
+def _thread_lock_key(path: Path) -> str:
+    return os.path.normcase(str(path.absolute()))
+
+
+def _retain_thread_lock(path: Path) -> tuple[str, threading.Lock]:
+    key = _thread_lock_key(path)
+    with _THREAD_LOCKS_GUARD:
+        current = _THREAD_LOCKS.get(key)
+        if current is None:
+            lock = threading.Lock()
+            _THREAD_LOCKS[key] = (lock, 1)
+        else:
+            lock, references = current
+            _THREAD_LOCKS[key] = (lock, references + 1)
+    return key, lock
+
+
+def _drop_thread_lock(key: str, lock: threading.Lock, *, acquired: bool) -> None:
+    if acquired:
+        lock.release()
+    with _THREAD_LOCKS_GUARD:
+        current = _THREAD_LOCKS.get(key)
+        if current is None or current[0] is not lock:
+            raise RuntimeError(f"owned lock registry corruption: {key}")
+        references = current[1] - 1
+        if references == 0:
+            del _THREAD_LOCKS[key]
+        else:
+            _THREAD_LOCKS[key] = (lock, references)
+
+
+def _thread_lock_registry_size() -> int:
+    with _THREAD_LOCKS_GUARD:
+        return len(_THREAD_LOCKS)
 
 
 def _read_lock(path: Path) -> dict[str, Any]:
@@ -109,31 +157,38 @@ def _is_stale(path: Path, payload: dict[str, Any], stale_after_seconds: float) -
     return not _pid_is_alive(payload.get("pid"))
 
 
-def _remove_exact_lock(path: Path, observed: dict[str, Any]) -> bool:
+def _remove_exact_lock(path: Path, observed: dict[str, Any], *, attempts: int = 10) -> bool:
     expected_nonce = str(observed.get("nonce") or "")
-    if expected_nonce:
-        current = _read_lock(path)
-        if str(current.get("nonce") or "") != expected_nonce:
-            return False
-    else:
+    maximum = max(1, min(int(attempts), 100))
+    for attempt in range(maximum):
+        if expected_nonce:
+            current = _read_lock(path)
+            if str(current.get("nonce") or "") != expected_nonce:
+                return False
+        else:
+            try:
+                before = path.stat()
+            except FileNotFoundError:
+                return False
+            current = _read_lock(path)
+            try:
+                after = path.stat()
+            except FileNotFoundError:
+                return False
+            if current or (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                return False
         try:
-            before = path.stat()
+            path.unlink()
+            return True
         except FileNotFoundError:
             return False
-        current = _read_lock(path)
-        try:
-            after = path.stat()
-        except FileNotFoundError:
+        except PermissionError:
+            if attempt + 1 >= maximum:
+                return False
+            time.sleep(min(0.25, 0.01 * (2 ** attempt)))
+        except OSError:
             return False
-        if current or (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
-            return False
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return False
-    except OSError:
-        return False
-    return True
+    return False
 
 
 @contextmanager
@@ -160,30 +215,53 @@ def owned_file_lock(
         "created_epoch": time.time(),
     }
     encoded = (json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-
-    while True:
-        try:
-            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        except FileExistsError:
-            owner = _read_lock(lock_path)
-            if _is_stale(lock_path, owner, stale_after_seconds) and _remove_exact_lock(lock_path, owner):
-                continue
-            if time.monotonic() >= deadline:
-                raise OwnedFileLockTimeout(lock_path, owner)
-            time.sleep(max(0.005, poll_seconds))
-            continue
-
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-        except Exception:
-            _remove_exact_lock(lock_path, payload)
-            raise
-        break
-
+    thread_key, thread_lock = _retain_thread_lock(lock_path)
+    thread_acquired = False
+    file_acquired = False
+    body_error: BaseException | None = None
     try:
-        yield payload
+        remaining = max(0.0, deadline - time.monotonic())
+        if remaining == 0.0:
+            thread_acquired = thread_lock.acquire(blocking=False)
+        else:
+            thread_acquired = thread_lock.acquire(timeout=remaining)
+        if not thread_acquired:
+            raise OwnedFileLockTimeout(lock_path, _read_lock(lock_path))
+
+        while True:
+            try:
+                descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                owner = _read_lock(lock_path)
+                if _is_stale(lock_path, owner, stale_after_seconds) and _remove_exact_lock(lock_path, owner):
+                    continue
+                if time.monotonic() >= deadline:
+                    raise OwnedFileLockTimeout(lock_path, owner)
+                time.sleep(max(0.005, poll_seconds))
+                continue
+
+            try:
+                with os.fdopen(descriptor, "wb") as handle:
+                    handle.write(encoded)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except Exception:
+                _remove_exact_lock(lock_path, payload)
+                raise
+            file_acquired = True
+            break
+
+        try:
+            yield payload
+        except BaseException as exc:
+            body_error = exc
+            raise
     finally:
-        _remove_exact_lock(lock_path, payload)
+        release_error: OwnedFileLockReleaseError | None = None
+        if file_acquired:
+            released = _remove_exact_lock(lock_path, payload)
+            if not released and body_error is None:
+                release_error = OwnedFileLockReleaseError(lock_path, payload)
+        _drop_thread_lock(thread_key, thread_lock, acquired=thread_acquired)
+        if release_error is not None:
+            raise release_error

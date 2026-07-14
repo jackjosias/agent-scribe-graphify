@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -153,8 +154,9 @@ class StableAgentIdentityTest(unittest.TestCase):
     def test_abandoned_agent_still_becomes_idle_after_timeout(self) -> None:
         self.register("agent-a")
         db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
-        with sqlite3.connect(str(db_path)) as con:
-            con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (int(time.time()) - 901, "agent-a"))
+        with closing(sqlite3.connect(str(db_path))) as con:
+            with con:
+                con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (int(time.time()) - 901, "agent-a"))
         agents = self.call("list_agents")
         match = [agent for agent in agents["agents"] if agent["agent_id"] == "agent-a"]
         self.assertEqual(match[0]["status"], "idle", agents)
@@ -172,11 +174,12 @@ class StableAgentIdentityTest(unittest.TestCase):
         self.register("agent-a")
         db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
         stale_seen = int(time.time()) - 300
-        with sqlite3.connect(str(db_path)) as con:
-            con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (stale_seen, "agent-a"))
+        with closing(sqlite3.connect(str(db_path))) as con:
+            with con:
+                con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (stale_seen, "agent-a"))
         result = self.call("before_task", agent_id="agent-a", request="edit readme", intent="write", resource="README.md")
         self.assertEqual(result["verdict"], "BEFORE_TASK_OK", result)
-        with sqlite3.connect(str(db_path)) as con:
+        with closing(sqlite3.connect(str(db_path))) as con:
             last_seen = con.execute("SELECT last_seen FROM agents WHERE agent_id=?", ("agent-a",)).fetchone()[0]
         self.assertGreaterEqual(int(last_seen), int(time.time()) - 5)
 

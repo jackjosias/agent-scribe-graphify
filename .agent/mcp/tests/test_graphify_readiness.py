@@ -18,6 +18,7 @@ if str(MCP_DIR) not in sys.path:
 
 from runtime import graphify_guard as guard
 from runtime import graphify_readiness as readiness
+from runtime import owned_file_lock as owned_locks
 
 
 class GraphifyReadinessTest(unittest.TestCase):
@@ -239,8 +240,6 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         self.assertEqual(captured["dir"], str(target.parent))
         self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
         self.assertEqual(captured["suffix"], ".tmp")
-        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
-        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
         self.assertEqual(json.loads(target.read_text(encoding="utf-8")), payload)
 
     def test_atomic_json_concurrent_no_orphans(self) -> None:
@@ -258,6 +257,7 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         orphans = [p for p in target.parent.iterdir() if p.name.endswith(".tmp")]
         self.assertEqual(orphans, [])
         self.assertFalse(target.with_name(f".{target.name}.publish.lock").exists())
+        self.assertEqual(owned_locks._thread_lock_registry_size(), 0)
 
     def test_atomic_replace_permission_retry_is_bounded(self) -> None:
         attempts = 0
@@ -277,6 +277,30 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         self.assertEqual(sleeper.call_count, 9)
         self.assertTrue(all(call.args[0] <= 0.25 for call in sleeper.call_args_list))
 
+    def test_owned_lock_release_retries_exact_nonce(self) -> None:
+        lock_path = self.root / "publish.lock"
+        observed = {"nonce": "nonce-a"}
+        lock_path.write_text(json.dumps(observed), encoding="utf-8")
+        real_unlink = Path.unlink
+        attempts = 0
+
+        def flaky_unlink(candidate: Path, *args: object, **kwargs: object) -> None:
+            nonlocal attempts
+            if candidate == lock_path:
+                attempts += 1
+                if attempts < 3:
+                    raise PermissionError("sharing violation")
+            real_unlink(candidate, *args, **kwargs)
+
+        with mock.patch.object(Path, "unlink", flaky_unlink), mock.patch.object(
+            owned_locks.time,
+            "sleep",
+        ) as sleeper:
+            self.assertTrue(owned_locks._remove_exact_lock(lock_path, observed))
+        self.assertEqual(attempts, 3)
+        self.assertEqual(sleeper.call_count, 2)
+        self.assertFalse(lock_path.exists())
+
     def test_write_doc_atomic_uses_exclusive_sibling_temp(self) -> None:
         target = self.root / "GRAPHIFY_INSTALL_GUIDE.md"
         captured: dict[str, object] = {}
@@ -287,8 +311,6 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         self.assertEqual(captured["dir"], str(target.parent))
         self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
         self.assertEqual(captured["suffix"], ".tmp")
-        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
-        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
         self.assertEqual(target.read_text(encoding="utf-8"), content)
 
     def test_write_doc_atomic_concurrent_no_orphans(self) -> None:

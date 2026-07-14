@@ -10,7 +10,7 @@ import tempfile
 import time
 import unittest
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -89,19 +89,20 @@ class V216TerrainEnforcementTest(unittest.TestCase):
     def insert_exclusive_lock(self, *, agent_id: str, task_id: str, resource: str = "one.py") -> None:
         database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
         now = time.time()
-        with sqlite3.connect(database) as connection:
-            connection.execute(
-                "CREATE TABLE IF NOT EXISTS resource_exclusive_locks("
-                "lock_id TEXT PRIMARY KEY,resource TEXT NOT NULL UNIQUE,agent_id TEXT NOT NULL,"
-                "task_id TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'exclusive',created_at REAL NOT NULL,"
-                "expires_at REAL NOT NULL,heartbeat_at REAL NOT NULL)"
-            )
-            connection.execute(
-                "INSERT INTO resource_exclusive_locks("
-                "lock_id,resource,agent_id,task_id,mode,created_at,expires_at,heartbeat_at"
-                ") VALUES(?,?,?,?,?,?,?,?)",
-                (f"lock-{uuid.uuid4().hex}", resource, agent_id, task_id, "exclusive", now, now + 300, now),
-            )
+        with closing(sqlite3.connect(database)) as connection:
+            with connection:
+                connection.execute(
+                    "CREATE TABLE IF NOT EXISTS resource_exclusive_locks("
+                    "lock_id TEXT PRIMARY KEY,resource TEXT NOT NULL UNIQUE,agent_id TEXT NOT NULL,"
+                    "task_id TEXT NOT NULL,mode TEXT NOT NULL DEFAULT 'exclusive',created_at REAL NOT NULL,"
+                    "expires_at REAL NOT NULL,heartbeat_at REAL NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO resource_exclusive_locks("
+                    "lock_id,resource,agent_id,task_id,mode,created_at,expires_at,heartbeat_at"
+                    ") VALUES(?,?,?,?,?,?,?,?)",
+                    (f"lock-{uuid.uuid4().hex}", resource, agent_id, task_id, "exclusive", now, now + 300, now),
+                )
 
     def test_descriptive_intent_is_rejected_before_task_creation(self) -> None:
         result = self.call(
