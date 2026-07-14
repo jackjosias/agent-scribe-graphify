@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +19,55 @@ MCP_DIR = ROOT / ".agent" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime import graphify_readiness, installation_state
+import server_ext as mcp
+from runtime import (
+    db,
+    direct_fs_tripwire,
+    discipline,
+    graphify_readiness,
+    installation_state,
+    patch_queue,
+    task_context,
+)
 from _strict_cleanup import remove_tree_strict
+
+
+_RACE_LAUNCHER = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+mcp_dir = Path(os.environ["MCP_LOCK_RACE_ENTRY"]).resolve().parent
+sys.path.insert(0, str(mcp_dir))
+import server_ext as mcp
+
+barrier = Path(os.environ["MCP_LOCK_RACE_BARRIER"])
+deadline = time.monotonic() + 30.0
+while not barrier.is_file():
+    if time.monotonic() >= deadline:
+        raise SystemExit("race barrier timeout")
+    time.sleep(0.005)
+
+arguments = json.loads(os.environ["MCP_LOCK_RACE_ARGUMENTS"])
+response = mcp.handle({
+    "jsonrpc": "2.0",
+    "id": os.environ["MCP_LOCK_RACE_ID"],
+    "method": "tools/call",
+    "params": {"name": "resource_lock_claim", "arguments": arguments},
+})
+print(json.dumps(response), flush=True)
+"""
 
 
 class MultiAgentResourceLockTest(unittest.TestCase):
     def setUp(self) -> None:
+        self._old_cwd = Path.cwd()
+        self._old_root = mcp.server.ROOT
+        self._old_agent_dir = mcp.server.AGENT_DIR
+        self._old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self._old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "project"
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
@@ -48,24 +92,111 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         fixture = graphify_readiness.write_smoke_fixture(self.root)
         self.assertTrue(fixture["ok"], fixture)
 
+        os.environ.update(self._env)
+        os.chdir(self.root)
+        mcp.server.ROOT = self.root.resolve()
+        mcp.server.AGENT_DIR = self.root / ".agent"
+        importlib.reload(db)
+        importlib.reload(patch_queue)
+        importlib.reload(task_context)
+        importlib.reload(discipline)
+        importlib.reload(direct_fs_tripwire)
+        mcp.db = db
+        mcp.patch_queue = patch_queue
+        mcp.task_context = task_context
+        mcp.discipline = discipline
+        mcp.direct_fs_tripwire = direct_fs_tripwire
+        db.init_db(self.root)
+        discipline.ensure_schema()
+
     def tearDown(self) -> None:
+        os.chdir(self._old_cwd)
+        mcp.server.ROOT = self._old_root
+        mcp.server.AGENT_DIR = self._old_agent_dir
+        if self._old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self._old_root_env
+        if self._old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self._old_fixture_env
         remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
 
+    @staticmethod
+    def _decode_tool_response(raw: dict[str, Any]) -> dict[str, Any]:
+        result = raw.get("result", raw)
+        if "content" in result:
+            return json.loads(result["content"][0]["text"])
+        return result
+
     def call(self, tool: str, **args: object) -> dict[str, Any]:
-        proc = subprocess.run(
-            [sys.executable, str(self.entry), "--call", tool, "--args", json.dumps(args)],
-            cwd=str(self.root),
-            env=self._env,
-            text=True,
-            capture_output=True,
-            timeout=20,
-        )
-        raw_text = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
-        raw = json.loads(raw_text)
-        if "content" in raw:
-            return json.loads(raw["content"][0]["text"])
-        return raw
+        raw = mcp.handle({
+            "jsonrpc": "2.0",
+            "id": f"multi-agent-{tool}",
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": args},
+        })
+        return self._decode_tool_response(raw)
+
+    def race_lock_claims(
+        self,
+        claims: list[tuple[str, dict[str, Any]]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Run lock claims in synchronized, independent Python processes."""
+        barrier = self.root / ".agent" / "state" / "runtime" / f"race-{uuid.uuid4().hex}.start"
+        processes: list[tuple[str, subprocess.Popen[str]]] = []
+        results: list[dict[str, Any]] = []
+        errors: list[str] = []
+        try:
+            for agent_id, arguments in claims:
+                env = {
+                    **self._env,
+                    "MCP_LOCK_RACE_ARGUMENTS": json.dumps(arguments, sort_keys=True),
+                    "MCP_LOCK_RACE_BARRIER": str(barrier),
+                    "MCP_LOCK_RACE_ENTRY": str(self.entry),
+                    "MCP_LOCK_RACE_ID": agent_id,
+                }
+                proc = subprocess.Popen(
+                    [sys.executable, "-c", _RACE_LAUNCHER],
+                    cwd=str(self.root),
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                processes.append((agent_id, proc))
+
+            barrier.write_text("start\n", encoding="utf-8")
+            for agent_id, proc in processes:
+                try:
+                    stdout, stderr = proc.communicate(timeout=45)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    stdout, stderr = proc.communicate(timeout=10)
+                    errors.append(f"{agent_id}: process timeout; stderr={stderr[-1000:]}")
+                    continue
+                if proc.returncode != 0:
+                    errors.append(
+                        f"{agent_id}: exit={proc.returncode}; "
+                        f"stdout={stdout[-1000:]}; stderr={stderr[-1000:]}"
+                    )
+                    continue
+                try:
+                    results.append(self._decode_tool_response(json.loads(stdout)))
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+                    errors.append(f"{agent_id}: invalid response ({exc}); stdout={stdout[-1000:]}")
+        finally:
+            for _agent_id, proc in processes:
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        errors.append(f"{_agent_id}: process could not be reaped")
+            barrier.unlink(missing_ok=True)
+        return results, errors
 
     def register(self, agent_id: str = "lock-agent") -> dict[str, Any]:
         return self.call("register_agent", agent_id=agent_id, host_tool="test", model_name="unit")
@@ -476,36 +607,17 @@ class MultiAgentResourceLockTest(unittest.TestCase):
             "race-agent-b": ctx_b,
         }
 
-        results: list[dict[str, Any]] = []
-        errors: list[str] = []
-        barrier = threading.Barrier(2)
-
-        def race(agent_id: str) -> None:
-            try:
-                ctx = contexts[agent_id]
-                barrier.wait(timeout=10)
-                lock = self.call(
-                    "resource_lock_claim",
-                    agent_id=agent_id,
-                    resource="README.md",
-                    task_id=ctx["task_id"],
-                    context_token=ctx["context_token"],
-                    ttl_seconds=30,
-                )
-                results.append(lock)
-            except Exception as e:
-                errors.append(f"{agent_id}: {e}")
-
-        threads = [
-            threading.Thread(target=race, args=("race-agent-a",)),
-            threading.Thread(target=race, args=("race-agent-b",)),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        self.assertFalse(any(t.is_alive() for t in threads), "lock race worker did not terminate")
+        claims = []
+        for agent_id in ("race-agent-a", "race-agent-b"):
+            ctx = contexts[agent_id]
+            claims.append((agent_id, {
+                "agent_id": agent_id,
+                "resource": "README.md",
+                "task_id": ctx["task_id"],
+                "context_token": ctx["context_token"],
+                "ttl_seconds": 30,
+            }))
+        results, errors = self.race_lock_claims(claims)
 
         self.assertEqual(len(errors), 0, f"errors during lock race: {errors}")
         self.assertEqual(len(results), 2, f"expected 2 lock results, got {results}")
@@ -524,32 +636,22 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         ctx_b = self.ready_write(agent_b)
         for i in range(10):
             with self.subTest(round=i):
-                results: list[dict[str, Any]] = []
-                errors: list[str] = []
-                barrier = threading.Barrier(2)
-
-                def race(agent_id: str, ctx: dict[str, Any]) -> None:
-                    try:
-                        barrier.wait(timeout=10)
-                        lock = self.call("resource_lock_claim", agent_id=agent_id, resource="README.md",
-                                         task_id=ctx["task_id"], context_token=ctx["context_token"],
-                                         ttl_seconds=30)
-                        results.append(lock)
-                    except Exception as e:
-                        errors.append(f"{agent_id}: {e}")
-
-                threads = [
-                    threading.Thread(target=race, args=(agent_a, ctx_a)),
-                    threading.Thread(target=race, args=(agent_b, ctx_b)),
-                ]
-                for t in threads:
-                    t.start()
-                for t in threads:
-                    t.join(timeout=30)
-                self.assertFalse(
-                    any(t.is_alive() for t in threads),
-                    f"round {i}: lock race worker did not terminate",
-                )
+                results, errors = self.race_lock_claims([
+                    (agent_a, {
+                        "agent_id": agent_a,
+                        "resource": "README.md",
+                        "task_id": ctx_a["task_id"],
+                        "context_token": ctx_a["context_token"],
+                        "ttl_seconds": 30,
+                    }),
+                    (agent_b, {
+                        "agent_id": agent_b,
+                        "resource": "README.md",
+                        "task_id": ctx_b["task_id"],
+                        "context_token": ctx_b["context_token"],
+                        "ttl_seconds": 30,
+                    }),
+                ])
                 self.assertEqual(len(errors), 0, f"round {i}: {errors}")
                 self.assertEqual(len(results), 2, f"round {i}: expected 2 results, got {results}")
                 winners = [r for r in results if r.get("ok")]
