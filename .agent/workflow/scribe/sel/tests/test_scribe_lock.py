@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scribe_test_utils import load_script_module
 
@@ -15,6 +16,7 @@ from scribe_test_utils import load_script_module
 scribe_lock = load_script_module("scribe_lock")
 lock_main = getattr(scribe_lock, "main")
 configured_owner_pid = getattr(scribe_lock, "configured_owner_pid")
+pid_exists = getattr(scribe_lock, "pid_exists")
 scribe_workflow_ack = load_script_module("scribe_workflow_ack")
 record_workflow_ack = getattr(scribe_workflow_ack, "record_workflow_ack")
 
@@ -63,6 +65,21 @@ class ScribeLockTests(unittest.TestCase):
         finally:
             if old_owner_pid is not None:
                 os.environ["SCRIBE_OWNER_PID"] = old_owner_pid
+
+    def test_pid_probe_rejects_invalid_pid_and_accepts_current_process(self) -> None:
+        self.assertFalse(pid_exists(0))
+        self.assertFalse(pid_exists(-1))
+        self.assertTrue(pid_exists(os.getpid()))
+
+    def test_windows_pid_probe_never_calls_os_kill(self) -> None:
+        with (
+            mock.patch.object(scribe_lock, "IS_WINDOWS", True),
+            mock.patch.object(scribe_lock, "_windows_pid_exists", return_value=True) as windows_probe,
+            mock.patch.object(scribe_lock.os, "kill", side_effect=AssertionError("os.kill must not run on Windows")),
+        ):
+            self.assertTrue(pid_exists(424242))
+
+        windows_probe.assert_called_once_with(424242)
 
     def test_acquire_status_release_cycle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.isolated_lock_path(Path(tmp)), self.isolated_workflow_ack_path(Path(tmp)):

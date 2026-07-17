@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scribe_lock import configured_lock_path, read_lock, remove_lock, stale_reason
+from scribe_lock import configured_lock_path, pid_exists, read_lock, remove_lock, stale_reason
 from scribe_state import DEFAULT_SCRIBE_PATH, check_sync, print_state_summary
 from scribe_output_paths import scribe_out_dir
 
@@ -99,18 +99,6 @@ def parse_pid(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
-
-
-def pid_exists(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 def presence_path(agent_id: str, root: Path | None = None) -> Path:

@@ -39,6 +39,9 @@ class ScribeIdentityTests(unittest.TestCase):
 
         self.assertEqual(len(ids), 100)
 
+    def test_identity_reuses_canonical_process_probe(self) -> None:
+        self.assertEqual(getattr(scribe_identity, "pid_exists").__module__, "scribe_lock")
+
     def test_write_presence_defaults_to_current_process_pid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.isolated_presence_dir(Path(tmp)):
             presence = write_presence("codex-current", "cli", "idle")

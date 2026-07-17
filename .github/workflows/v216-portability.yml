@@ -141,7 +141,7 @@ jobs:
                   stdout = as_text(exc.stdout)
                   stderr = as_text(exc.stderr) + "\nTEST_TIMEOUT_300S\n"
                   returncode = 124
-              except BaseException:
+              except Exception:
                   stdout = ""
                   stderr = "HARNESS_EXCEPTION\n" + traceback.format_exc()
                   returncode = 125
