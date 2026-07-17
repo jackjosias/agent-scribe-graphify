@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 try:
-    from . import graphify_readiness
+    from . import db, graphify_readiness
     from .state_paths import prepare_state_dirs
 except ImportError:
+    import db  # type: ignore
     import graphify_readiness  # type: ignore
     from state_paths import prepare_state_dirs  # type: ignore
 
@@ -173,14 +174,7 @@ def _drift_event_id(scar_id: str, node_name: str) -> str:
 
 
 def _pid_alive(pid: object) -> bool:
-    try:
-        value = int(pid)
-        os.kill(value, 0)
-        return value > 0
-    except PermissionError:
-        return True
-    except (TypeError, ValueError, OSError):
-        return False
+    return db.process_is_alive(pid)
 
 
 @contextmanager

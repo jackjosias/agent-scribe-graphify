@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 WINDOWS_ABS_RE = re.compile(r"^[A-Za-z]:/")
+IS_WINDOWS = os.name == "nt"
 
 # Bump this whenever a new migration is added to _MIGRATIONS below.
 # Format: "YYYY-MM-DD-NNN" (sortable string = canonical execution order).
@@ -386,6 +387,55 @@ def _pid_grace_seconds() -> int:
     return min(max(value, 900), 604800)
 
 
+def _windows_pid_is_alive(pid: int) -> bool:
+    """Inspect a Windows process without broadcasting a console signal."""
+
+    if pid == os.getpid():
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_access_denied = 5
+        error_invalid_parameter = 87
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+
+        get_exit_code_process = kernel32.GetExitCodeProcess
+        get_exit_code_process.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        get_exit_code_process.restype = wintypes.BOOL
+
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(process_query_limited_information, False, pid)
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == error_invalid_parameter:
+                return False
+            if error == error_access_denied:
+                return True
+            return True
+
+        try:
+            exit_code = wintypes.DWORD()
+            if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            close_handle(handle)
+    except Exception:
+        # Fail closed: an uninspectable process must not lose its coordination
+        # ownership merely because the liveness probe itself is unavailable.
+        return True
+
+
 def process_is_alive(pid: Any) -> bool:
     try:
         value = int(pid)
@@ -393,6 +443,8 @@ def process_is_alive(pid: Any) -> bool:
         return False
     if value <= 0:
         return False
+    if IS_WINDOWS:
+        return _windows_pid_is_alive(value)
     try:
         os.kill(value, 0)
     except ProcessLookupError:
@@ -400,7 +452,7 @@ def process_is_alive(pid: Any) -> bool:
     except PermissionError:
         return True
     except OSError:
-        return False
+        return True
     return True
 
 

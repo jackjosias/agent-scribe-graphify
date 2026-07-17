@@ -38,10 +38,26 @@ for _name in dir(_IMPL_MODULE):
 
 import scribe_bootstrap
 from host_adapter import instructions as host_instructions
-from runtime import task_context
+from runtime import db, graphify_scribe_bridge, task_context
 
 
 class RuntimePolicyPortabilityTest(unittest.TestCase):
+    def test_coordination_windows_pid_probe_never_calls_os_kill(self) -> None:
+        with (
+            mock.patch.object(db, "IS_WINDOWS", True),
+            mock.patch.object(db, "_windows_pid_is_alive", return_value=True) as windows_probe,
+            mock.patch.object(db.os, "kill", side_effect=AssertionError("os.kill must not run on Windows")),
+        ):
+            self.assertTrue(db.process_is_alive(424242))
+
+        windows_probe.assert_called_once_with(424242)
+
+    def test_graphify_bridge_uses_coordination_process_probe(self) -> None:
+        with mock.patch.object(db, "process_is_alive", return_value=False) as process_probe:
+            self.assertFalse(graphify_scribe_bridge._pid_alive(424242))
+
+        process_probe.assert_called_once_with(424242)
+
     def test_read_or_research_is_canonical_read(self) -> None:
         aliases = {
             "read",
