@@ -110,7 +110,11 @@ quatre formes exactes, sans suffixe shell, de TENOR INIT ci-dessus restent
 autorisées afin qu'une nouvelle session puisse obtenir sa preuve et son identité
 stable sur Linux, macOS ou Windows. Les mutations passent par un unique
 `tenor_apply_changeset` atomique multi-fichier ; la reconstruction
-structurelle passe par `graphify_project_build`. Les validateurs sont fournis
+structurelle requise par INIT est exécutée par TENOR lui-même, sous son verrou
+partagé et dans la même commande autorisée. OpenCode ne doit donc ni demander
+la commande Graphify à l'utilisateur, ni appeler `graphify_project_build`, ni
+réessayer avec un timeout différent pendant INIT. Hors INIT, la maintenance
+structurelle explicite peut passer par le tool idempotent `graphify_project_build`. Les validateurs sont fournis
 comme argv bornés au changeset et exécutés sans shell par TENOR.
 
 ## Reconnect requirement

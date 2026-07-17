@@ -737,10 +737,10 @@ def agent_lifecycle_blockers(agent_id: str) -> Dict[str, int]:
     return counts
 
 
-def workspace_mutation_blockers() -> Dict[str, int]:
+def workspace_mutation_blockers(project_root: Optional[Path] = None) -> Dict[str, int]:
     """Count live ownership that makes a whole-project graph rebuild unsafe."""
 
-    init_db()
+    init_db(project_root)
     now = now_ts()
     counts = {
         "active_claims": 0,
@@ -765,7 +765,7 @@ def workspace_mutation_blockers() -> Dict[str, int]:
             (),
         ),
     )
-    with connect() as con:
+    with connect(project_root) as con:
         for key, statement, params in statements:
             try:
                 counts[key] += int(con.execute(statement, params).fetchone()[0])

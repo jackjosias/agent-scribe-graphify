@@ -81,6 +81,15 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
         self.assertNotIn('run_command((rag, "query"', source)
         self.assertNotIn("load_scribe_and_graphify_context", source)
 
+    def test_v216_init_owns_bounded_graphify_recovery(self) -> None:
+        source = (
+            AGENT_ROOT / "workflow" / "scribe" / "sel" / "scripts" / "scribe_tenor_init_v216.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("TENOR_INIT_STAGE rebuild_graphify_single_flight", source)
+        self.assertIn("graphify_build.build_project_graph", source)
+        self.assertIn("lock_held=True", source)
+        self.assertIn("TENOR_INIT_GRAPHIFY_REBUILT", source)
+
     def test_legacy_root_outputs_are_migrated_without_dangerous_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

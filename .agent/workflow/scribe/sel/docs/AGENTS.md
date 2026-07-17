@@ -23,7 +23,7 @@ Mechanical command:
 - Application graph: `.agent/state/outputs/graphify-out/`.
 - SCRIBE bundle graph: `.agent/state/outputs/scribe-out/bundle-graph/`.
 - Root `graphify-out/` is legacy-only.
-- Never run `graphify update .` or `graphify watch` in a portable application project. Use MCP `graphify_project_build` after host binding or the bounded SCRIBE project-build command before binding.
+- Never run `graphify update .` or `graphify watch` in a portable application project. Canonical TENOR INIT owns a required bounded single-flight rebuild; `graphify_project_build` and the SCRIBE project-build command are explicit maintenance surfaces outside that init choreography.
 - Do not mix application and bundle graphs.
 - `.agent/`, `.agents/`, `.codex/`, generated outputs, SCRIBE memory and host-rule surfaces must remain excluded from the application graph where appropriate.
 

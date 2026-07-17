@@ -32,7 +32,7 @@ Pour toute modification de code :
 - envoie tous les fichiers dans un seul tenor_apply_changeset atomique ;
 - fournis le base_hash frais de chaque fichier et des validateurs argv bornes, sans shell ;
 - laisse TENOR preflighter les chemins, hashes et verrous, appliquer, valider, rollback si necessaire, enregistrer SCRIBE et clore la tache ;
-- si Graphify doit etre reconstruit pendant TENOR INIT, appelle graphify_project_build ; n execute jamais graphify update . ;
+- TENOR INIT reconstruit Graphify lui-meme sous verrou partage ; ne lance aucun build/retry manuel et n execute jamais graphify update . ;
 - pour une lecture, termine par tenor_task_control(action="finish") ;
 - utilise tenor_activity pour l etat consolide, pas une suite d appels de diagnostic.
 

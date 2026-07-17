@@ -137,6 +137,8 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertIn("Mode petit modele", result["prompt"])
         self.assertIn("API TENOR compacte", result["prompt"])
         self.assertIn("Aucun Edit/Bash natif", result["prompt"])
+        self.assertIn("TENOR INIT reconstruit Graphify lui-meme", result["prompt"])
+        self.assertNotIn("appelle graphify_project_build", result["prompt"])
 
     def test_large_model_tier_default(self) -> None:
         result = ttp.generate_task_prompt(task="fix auth", model_tier="large")

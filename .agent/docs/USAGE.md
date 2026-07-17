@@ -22,8 +22,9 @@ The mechanical command is:
 On relocation TENOR purges only copied project-bound runtime, preserves the
 destination SCRIBE memory when present, and revalidates preserved Graphify
 output against the new root/fingerprint. If a bounded graph build is required,
-run the exact reported command and rerun TENOR INIT. If host configuration
-changes, reconnect the host and rerun TENOR INIT.
+the same TENOR INIT invocation owns it under the shared lock and continues
+automatically. If host configuration changes, reconnect the host and rerun
+TENOR INIT because the host itself must reload its MCP process.
 
 Do not start product work before `TENOR_INIT_READY`.
 

@@ -34,11 +34,13 @@ Canonical application graph:
 .agent/state/outputs/graphify-out/
 ```
 
-The portable project build is
-`.agent/workflow/scribe/scribe graph --project-build --timeout 180`, or MCP
-`graphify_project_build` after host binding. It builds from an isolated mirror.
-Root `graphify-out/`, `graphify update .` and `graphify watch` are legacy-only
-and forbidden in an application project.
+Canonical TENOR INIT owns the portable bounded project build when readiness is
+missing/stale, serializes it with the shared init lock and continues without a
+new user turn. The explicit maintenance surfaces are
+`.agent/workflow/scribe/scribe graph --project-build --timeout 180` and MCP
+`graphify_project_build`; a host model must not orchestrate them during INIT.
+The build uses an isolated mirror. Root `graphify-out/`, `graphify update .` and
+`graphify watch` are legacy-only and forbidden in an application project.
 
 It answers:
 

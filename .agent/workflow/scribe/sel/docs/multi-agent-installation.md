@@ -67,18 +67,21 @@ Canonical outputs live under:
 
 Real Graphify currently produces NetworkX node-link data with `nodes + links`; the historical supported representation is `nodes + edges`.
 
-The canonical path above is the only application graph authority. A bound host
-rebuilds through `graphify_project_build`; before binding use the bounded
-SCRIBE project-build command. Never run standalone `graphify update .` in the
+The canonical path above is the only application graph authority. Canonical
+TENOR INIT owns any required bounded rebuild while holding the shared init
+lock. Other terminals wait, recheck the fingerprint and reuse the result. They
+must not call `graphify_project_build`, ask the user to run a command or invent
+a larger retry during INIT. Never run standalone `graphify update .` in the
 product root.
 
-If Graphify is not ready, run only the bounded action returned by TENOR INIT:
+The explicit maintenance/CI primitive outside host-driven INIT is:
 
 ```bash
 .agent/workflow/scribe/scribe graph --project-build --timeout 180
 ```
 
-A larger bound may be supplied explicitly for a large codebase. Do not launch hidden or unbounded builds.
+A larger bound may be supplied explicitly by a human maintenance operator for
+a large codebase. Do not launch hidden or unbounded builds.
 
 ## Local MCP gate
 

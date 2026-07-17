@@ -7,9 +7,11 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any
@@ -23,7 +25,7 @@ for path in (MCP_DIR, AGENT_DIR):
         sys.path.insert(0, str(path))
 
 from host_adapter import host_config
-from runtime import db, graphify_readiness, installation_state
+from runtime import db, graphify_build, graphify_readiness, installation_state
 from _strict_cleanup import remove_tree_strict
 from unittest.mock import patch
 
@@ -154,6 +156,98 @@ class V216TerrainEnforcementTest(unittest.TestCase):
         result = self.call("graphify_project_build", timeout_seconds=1)
         self.assertEqual(result["verdict"], "GRAPHIFY_BUILD_ACTIVE_OWNERSHIP", result)
         self.assertGreaterEqual(result["ownership"]["active_resource_locks"], 1, result)
+
+    def test_public_graphify_build_reuses_current_graph(self) -> None:
+        result = self.call("graphify_project_build", timeout_seconds=180)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["verdict"], "GRAPHIFY_ALREADY_READY", result)
+        self.assertFalse(result["rebuilt"], result)
+
+    def test_graphify_build_rejects_unbounded_timeout(self) -> None:
+        result = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=3601,
+            lock_held=True,
+            allow_fixture=True,
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "GRAPHIFY_BUILD_TIMEOUT_INVALID", result)
+
+    def test_graphify_build_is_idempotent_when_current(self) -> None:
+        runner_called = False
+
+        def forbidden_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal runner_called
+            runner_called = True
+            raise AssertionError("a current graph must not be rebuilt")
+
+        result = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=180,
+            lock_held=False,
+            allow_fixture=True,
+            runner=forbidden_runner,
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["verdict"], "GRAPHIFY_ALREADY_READY", result)
+        self.assertFalse(result["rebuilt"], result)
+        self.assertFalse(runner_called)
+
+    def test_concurrent_graphify_build_is_single_flight(self) -> None:
+        output = graphify_readiness.canonical_output_dir(self.root)
+        shutil.rmtree(output)
+        calls = 0
+        calls_lock = threading.Lock()
+
+        def fake_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            time.sleep(0.15)
+            ready = graphify_readiness.write_smoke_fixture(self.root)
+            self.assertTrue(ready["ok"], ready)
+            return subprocess.CompletedProcess(["graphify"], 0, stdout="fixture ready\n")
+
+        def build(_: int) -> dict[str, Any]:
+            return graphify_build.build_project_graph(
+                self.root,
+                timeout_seconds=180,
+                lock_held=False,
+                allow_fixture=True,
+                runner=fake_runner,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(build, range(2)))
+
+        self.assertEqual(calls, 1, results)
+        self.assertTrue(all(result["ok"] for result in results), results)
+        self.assertEqual(
+            {result["verdict"] for result in results},
+            {"GRAPHIFY_PROJECT_BUILD_OK", "GRAPHIFY_ALREADY_READY"},
+        )
+
+    def test_graphify_build_invalidates_result_when_workspace_changes_mid_build(self) -> None:
+        output = graphify_readiness.canonical_output_dir(self.root)
+        shutil.rmtree(output)
+
+        def changing_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            ready = graphify_readiness.write_smoke_fixture(self.root)
+            self.assertTrue(ready["ok"], ready)
+            (self.root / "one.py").write_text("value = 99\n", encoding="utf-8")
+            return subprocess.CompletedProcess(["graphify"], 0, stdout="workspace changed\n")
+
+        result = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=180,
+            lock_held=False,
+            allow_fixture=True,
+            runner=changing_runner,
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "GRAPHIFY_WORKSPACE_CHANGED_DURING_BUILD", result)
+        self.assertTrue(result["manifest_invalidated"], result)
+        self.assertFalse((output / graphify_readiness.MANIFEST_FILENAME).exists())
 
     def test_one_bound_identity_has_only_one_active_task(self) -> None:
         first = self.call(

@@ -143,6 +143,11 @@
     "user_response_before_bridge_forbidden": true,
     "general_rag_queries_during_init_forbidden": true,
     "targeted_scribe_and_graphify_deferred_to": "tenor_task_start",
+    "bounded_graphify_recovery_owned_by_tenor_init": true,
+    "graphify_recovery_timeout_seconds": 180,
+    "graphify_recovery_uses_shared_init_lock": true,
+    "concurrent_waiters_recheck_readiness_before_build": true,
+    "host_model_manual_graphify_build_or_retry_during_init_forbidden": true,
     "allowed_terminal_interruptions": [
       "HOST_RECONNECT_REQUIRED",
       "explicit_fail_closed_verdict"
@@ -184,6 +189,9 @@
     "empty_project_placeholder_allowed_only_while_no_application_code": true,
     "bounded_build_command": ".agent/workflow/scribe/scribe graph --project-build --timeout 180",
     "host_bound_build_tool": "graphify_project_build",
+    "canonical_init_auto_recovers_build_required": true,
+    "build_is_idempotent_single_flight": true,
+    "workspace_change_during_build_invalidates_readiness_manifest": true,
     "build_uses_isolated_source_mirror": true,
     "root_graphify_out_creation_forbidden": true,
     "canonical_output_only": ".agent/state/outputs/graphify-out/"

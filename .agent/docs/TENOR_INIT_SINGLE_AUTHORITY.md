@@ -208,13 +208,22 @@ GRAPHIFY_MANIFEST_INVALID
 
 Smoke fixtures have an explicit scoped lifecycle and are forbidden in terrain TENOR INIT.
 
-Project build is explicit and bounded:
+Project build is bounded and single-flight. On the canonical init path,
+`build_required` is recovered inside the same TENOR INIT invocation while the
+shared init lock is held. Concurrent terminals wait and recheck readiness, so
+only one build executes and no host model asks the user to run a command.
+
+The explicit maintenance/CI primitive remains:
 
 ```bash
 .agent/workflow/scribe/scribe graph --project-build --timeout 180
 ```
 
-TENOR INIT never launches a hidden heavy build. A human may explicitly increase the bound for a large codebase.
+TENOR INIT prints `TENOR_INIT_STAGE rebuild_graphify_single_flight` before the
+build; it is therefore visible, bounded and not hidden. A workspace fingerprint
+change during the build invalidates the readiness manifest instead of blessing
+a stale snapshot. A human may explicitly increase the bound only on the
+maintenance path outside the host-driven init.
 
 ## SCRIBE operational contract
 

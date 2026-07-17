@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import server  # type: ignore
-from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context, direct_fs_tripwire, canonical_memory_gate  # type: ignore
+from runtime import db, delete_ops, discipline, patch_queue, root_hygiene, runtime_backup_retention, scribe_commit_gate, task_context, direct_fs_tripwire, canonical_memory_gate, graphify_build  # type: ignore
 from runtime.resource_locks import preflight_apply_patch as _preflight_lock  # type: ignore
 from runtime.state_paths import prepare_state_dirs  # type: ignore
 try:
@@ -2007,76 +2007,14 @@ def wait_for_tasks(
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 def graphify_project_build(timeout_seconds: int = 180) -> Dict[str, Any]:
-    """Build Graphify through the canonical isolated project wrapper."""
+    """Build Graphify through the canonical idempotent single-flight engine."""
 
-    timeout = int(timeout_seconds)
-    if timeout < 1 or timeout > 3600:
-        return server.ok({
-            "ok": False,
-            "verdict": "GRAPHIFY_BUILD_TIMEOUT_INVALID",
-            "state": "HARD_STOP",
-            "reason": "timeout_seconds must be between 1 and 3600.",
-        })
-    ownership = db.workspace_mutation_blockers()
-    if ownership["total"]:
-        return server.ok({
-            "ok": False,
-            "verdict": "GRAPHIFY_BUILD_ACTIVE_OWNERSHIP",
-            "state": "HARD_STOP",
-            "reason": "Release active product claims before rebuilding the project graph.",
-            "ownership": ownership,
-        })
-    command = [
-        sys.executable,
-        str(server.ROOT / ".agent" / "workflow" / "scribe" / "scribe"),
-        "graph",
-        "--project-build",
-        "--timeout",
-        str(timeout),
-    ]
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(server.ROOT),
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout + 30,
-            check=False,
+    return server.ok(
+        graphify_build.build_project_graph(
+            server.ROOT,
+            timeout_seconds=timeout_seconds,
         )
-    except subprocess.TimeoutExpired as exc:
-        output = exc.stdout if isinstance(exc.stdout, str) else ""
-        return server.ok({
-            "ok": False,
-            "verdict": "GRAPHIFY_BUILD_TIMEOUT",
-            "state": "HARD_STOP",
-            "output": output[-20000:],
-        })
-    output = completed.stdout or ""
-    if completed.returncode != 0:
-        return server.ok({
-            "ok": False,
-            "verdict": "GRAPHIFY_PROJECT_BUILD_FAILED",
-            "state": "HARD_STOP",
-            "returncode": completed.returncode,
-            "output": output[-20000:],
-        })
-    readiness = _gg.graphify_readiness.inspect_graphify_readiness(server.ROOT) if _gg is not None else None
-    if readiness is None or not readiness.ok:
-        return server.ok({
-            "ok": False,
-            "verdict": getattr(readiness, "verdict", "GRAPHIFY_VERIFY_UNAVAILABLE"),
-            "state": "HARD_STOP",
-            "output": output[-20000:],
-            "readiness": readiness.to_dict() if readiness is not None else {},
-        })
-    return server.ok({
-        "ok": True,
-        "verdict": "GRAPHIFY_PROJECT_BUILD_OK",
-        "state": "GRAPHIFY_READY",
-        "output": output[-20000:],
-        "readiness": readiness.to_dict(),
-    })
+    )
 
 
 def _schema_props(base: Dict[str, Any], extra: Dict[str, str]) -> Dict[str, Any]:

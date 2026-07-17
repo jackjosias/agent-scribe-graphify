@@ -26,7 +26,7 @@ if str(_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_ROOT))
 
 from host_adapter import host_config  # noqa: E402
-from runtime import graphify_readiness  # noqa: E402
+from runtime import graphify_build, graphify_readiness  # noqa: E402
 from runtime.tenor_init_orchestrator import (  # noqa: E402
     TENOR_INIT_ALREADY_RUNNING,
     TenorInitBusy,
@@ -47,6 +47,8 @@ _REQUIRED_LOCAL_MCP_TOOLS = {
     "tenor_activity",
     "tenor_task_control",
 }
+_GRAPHIFY_RECOVERY_TIMEOUT_SECONDS = 180
+_TENOR_INIT_WAIT_TIMEOUT_SECONDS = _GRAPHIFY_RECOVERY_TIMEOUT_SECONDS + 90
 
 
 def _flush(message: str) -> None:
@@ -89,7 +91,11 @@ def main() -> int:
     _flush("TENOR_INIT_STAGE acquire_shared_init_lock")
 
     try:
-        with tenor_init_lock(project_root, wait_timeout_seconds=180.0, on_wait=_wait_notice) as acquired_lock:
+        with tenor_init_lock(
+            project_root,
+            wait_timeout_seconds=float(_TENOR_INIT_WAIT_TIMEOUT_SECONDS),
+            on_wait=_wait_notice,
+        ) as acquired_lock:
             lock = refresh_tenor_init_lock(acquired_lock, stage="classify_installation")
             _flush("TENOR_INIT_STAGE classify_installation")
             installation = prepare_tenor_init(project_root)
@@ -119,6 +125,45 @@ def main() -> int:
                 skip_graphify=False,
                 installation_plan=installation,
             )
+            if bootstrap_report.graphify_status == "build_required":
+                lock = refresh_tenor_init_lock(lock, stage="rebuild_graphify_single_flight")
+                _flush(
+                    "TENOR_INIT_STAGE rebuild_graphify_single_flight "
+                    f"timeout={_GRAPHIFY_RECOVERY_TIMEOUT_SECONDS}s"
+                )
+                recovery = graphify_build.build_project_graph(
+                    project_root,
+                    timeout_seconds=_GRAPHIFY_RECOVERY_TIMEOUT_SECONDS,
+                    lock_held=True,
+                    allow_fixture=False,
+                )
+                output = str(recovery.get("output") or "").rstrip()
+                if output:
+                    print(output, flush=True)
+                if not recovery.get("ok"):
+                    print_report(bootstrap_report)
+                    print(
+                        "TENOR_INIT_GRAPHIFY_RECOVERY_FAILED "
+                        f"verdict={recovery.get('verdict')} "
+                        f"reason={recovery.get('reason', '')}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 4
+                _flush(
+                    "TENOR_INIT_GRAPHIFY_REBUILT "
+                    f"verdict={recovery.get('verdict')} "
+                    f"rebuilt={str(bool(recovery.get('rebuilt'))).lower()}"
+                )
+                lock = refresh_tenor_init_lock(lock, stage="revalidate_bootstrap_after_graphify")
+                _flush("TENOR_INIT_STAGE revalidate_bootstrap_after_graphify")
+                bootstrap_report = bootstrap_project(
+                    project_root,
+                    agent=agent_id,
+                    agent_type=args.agent_type,
+                    skip_graphify=False,
+                    installation_plan=installation,
+                )
             print_report(bootstrap_report)
             bootstrap_ok = bootstrap_report.doctor_code == 0 and not bootstrap_report.errors
             if not bootstrap_ok:

@@ -123,9 +123,12 @@ Machine invariants:
 The host sees only four normal task tools. Fine-grained legacy tools remain
 internal compatibility primitives and are not a public workflow.
 
-Graphify is rebuilt with `graphify_project_build` from a bound MCP host, or
-with `.agent/workflow/scribe/scribe graph --project-build --timeout 180` before
-host binding. Both publish only to `.agent/state/outputs/graphify-out/`.
+Canonical TENOR INIT rebuilds missing/stale Graphify itself under the shared
+init lock and continues in the same invocation. Concurrent terminals wait and
+reuse the verified result. `graphify_project_build` and
+`.agent/workflow/scribe/scribe graph --project-build --timeout 180` remain
+explicit maintenance surfaces outside INIT. All paths publish only to
+`.agent/state/outputs/graphify-out/`.
 Standalone `graphify update .` and root `graphify-out/` are forbidden.
 
 ## Multi-agent startup

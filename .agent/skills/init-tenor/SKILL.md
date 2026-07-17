@@ -46,8 +46,9 @@ exécuté dans OpenCode, Codex ou Claude Code.
 Sous OpenCode autonome, le profil project-local refuse tout `edit` natif et
 toute commande shell sauf les formes exactes de cette commande TENOR INIT. Ne
 lui ajoute ni redirection, ni pipe, ni `&&`, ni `;` : un suffixe ferait refuser
-la commande. Les reconstructions Graphify passent ensuite par le tool MCP
-`graphify_project_build`, jamais par un shell global.
+la commande. Si Graphify est stale ou absent, cette même commande TENOR INIT
+possède la reconstruction bornée sous son verrou partagé ; le modèle ne lance
+ni commande, ni tool MCP, ni retry séparé.
 
 `bootstrap` est une primitive interne/legacy. Il ne constitue plus l'entrée publique d'installation, de relocation ou de reprise V2.16.
 
@@ -128,15 +129,20 @@ plus quatre recherches RAG générales qui ralentissaient l'entrée de session.
 
 ## Graphify non prêt
 
-Si TENOR INIT retourne `Graphify: build_required`, exécuter uniquement l'action bornée affichée :
+Si le bootstrap détecte `Graphify: build_required`, TENOR INIT ne rend pas la
+main au petit modèle. Dans la même invocation, il émet
+`TENOR_INIT_STAGE rebuild_graphify_single_flight`, reconstruit le graphe avec
+une borne de 180 secondes sous `.agent/.tenor-init.lock`, revalide le
+fingerprint puis poursuit l'init. Les autres terminaux attendent ce verrou et
+réutilisent le résultat après recontrôle ; ils ne lancent pas un second build.
 
-```bash
-.agent/workflow/scribe/scribe graph --project-build --timeout 180
-```
-
-Puis relancer TENOR INIT. Ne jamais accepter un stub smoke comme graphe terrain et ne jamais déclencher silencieusement un build lourd non borné.
-
-Pour une codebase très importante, le timeout peut être augmenté explicitement par l'opérateur, sans supprimer la borne.
+Le modèle ne doit jamais demander à l'utilisateur de lancer Graphify, appeler
+`graphify_project_build` pendant INIT, ni inventer un retry avec une borne plus
+grande. Un échec réel se termine par
+`TENOR_INIT_GRAPHIFY_RECOVERY_FAILED` avec un verdict machine explicite.
+La commande `scribe graph --project-build` reste une primitive explicite pour
+la maintenance humaine/CI hors du parcours canonique, jamais une étape à
+orchestrer par le LLM hôte.
 
 ## Échecs locaux
 
@@ -310,10 +316,11 @@ idempotents via `request_id`. Toute suppression exige la confirmation exacte
 du chemin. `tenor_activity` fournit l'état consolidé ; `tenor_task_control`
 gère pause/reprise/annulation et la clôture d'une tâche de lecture.
 
-Si Graphify doit être reconstruit après la liaison du host, appeler
-`graphify_project_build(timeout_seconds=180)`. Avant liaison, utiliser seulement
-`.agent/workflow/scribe/scribe graph --project-build --timeout 180`. Ne jamais
-exécuter `graphify update .` ni créer `graphify-out/` à la racine.
+Hors TENOR INIT, un opérateur ou un contrôle de maintenance peut appeler
+`graphify_project_build(timeout_seconds=180)`. Ce tool est idempotent,
+single-flight et refuse les propriétaires produit actifs. Le modèle ne doit
+jamais l'utiliser comme chorégraphie de reprise d'INIT, exécuter
+`graphify update .` ni créer `graphify-out/` à la racine.
 
 Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision pertinente, l'agent indique comment cette entrée modifie son plan. S'il n'existe aucun contexte pertinent, il le dit sans inventer.
 
