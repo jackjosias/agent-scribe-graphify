@@ -141,8 +141,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
     def test_recovery_preserves_live_transaction_and_recovers_dead_owner(self) -> None:
         tenor_changeset.ensure_schema(self.root)
         now = int(time.time())
-        db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
-        with sqlite3.connect(str(db_path)) as con:
+        with db.connect(self.root) as con:
             con.execute(
                 f"INSERT INTO {tenor_changeset.TRANSACTION_TABLE}(changeset_id,request_id,request_fingerprint,task_id,agent_id,owner_pid,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                 ("cs-live", "live-request", "fingerprint", "task-live", "agent-a", os.getpid(), "applying", now, now),
@@ -150,7 +149,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
 
         live = tenor_changeset.recover_incomplete(self.root)
         self.assertEqual(live["recovered"], [])
-        with sqlite3.connect(str(db_path)) as con:
+        with db.connect(self.root) as con:
             status = con.execute(
                 f"SELECT status FROM {tenor_changeset.TRANSACTION_TABLE} WHERE changeset_id='cs-live'"
             ).fetchone()[0]
@@ -162,7 +161,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
 
         dead = tenor_changeset.recover_incomplete(self.root)
         self.assertEqual(dead["recovered"], ["cs-live"])
-        with sqlite3.connect(str(db_path)) as con:
+        with db.connect(self.root) as con:
             status = con.execute(
                 f"SELECT status FROM {tenor_changeset.TRANSACTION_TABLE} WHERE changeset_id='cs-live'"
             ).fetchone()[0]
@@ -171,8 +170,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
     def test_existing_lock_cannot_be_stolen_by_same_agent_and_task(self) -> None:
         tenor_changeset.ensure_schema(self.root)
         now = time.time()
-        db_path = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
-        with sqlite3.connect(str(db_path)) as con:
+        with db.connect(self.root) as con:
             con.execute(
                 f"INSERT INTO {tenor_changeset.LOCK_TABLE}(lock_id,resource,agent_id,task_id,mode,created_at,expires_at,heartbeat_at) VALUES(?,?,?,?,?,?,?,?)",
                 ("changeset-other-owner", "src/a.txt", "agent-a", "task-a", "exclusive", now, now + 600, now),
@@ -182,6 +180,13 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK")
         self.assertEqual(result["cause"], "TENOR_CHANGESET_RESOURCE_BUSY")
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+
+    def test_runtime_database_connection_closes_on_context_exit(self) -> None:
+        with db.connect(self.root) as con:
+            self.assertEqual(con.execute("SELECT 1").fetchone()[0], 1)
+
+        with self.assertRaises(sqlite3.ProgrammingError):
+            con.execute("SELECT 1")
 
     def test_create_and_delete_require_explicit_operations_and_confirmation(self) -> None:
         create = {
