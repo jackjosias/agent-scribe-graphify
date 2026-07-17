@@ -233,8 +233,18 @@ class V216TerrainEnforcementTest(unittest.TestCase):
             check=True,
         )
         tools = json.loads(listed.stdout)["tools"]
-        before = next(item for item in tools if item["name"] == "before_task")
-        self.assertEqual(before["inputSchema"]["properties"]["intent"]["enum"], ["read", "write", "delete"])
+        names = {item["name"] for item in tools}
+        self.assertEqual(
+            names,
+            {
+                "file_hash", "tenor_init_bridge", "portability_check",
+                "graphify_required_check", "graphify_project_build",
+                "tenor_task_start", "tenor_apply_changeset", "tenor_activity",
+                "tenor_task_control",
+            },
+        )
+        task_start = next(item for item in tools if item["name"] == "tenor_task_start")
+        self.assertEqual(task_start["inputSchema"]["properties"]["intent"]["enum"], ["read", "write", "delete"])
 
     def test_runtime_database_integrity_failure_is_fail_closed(self) -> None:
         class CorruptCursor:

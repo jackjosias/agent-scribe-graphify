@@ -19,7 +19,7 @@ MCP_DIR = ROOT / ".agent" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime import graphify_readiness, installation_state
+from runtime import graphify_readiness, installation_state, tenor_public_api
 from _strict_cleanup import remove_tree_strict
 
 
@@ -70,6 +70,13 @@ class StableAgentIdentityTest(unittest.TestCase):
 
     def register(self, agent_id: str) -> dict[str, object]:
         return self.call("register_agent", host_tool="test", model_name="unit", agent_id=agent_id)
+
+    def test_public_task_schemas_never_accept_caller_identity_or_context_token(self) -> None:
+        for tool in tenor_public_api.PUBLIC_TASK_TOOLS:
+            schema = tenor_public_api.tool_schema(tool)
+            properties = set(schema.get("properties", {}))
+            self.assertNotIn("agent_id", properties, tool)
+            self.assertNotIn("context_token", properties, tool)
 
     def test_register_agent_is_idempotent(self) -> None:
         first = self.register("agent-a")

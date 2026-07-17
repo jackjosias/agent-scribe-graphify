@@ -2668,6 +2668,7 @@ def tenor_task_prompt(
 
 def _retire_ghost_agents(aid: str, host_tool: str) -> dict[str, Any]:
     retired: list[dict[str, str]] = []
+    observed: list[dict[str, Any]] = []
     status = "ok"
     error_msg = ""
     if not host_tool or host_tool == "unknown":
@@ -2680,13 +2681,18 @@ def _retire_ghost_agents(aid: str, host_tool: str) -> dict[str, Any]:
             ghost = agent.get("host_tool", "")
             if gid != aid and gstatus == "active" and ghost == host_tool:
                 tasks = task_context.list_tasks(agent_id=gid, status="active")
-                if tasks.get("count", 0) == 0:
-                    db.retire_agent(gid, reason=f"ghost replaced by {aid}")
-                    retired.append({"agent_id": gid, "host_tool": host_tool})
+                observed.append({
+                    "agent_id": gid,
+                    "host_tool": host_tool,
+                    "status": gstatus,
+                    "process_alive": bool(agent.get("process_alive")),
+                    "active_task_count": int(tasks.get("count", 0)),
+                    "action": "preserved",
+                })
     except Exception as exc:
         status = "failed"
         error_msg = str(exc)
-    return {"retired": retired, "status": status, "error": error_msg}
+    return {"retired": retired, "observed": observed, "status": status, "error": error_msg}
 
 
 def tenor_init_bridge(
@@ -2844,13 +2850,15 @@ def tenor_init_bridge(
             "steps": steps,
         })
 
-    # Step 5 — retire ghost agents from the same verified host.
+    # Step 5 — observe parallel agents. A new bridge never has authority to
+    # retire another process merely because its task/heartbeat looks old.
     ghost_result = _retire_ghost_agents(aid, bound_host)
     steps.append({
         "step": "retire_ghosts",
         "ok": ghost_result["status"] == "ok",
         "count": len(ghost_result["retired"]),
         "ghosts": ghost_result["retired"],
+        "observed_parallel_agents": ghost_result.get("observed", []),
         "status": ghost_result["status"],
         "error": ghost_result.get("error", ""),
     })

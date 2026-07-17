@@ -551,7 +551,17 @@ def smoke_tool_listing() -> None:
     )
     if proc.returncode != 0:
         fail(f"list-tools failed\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
-    for tool in ("workflow_next", "scribe_query", "graphify_query", "scribe_record", "scribe_commit_gate_status", "scribe_commit_gate_resolve", "apply_patch", "delete_resource"):
+    for tool in (
+        "file_hash",
+        "tenor_init_bridge",
+        "portability_check",
+        "graphify_required_check",
+        "graphify_project_build",
+        "tenor_task_start",
+        "tenor_apply_changeset",
+        "tenor_activity",
+        "tenor_task_control",
+    ):
         if tool not in proc.stdout:
             fail(f"missing tool from server_entry --list-tools: {tool}")
 

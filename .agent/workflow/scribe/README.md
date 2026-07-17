@@ -101,21 +101,11 @@ A memory query is valid only when its result changes the plan or is explicitly c
 A product mutation requires:
 
 ```text
-workflow_next
-before_task
-targeted scribe_query
-targeted graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record or auditable causal skip
-release claim and lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent, resources, scope)
+  -> targeted SCRIBE + Graphify inside TENOR
+tenor_apply_changeset(task_id, changes[], validators[])
+  -> all-file preflight + deterministic locks + atomic commit/rollback
+  -> runtime SCRIBE receipt + terminal closure
 ```
 
 Direct native writes are not an equivalent fallback.
@@ -123,10 +113,15 @@ Direct native writes are not an equivalent fallback.
 Machine invariants:
 
 - `intent` is exactly `read`, `write` or `delete`;
-- one stable `agent_id` owns at most one active task;
-- replacement registration/retirement cannot escape a HARD_STOP;
-- exact multi-file rescoping requires a prior MCP applied-patch receipt;
-- a `FIXED` SCRIBE record requires an applied-patch receipt and a clean tripwire.
+- one process-bound identity owns at most one active task;
+- task tools reject caller-supplied identity/context credentials;
+- cross-agent task control is forbidden;
+- daemon heartbeat and rolling TTL preserve live work but expire dead work;
+- a multi-file changeset commits all files or restores all files;
+- a runtime SCRIBE receipt requires a validated committed changeset.
+
+The host sees only four normal task tools. Fine-grained legacy tools remain
+internal compatibility primitives and are not a public workflow.
 
 Graphify is rebuilt with `graphify_project_build` from a bound MCP host, or
 with `.agent/workflow/scribe/scribe graph --project-build --timeout 180` before
@@ -137,7 +132,9 @@ Standalone `graphify update .` and root `graphify-out/` are forbidden.
 
 Every terminal runs its own TENOR INIT. The shared bootstrap is serialized; each terminal receives a separate identity and proof.
 
-Agents share runtime SQLite, SCRIBE, Graphify, claims, locks and patch queue, but never share `agent_id`, server-side one-time proof, lease or ownership credentials.
+Agents share runtime SQLite, SCRIBE, Graphify and transaction authority, but
+never share process-bound identity or proof. `tenor_activity` shows consolidated
+presence and current/last/next task state without granting cross-agent control.
 
 `TENOR_INIT_SAME_PROJECT` must never purge active coordination.
 

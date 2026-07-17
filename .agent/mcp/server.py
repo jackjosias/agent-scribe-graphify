@@ -594,6 +594,11 @@ TOOLS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "batch_file_hash": batch_file_hash,
 }
 
+# Filled by the final extension layer. Legacy tools remain callable by the
+# internal compatibility engine, but only this bounded surface is advertised
+# to host LLMs.
+PUBLIC_TOOL_NAMES: tuple[str, ...] = ()
+
 
 def tool_schema(name: str) -> Dict[str, Any]:
     schemas = {
@@ -644,7 +649,16 @@ def tool_schema(name: str) -> Dict[str, Any]:
 
 
 def list_tools() -> List[Dict[str, Any]]:
-    return [{"name": name, "description": f"{SERVER_NAME}.{name}", "inputSchema": tool_schema(name)} for name in TOOLS]
+    names = PUBLIC_TOOL_NAMES or tuple(TOOLS)
+    return [
+        {
+            "name": name,
+            "description": f"{SERVER_NAME}.{name}",
+            "inputSchema": tool_schema(name),
+        }
+        for name in names
+        if name in TOOLS
+    ]
 
 
 def handle(req: Dict[str, Any]) -> Dict[str, Any]:

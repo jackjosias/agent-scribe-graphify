@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(os.environ.get(
     Path(__file__).resolve().parents[4],
 )).resolve()
 
-EXPECTED_TOOL_SUBSET = {
+INTERNAL_TOOL_SUBSET = {
     "session_status",
     "register_agent",
     "agent_status",
@@ -61,7 +61,19 @@ EXPECTED_TOOL_SUBSET = {
     "verify_proof",
 }
 
-MIN_TOOLS = 42
+PUBLIC_TOOLS = {
+    "file_hash",
+    "tenor_init_bridge",
+    "portability_check",
+    "graphify_required_check",
+    "graphify_project_build",
+    "tenor_task_start",
+    "tenor_apply_changeset",
+    "tenor_activity",
+    "tenor_task_control",
+}
+
+MIN_INTERNAL_TOOLS = 42
 TIMEOUT = 15
 
 
@@ -87,12 +99,12 @@ class SmokeTestImport(unittest.TestCase):
         import server as srv
         tools = getattr(srv, "TOOLS", None)
         self.assertIsNotNone(tools, "server.TOOLS not found")
-        self.assertGreaterEqual(len(tools), MIN_TOOLS)
+        self.assertGreaterEqual(len(tools), MIN_INTERNAL_TOOLS)
 
     def test_tool_names(self) -> None:
         import server as srv
         names = set(srv.TOOLS.keys())
-        missing = EXPECTED_TOOL_SUBSET - names
+        missing = INTERNAL_TOOL_SUBSET - names
         self.assertSetEqual(missing, set(),
                             f"Missing tools: {sorted(missing)}")
 
@@ -282,12 +294,10 @@ class SmokeTestServer(unittest.TestCase):
         resp = self._read()
         self.assertNotIn("error", resp)
         tools = resp.get("result", {}).get("tools", [])
-        self.assertGreaterEqual(len(tools), MIN_TOOLS,
-                                f"Only {len(tools)} tools reported")
+        self.assertEqual(len(tools), len(PUBLIC_TOOLS),
+                         f"Unexpected public tool count: {len(tools)}")
         names = {t["name"] for t in tools}
-        missing = EXPECTED_TOOL_SUBSET - names
-        self.assertSetEqual(missing, set(),
-                            f"tools/list missing: {sorted(missing)}")
+        self.assertSetEqual(names, PUBLIC_TOOLS)
 
     def test_discipline_ping(self) -> None:
         self._start()

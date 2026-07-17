@@ -63,27 +63,29 @@
     ".graphifyignore"
   ],
   "required_tools": [
-    "workflow_next",
-    "before_task",
-    "discipline_ping",
-    "scribe_query",
-    "graphify_query",
-    "pre_action_guard",
-    "resource_lock_claim",
-    "resource_lock_release",
-    "claim_resource",
     "file_hash",
-    "propose_patch",
-    "apply_patch",
-    "delete_resource",
-    "workspace_audit",
-    "scribe_record",
-    "finish_task",
     "tenor_init_bridge",
     "portability_check",
     "graphify_required_check",
-    "graphify_project_build"
+    "graphify_project_build",
+    "tenor_task_start",
+    "tenor_apply_changeset",
+    "tenor_activity",
+    "tenor_task_control"
   ],
+  "public_task_api": {
+    "normal_tools": [
+      "tenor_task_start",
+      "tenor_apply_changeset",
+      "tenor_activity",
+      "tenor_task_control"
+    ],
+    "legacy_fine_grained_tools_advertised_to_host": false,
+    "legacy_fine_grained_tools_internal_compatibility_only": true,
+    "scribe_and_graphify_run_inside_task_start": true,
+    "locks_hash_preflight_apply_validation_rollback_record_and_finish_run_inside_changeset": true,
+    "caller_supplied_agent_id_or_context_token_forbidden": true
+  },
   "same_project_session_invariant": {
     "statement": "SAME_PROJECT session init does not repair the bundle; it may manage only the verified project-local MCP entry and its host-binding receipt.",
     "tracked_files_read_only": true,
@@ -176,54 +178,35 @@
     "descriptive_intent_forbidden": true,
     "one_active_task_per_agent": true,
     "replacement_identity_for_hard_stop_forbidden": true,
-    "retire_with_active_tasks_claims_locks_or_patches_forbidden": true,
-    "multi_file_rescope_requires_previous_applied_patch_receipt": true,
-    "fixed_record_requires_mcp_applied_patch_receipt": true
+    "cross_agent_control_forbidden": true,
+    "process_bound_identity": true,
+    "daemon_heartbeat": true,
+    "rolling_activity_ttl": true,
+    "dead_process_expiry_fail_closed": true,
+    "multi_file_changeset_atomic": true,
+    "all_hashes_and_locks_preflight_before_first_write": true,
+    "validator_failure_rolls_back_all_files": true,
+    "request_id_retry_is_idempotent": true
   },
   "loops": {
     "read_or_research": [
-      "workflow_next",
-      "before_task",
-      "targeted_scribe_query",
-      "targeted_graphify_query_when_code_or_architecture",
+      "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
       "host_synthesis",
-      "scribe_record_when_causal_value_exists",
-      "finish_task",
-      "workflow_next_READY_FOR_NEXT_TASK"
+      "tenor_task_control_finish_records_and_closes"
     ],
     "write": [
-      "workflow_next",
-      "before_task",
-      "targeted_scribe_query",
-      "targeted_graphify_query",
-      "pre_action_guard",
-      "resource_lock_claim",
-      "claim_resource",
-      "file_hash",
-      "propose_patch",
-      "apply_patch",
-      "workspace_audit",
-      "release_claim_and_lock",
-      "scribe_record_or_canonical_skip_decision",
-      "finish_task",
-      "workflow_next_READY_FOR_NEXT_TASK"
+      "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
+      "host_prepares_one_multi_file_changeset_and_validator_argv",
+      "tenor_apply_changeset_preflights_locks_hashes_and_scope",
+      "tenor_apply_changeset_commits_all_or_rolls_back_all",
+      "tenor_apply_changeset_records_and_closes"
     ],
     "delete": [
-      "workflow_next",
-      "before_task",
-      "targeted_scribe_query",
-      "targeted_graphify_query",
-      "pre_action_guard",
-      "resource_lock_claim",
-      "claim_resource",
-      "file_hash",
-      "ask_user_exact_DELETE_confirmation",
-      "delete_resource",
-      "workspace_audit",
-      "release_claim_and_lock",
-      "scribe_record",
-      "finish_task",
-      "workflow_next_READY_FOR_NEXT_TASK"
+      "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
+      "exact_delete_paths_must_be_confirmed_in_changeset",
+      "tenor_apply_changeset_preflights_locks_hashes_and_scope",
+      "tenor_apply_changeset_commits_all_or_rolls_back_all",
+      "tenor_apply_changeset_records_and_closes"
     ]
   },
   "multi_agent_rules": [
@@ -231,14 +214,15 @@
     "shared bootstrap is serialized by an owned nonce lock",
     "fresh partial lock age falls back to filesystem mtime",
     "same project never purges active shared runtime",
-    "each agent uses a distinct agent_id and server-side one-time proof",
+    "each agent uses a distinct process-bound identity and server-side one-time proof",
     "reads are concurrent",
-    "writes require resource lock, claim, action lease and patch queue",
-    "one agent cannot use another agent proof lease claim or lock",
+    "task tools derive identity from the successful bridge and reject caller supplied identity",
+    "writes use ordered locks and one atomic multi-file changeset",
+    "one agent cannot control retire replace or mutate another agent task",
     "one agent owns at most one active task",
-    "a verified host cannot mint a replacement agent outside TENOR INIT",
-    "retirement is refused while tasks claims locks or patches remain",
-    "do not finish with active claims locks or pending patches"
+    "daemon heartbeat and rolling ttl preserve live work",
+    "dead processes and abandoned work still expire fail closed",
+    "do not finish with an active changeset transaction or lock"
   ],
   "memory_policy": {
     "scribe_query": {
@@ -342,9 +326,9 @@
     "defense_layers": [
       "host permissions",
       "project-local instructions",
-      "resource locks and claims",
-      "action leases",
-      "patch queue",
+        "resource locks and claims",
+        "atomic multi-file changeset",
+        "hash preflight and validator rollback",
       "direct filesystem tripwire",
       "workspace audit",
       "canonical memory finish gate"

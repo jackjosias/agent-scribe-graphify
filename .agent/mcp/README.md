@@ -1,43 +1,62 @@
-# agent-scribe-graphify MCP
+# agent-scribe-graphify MCP — V2.16 public surface
 
-Serveur MCP portable contenu dans `.agent/`.
+The MCP runtime exposes nine tools to a host model.
 
-## Lancement serveur
+Bootstrap/init tools:
 
-Depuis la racine du projet :
+- `file_hash`
+- `tenor_init_bridge`
+- `portability_check`
+- `graphify_required_check`
+- `graphify_project_build`
+
+Normal task tools:
+
+- `tenor_task_start`
+- `tenor_apply_changeset`
+- `tenor_activity`
+- `tenor_task_control`
+
+## Normal write flow
+
+1. `tenor_task_start(objective, intent, resources, scope)` creates or resumes
+   one task for the process-bound agent and performs targeted SCRIBE and
+   Graphify retrieval internally.
+2. The host inspects the relevant code and prepares all intended file changes.
+3. `tenor_apply_changeset(task_id, changes, validators, request_id)` performs
+   path/scope/hash/lock preflight for every file before the first write,
+   applies the complete set, runs validator argv arrays without a shell, then
+   commits all files or rolls all files back. It records the runtime SCRIBE
+   receipt and closes the task on success.
+
+The changeset supports `patch`, `replace`, `create` and confirmed `delete`
+operations. It rejects absolute paths, traversal, symlinks, duplicate targets,
+stale hashes, out-of-scope paths and unconfirmed deletions. A stable
+`request_id` makes retry safe and detects conflicting reuse.
+
+## Read and control flow
+
+Use `tenor_task_control(action="finish")` to close a read task. The same tool
+supports owner-only pause, resume and cancel. `tenor_activity` returns a
+consolidated snapshot containing agents, presence, tasks, current action, last
+action and next action.
+
+## Identity and compatibility
+
+After `tenor_init_bridge`, task identity is bound to that MCP server process.
+Normal task tools do not accept caller-supplied `agent_id` or context tokens.
+One process cannot control another process's task.
+
+The older fine-grained tools remain registered internally so existing runtime
+tests and compatibility adapters can call them, but `tools/list` does not
+advertise them to host models. They are implementation primitives, not a
+workflow for a small model to orchestrate.
+
+## Local diagnostics
 
 ```bash
-python .agent/mcp/server.py
+python3 .agent/mcp/server_entry.py --list-tools
 ```
 
-Le serveur parle MCP JSON-RPC sur stdio et expose les outils :
-
-- `bootstrap`
-- `register_agent`
-- `heartbeat`
-- `session_status`
-- `before_task`
-- `scribe_query`
-- `graphify_query`
-- `claim_resource`
-- `release_claim`
-- `before_edit`
-- `finish_task`
-- `installation_required`
-
-## Tests smoke
-
-```bash
-python .agent/mcp/server.py --list-tools
-python .agent/mcp/server.py --call bootstrap --args '{"host_tool":"manual-smoke","model_name":"test","run_legacy_bootstrap":false}'
-python .agent/mcp/server.py --call before_task --args '{"request":"Ajoute une fonction de validation email"}'
-```
-
-## Contrat
-
-Voir `ORCHESTRATION_CONTRACT.md`.
-
-## Principe
-
-`TENOR INIT::[.agent/skills/init-tenor/SKILL.md]` doit vérifier la disponibilité du serveur MCP `agent-scribe-graphify`.
-Si le MCP est absent, le LLM hôte doit stopper et demander l’installation/autorisation du serveur MCP.
+This proves only that the project-local server starts. It does not prove host
+visibility, root binding or a bridged task identity.

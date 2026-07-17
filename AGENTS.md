@@ -43,10 +43,12 @@ TENOR_INIT_READY
 - Never read `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly for normal agent retrieval; use `.agent/workflow/scribe/scribe-rag` or MCP `scribe_query`.
 - SCRIBE results must change the plan or be explicitly challenged; retrieval is not a checkbox.
 - Use Graphify before architecture or broad code changes; prefer targeted structure/blast-radius queries over mass file reads.
-- Every mutation requires `pre_action_guard`, an action lease, resource lock/claim, file hash, patch queue, `workspace_audit`, release and `finish_task`.
+- The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
+- `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side. The host model must not replay the legacy internal choreography.
+- Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with fresh hashes and bounded validator argv arrays; TENOR owns locks, rollback, SCRIBE recording and closure.
 - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.
-- A prose-only “done” without `finish_task` and `READY_FOR_NEXT_TASK` is not completion.
-- Each terminal uses its own `agent_id`, server-side one-time proof and lease. The full bearer token is never printed or persisted.
+- A prose-only “done” without a terminal machine verdict and validator evidence is not completion.
+- Each terminal uses its own process-bound identity and server-side one-time proof. Task calls never accept caller-supplied `agent_id` or context tokens.
 - `TENOR_INIT_SAME_PROJECT` never repairs the bundle; only the verified project-local MCP entry and binding receipt may be managed automatically.
 - A complete raw copy of `.agent/` is a mandatory supported installation path on Linux, macOS and Windows; relocation is classified from the current root and manifest.
 - Runtime purge preserves `.agent/state/outputs/`; canonical output wins and conflicting legacy output is quarantined under `_legacy_migrated/`.

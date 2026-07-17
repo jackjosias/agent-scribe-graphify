@@ -38,19 +38,15 @@ from runtime.tenor_init_orchestrator import (  # noqa: E402
 )
 
 _REQUIRED_LOCAL_MCP_TOOLS = {
-    "workflow_next",
-    "before_task",
-    "scribe_query",
-    "graphify_query",
-    "pre_action_guard",
-    "resource_lock_claim",
-    "claim_resource",
     "file_hash",
-    "propose_patch",
-    "apply_patch",
-    "workspace_audit",
-    "finish_task",
     "tenor_init_bridge",
+    "portability_check",
+    "graphify_required_check",
+    "graphify_project_build",
+    "tenor_task_start",
+    "tenor_apply_changeset",
+    "tenor_activity",
+    "tenor_task_control",
 }
 
 

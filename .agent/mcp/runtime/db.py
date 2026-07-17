@@ -375,12 +375,50 @@ def _agent_idle_timeout_seconds() -> int:
     return min(max(value, 180), 86400)
 
 
+def _pid_grace_seconds() -> int:
+    raw = os.environ.get("AGENT_PID_LIVENESS_GRACE_SECONDS", "").strip()
+    if not raw:
+        return 86400
+    try:
+        value = int(raw)
+    except ValueError:
+        return 86400
+    return min(max(value, 900), 604800)
+
+
+def process_is_alive(pid: Any) -> bool:
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    try:
+        os.kill(value, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def expire_stale(con: sqlite3.Connection) -> None:
     t = now_ts()
-    con.execute(
-        "UPDATE agents SET status='idle' WHERE status='active' AND last_seen < ?",
+    stale = con.execute(
+        "SELECT agent_id,pid,started_at,last_seen FROM agents WHERE status='active' AND last_seen < ?",
         (t - _agent_idle_timeout_seconds(),),
-    )
+    ).fetchall()
+    for row in stale:
+        process_alive = process_is_alive(row["pid"])
+        within_pid_grace = t - int(row["started_at"] or 0) <= _pid_grace_seconds()
+        if process_alive and within_pid_grace:
+            continue
+        con.execute(
+            "UPDATE agents SET status='idle' WHERE agent_id=? AND status='active'",
+            (row["agent_id"],),
+        )
     con.execute(
         "UPDATE claims SET status='expired' WHERE status='active' AND expires_at < ?",
         (t,),
@@ -554,22 +592,26 @@ def register_agent(
     }
 
 
-def get_agent(agent_id: str) -> Dict[str, Any] | None:
+def get_agent(agent_id: str, project_root: Optional[Path] = None) -> Dict[str, Any] | None:
     if not agent_id:
         return None
-    init_db()
-    with connect() as con:
+    init_db(project_root)
+    with connect(project_root) as con:
         expire_stale(con)
         row = con.execute(
             "SELECT * FROM agents WHERE agent_id=?", (agent_id,)
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    result = dict(row)
+    result["process_alive"] = process_is_alive(result.get("pid"))
+    return result
 
 
-def require_agent_active(agent_id: str) -> Dict[str, Any]:
+def require_agent_active(agent_id: str, project_root: Optional[Path] = None) -> Dict[str, Any]:
     if not agent_id or not isinstance(agent_id, str) or not agent_id.strip():
         raise CoordinationError("AGENT_ID_REQUIRED")
-    agent = get_agent(agent_id.strip())
+    agent = get_agent(agent_id.strip(), project_root)
     if not agent:
         raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
     status = str(agent.get("status") or "")
@@ -579,7 +621,7 @@ def require_agent_active(agent_id: str) -> Dict[str, Any]:
         raise CoordinationError("AGENT_RETIRED")
     if status != "active":
         raise CoordinationError("AGENT_NOT_ACTIVE")
-    with connect() as con:
+    with connect(project_root) as con:
         con.execute("UPDATE agents SET last_seen=? WHERE agent_id=? AND status='active'", (now_ts(), agent_id.strip()))
     return agent
 
@@ -679,10 +721,10 @@ def workspace_mutation_blockers() -> Dict[str, int]:
     return counts
 
 
-def heartbeat(agent_id: str) -> Dict[str, Any]:
+def heartbeat(agent_id: str, project_root: Optional[Path] = None) -> Dict[str, Any]:
     if not agent_id:
         raise CoordinationError("agent_id is required")
-    with connect() as con:
+    with connect(project_root) as con:
         expire_stale(con)
         cur = con.execute(
             "UPDATE agents SET last_seen=?, status='active' WHERE agent_id=?",
@@ -694,10 +736,10 @@ def heartbeat(agent_id: str) -> Dict[str, Any]:
     return {"agent_id": agent_id, "status": "active"}
 
 
-def resume_agent(agent_id: str) -> Dict[str, Any]:
+def resume_agent(agent_id: str, project_root: Optional[Path] = None) -> Dict[str, Any]:
     if not agent_id:
         raise CoordinationError("agent_id is required")
-    with connect() as con:
+    with connect(project_root) as con:
         expire_stale(con)
         cur = con.execute(
             "UPDATE agents SET last_seen=?, status='active' WHERE agent_id=? AND status<>'retired'",
@@ -754,17 +796,20 @@ def agent_status(agent_id: str) -> Dict[str, Any]:
         ).fetchone()
         if not row:
             raise CoordinationError("AGENT_UNKNOWN_OR_UNREGISTERED")
-    return dict(row)
+    result = dict(row)
+    result["process_alive"] = process_is_alive(result.get("pid"))
+    return result
 
 
 def list_agents() -> Dict[str, Any]:
     init_db()
     with connect() as con:
         expire_stale(con)
-        rows = [
-            dict(r)
-            for r in con.execute("SELECT * FROM agents ORDER BY last_seen DESC")
-        ]
+        rows = []
+        for row in con.execute("SELECT * FROM agents ORDER BY last_seen DESC"):
+            item = dict(row)
+            item["process_alive"] = process_is_alive(item.get("pid"))
+            rows.append(item)
     return {"agents": rows, "count": len(rows)}
 
 
@@ -772,10 +817,11 @@ def session_status() -> Dict[str, Any]:
     init_db()
     with connect() as con:
         expire_stale(con)
-        agents = [
-            dict(r)
-            for r in con.execute("SELECT * FROM agents ORDER BY last_seen DESC")
-        ]
+        agents = []
+        for row in con.execute("SELECT * FROM agents ORDER BY last_seen DESC"):
+            item = dict(row)
+            item["process_alive"] = process_is_alive(item.get("pid"))
+            agents.append(item)
         claims = [
             dict(r)
             for r in con.execute(

@@ -38,16 +38,14 @@ def call_tool(name: str, **args: Any) -> dict[str, Any]:
 def contains_sections(prompt: str) -> bool:
     indicators = [
         "Avant toute action",
-        "discipline_ping",
-        "workflow_next",
+        "tenor_task_start",
+        "tenor_apply_changeset",
+        "tenor_activity",
+        "tenor_task_control",
         "Aucune ecriture directe",
-        "SCRIBE pour le contexte",
-        "Graphify pour l impact structurel",
-        "pre_action_guard",
-        "action_lease_id",
-        "workspace_audit",
-        "scribe_record",
-        "scribe_promote_record",
+        "SCRIBE et Graphify en interne",
+        "base_hash",
+        "rollback",
         "HOST_MCP_UNBOUND",
     ]
     return all(indicator in prompt for indicator in indicators)
@@ -63,9 +61,9 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertIn("write", result["prompt"])
         self.assertIn("a determiner via Graphify/SCRIBE", result["prompt"])
         self.assertTrue(contains_sections(result["prompt"]))
-        self.assertEqual(result["required_first_actions"], ["discipline_ping", "workflow_next"])
-        self.assertEqual(result["required_finish_actions"], ["workspace_audit", "scribe_record", "finish_task"])
-        self.assertEqual(result["forbidden"], ["direct_write", "invent_tool_result", "finish_without_audit"])
+        self.assertEqual(result["required_first_actions"], ["tenor_task_start"])
+        self.assertEqual(result["required_finish_actions"], ["tenor_apply_changeset", "tenor_task_control"])
+        self.assertIn("legacy_manual_choreography", result["forbidden"])
 
     def test_empty_task(self) -> None:
         result = ttp.generate_task_prompt(task="")
@@ -94,7 +92,7 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         result = ttp.generate_task_prompt(task="migrate db", mode="CRITICAL")
         self.assertTrue(result["ok"])
         self.assertIn("Mode CRITICAL", result["prompt"])
-        self.assertIn("Workflow read/check obligatoire", result["prompt"])
+        self.assertIn("Validators renforces obligatoires", result["prompt"])
 
     def test_invalid_mode_falls_to_standard(self) -> None:
         result = ttp.generate_task_prompt(task="fix", mode="ULTRA")
@@ -137,7 +135,7 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         result = ttp.generate_task_prompt(task="fix auth", model_tier="small")
         self.assertTrue(result["ok"])
         self.assertIn("Mode petit modele", result["prompt"])
-        self.assertIn("protocole MCP integral", result["prompt"])
+        self.assertIn("API TENOR compacte", result["prompt"])
         self.assertIn("Aucun Edit/Bash natif", result["prompt"])
 
     def test_large_model_tier_default(self) -> None:
@@ -253,7 +251,7 @@ class TestCLI(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0)
         self.assertIn("fix auth bug", proc.stdout)
-        self.assertIn("discipline_ping", proc.stdout)
+        self.assertIn("tenor_task_start", proc.stdout)
 
     def test_cli_empty_task(self) -> None:
         import subprocess
@@ -367,7 +365,7 @@ class TestE2ERealRuntime(unittest.TestCase):
             env=self._runtime_env, cwd=self._tmpdir,
         )
         self.assertEqual(proc.returncode, 0, f"stderr: {proc.stderr}")
-        self.assertIn("tenor_task_prompt", proc.stdout)
+        self.assertIn("tenor_task_start", proc.stdout)
 
     def test_e2e_tool_returns_ready(self) -> None:
         import subprocess

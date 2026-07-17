@@ -3,6 +3,9 @@ from __future__ import annotations
 """Canonical task-context facade with exact first-write discovery binding."""
 
 from typing import Any
+from pathlib import Path
+
+from .state_paths import project_root_from
 
 try:
     from . import _task_context_first_write_impl as _impl
@@ -21,7 +24,26 @@ _COARSE_RESOURCES = frozenset({
 
 def _is_coarse_resource(resource: str) -> bool:
     value = (resource or "").strip().lower()
-    return value in _COARSE_RESOURCES or "whole repo" in value
+    if value in _COARSE_RESOURCES or "whole repo" in value:
+        return True
+    normalized = (resource or "").strip().replace("\\", "/").rstrip("/")
+    if not normalized:
+        return True
+    candidate = Path(normalized)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts):
+        return False
+    return (project_root_from() / candidate).is_dir()
+
+
+def is_scope_container(resource: str) -> bool:
+    return _is_coarse_resource(resource)
+
+
+def _scope_contains(container: str, resource: str) -> bool:
+    normalized = (container or "").strip().replace("\\", "/").rstrip("/")
+    if normalized.lower() in _COARSE_RESOURCES or "whole repo" in normalized.lower():
+        return True
+    return resource == normalized or resource.startswith(normalized + "/")
 
 
 # Preserve every established policy/storage API before overriding the two
@@ -70,6 +92,11 @@ def scope_task_resource(
             "already_scoped": True,
         }
     rescoping_exact_resource = not _is_coarse_resource(current)
+    if not rescoping_exact_resource and not _scope_contains(current, safe):
+        raise TaskContextError(
+            "TASK_RESOURCE_OUTSIDE_CONTAINER_SCOPE",
+            {"task_resource": current, "requested_resource": safe},
+        )
 
     patch_queue.ensure_schema()
     resource_locks.ensure_schema()

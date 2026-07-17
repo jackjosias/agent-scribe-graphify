@@ -139,27 +139,21 @@ Elle ne prouve pas que l'interface du host expose les tools au modèle.
 Tools minimaux :
 
 ```text
-workflow_next
-before_task
-discipline_ping
-scribe_query
-graphify_query
-pre_action_guard
-resource_lock_claim
-resource_lock_release
-claim_resource
 file_hash
-propose_patch
-apply_patch
-delete_resource
-workspace_audit
-scribe_record
-finish_task
 tenor_init_bridge
 portability_check
 graphify_required_check
 graphify_project_build
+tenor_task_start
+tenor_apply_changeset
+tenor_activity
+tenor_task_control
 ```
+
+Les cinq premiers outils servent à l'initialisation/bootstrap. Les quatre
+outils `tenor_*` restants constituent toute l'API normale annoncée au LLM
+hôte. Les primitives historiques fines restent internes au runtime pour
+compatibilité et ne doivent pas être orchestrées manuellement par le modèle.
 
 # PHASE 3 — ADAPTATEUR DU HOST
 
@@ -220,7 +214,9 @@ TENOR_INIT_BRIDGE_OK
 
 Le serveur consomme atomiquement la preuve one-shot correspondante sans exposer de bearer token. Une compatibilité explicite avec l'ancien paramètre `proof_token` reste acceptée, mais ce n'est plus le chemin canonique.
 
-Six terminaux partagent runtime SQLite, SCRIBE, Graphify, claims, locks et patch queue, mais ne partagent jamais identité, preuve ou lease.
+Six terminaux partagent runtime SQLite, SCRIBE, Graphify et l'autorité de
+transaction, mais chacun conserve une identité liée à son propre processus
+MCP. Un agent ne peut ni retirer ni contrôler la tâche d'un autre.
 
 # PHASE 6 — SUCCÈS TERMINAL
 
@@ -254,35 +250,28 @@ TENOR TASK:: <objectif>
 
 Le contrat machine n'accepte que `intent=read`, `intent=write` ou
 `intent=delete`. La demande humaine complète reste dans `request`; elle ne doit
-jamais être recopiée dans `intent`. Un agent conserve le même `agent_id` et un
-seul `task_id` actif jusqu'à `finish_task`. `register_agent`, `retire_agent` ou
-un nouveau `before_task` ne sont pas des mécanismes de récupération d'un
-HARD_STOP.
+jamais être recopiée dans `intent`. Après le bridge, l'identité est dérivée du
+processus MCP : aucun appel de tâche n'accepte un `agent_id` ou un token fourni
+par le modèle. Un agent conserve un seul `task_id` actif jusqu'au verdict
+terminal.
 
-Ordre minimal d'une écriture :
+Ordre public d'une écriture :
 
 ```text
-discipline_ping
-workflow_next
-before_task
-targeted scribe_query
-targeted graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record ou skip causal justifié
-release claim et lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent, resources, scope)
+  -> targeted SCRIBE + Graphify, internes
+tenor_apply_changeset(task_id, changes[], validators[])
+  -> preflight de tous les chemins/hashes/locks avant la première écriture
+  -> commit de tous les fichiers ou rollback de tous les fichiers
+  -> validation, record SCRIBE runtime et clôture terminale
 ```
 
-Une tâche multi-fichier utilise `scope_task_resource` séquentiellement. Le
-passage au fichier suivant exige un reçu `apply_patch` du fichier précédent et
-zéro claim, lock ou patch en attente.
+Le changeset accepte jusqu'à 64 fichiers, refuse traversal et symlinks, exige
+un hash de base pour chaque opération, acquiert les locks dans un ordre stable,
+exécute les validateurs sous forme d'argv sans shell et supporte les retries
+idempotents via `request_id`. Toute suppression exige la confirmation exacte
+du chemin. `tenor_activity` fournit l'état consolidé ; `tenor_task_control`
+gère pause/reprise/annulation et la clôture d'une tâche de lecture.
 
 Si Graphify doit être reconstruit après la liaison du host, appeler
 `graphify_project_build(timeout_seconds=180)`. Avant liaison, utiliser seulement
@@ -302,13 +291,14 @@ Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision p
 - lire massivement des fichiers quand Graphify suffit
 - interroger SCRIBE puis ignorer le résultat
 - écrire via shell/Edit/write_file/apply_patch natif hors MCP
-- créer un agent ou une tâche de remplacement pour contourner un HARD_STOP
+- créer un agent ou une tâche de remplacement pour contourner un verdict fail-closed
 - utiliser un intent descriptif au lieu de read|write|delete
 - lancer graphify update . ou graphify watch dans le projet portable
-- utiliser la lease, le proof ou le claim d'un autre agent
+- fournir une identité ou un token de tâche depuis le LLM
+- retirer, remplacer ou contrôler un autre agent
 - présenter un shell JSON-RPC comme preuve de visibilité host
 - supprimer le lock d'un propriétaire vivant
-- déclarer terminé sans finish_task et READY_FOR_NEXT_TASK
+- déclarer terminé sans verdict terminal machine et preuve des validateurs
 ```
 
 # SYNCHRONISATION DOCUMENTAIRE

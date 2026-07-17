@@ -23,17 +23,17 @@ Session entry contract:
 10. Runtime purge preserves `.agent/state/outputs/`; preserved Graphify output must still pass root/fingerprint readiness before use.
 
 Before any code write/fix/refactor/delete/test:
-1. Call discipline_ping after session start, context compaction, MCP error, or before finish.
-2. Follow workflow_next and every must_call verdict.
-3. Retrieve targeted SCRIBE and Graphify context; do not treat either as a checkbox.
-4. Call pre_action_guard before sensitive actions.
-5. Use resource locks, claims, patch queue and action_lease_id for every mutation.
-6. Call workspace_audit before finish_task.
-7. Direct file edit fallback is forbidden.
-8. A prose-only `done` without finish_task and READY_FOR_NEXT_TASK is not completion.
-9. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
-10. Use only machine intents `read`, `write`, `delete`; keep one stable agent_id and one active task_id until finish_task.
-11. Native Edit and Bash are denied in autonomous OpenCode sessions; do not replace the identity to escape a HARD_STOP.
+1. Call `tenor_task_start` once with the objective, canonical intent, project-relative resources and their common scope.
+2. TENOR runs targeted SCRIBE and Graphify retrieval internally; never reproduce the legacy lock/claim/patch choreography manually.
+3. For a write/delete task, call `tenor_apply_changeset` once with every file operation, fresh base hashes and bounded validator argv arrays.
+4. The changeset is all-or-nothing: every path/hash/lock is preflighted, validators run without a shell, and any failure rolls back every file.
+5. For a read task, finish with `tenor_task_control(action="finish")`; use it also for explicit pause/resume/cancel.
+6. Use `tenor_activity` for consolidated agent/task/current/last/next state. Never retire or replace another active agent.
+7. Task tools derive agent identity from the successful MCP bridge; never invent agent_id, task_id or context_token.
+8. Direct file edit fallback and direct `graphify update .` are forbidden.
+9. Completion requires a terminal machine verdict and validator evidence; a prose-only `done` is not completion.
+10. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
+11. Native Edit and Bash are denied in autonomous OpenCode sessions; do not replace the identity to escape a fail-closed verdict.
 """
     return (
         "<!-- agent-scribe-graphify:auto-guard:start -->\n"

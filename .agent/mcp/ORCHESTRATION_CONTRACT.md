@@ -1,49 +1,56 @@
-# ORCHESTRATION_CONTRACT — agent-scribe-graphify MCP v0.1
+# TENOR V2.16 orchestration contract
 
-## 0. Intention
+## Authority boundary
 
-`agent-scribe-graphify` transforme `.agent/` en contrôle aérien local multi-agent.
-Le serveur MCP est le canal mécanique commun entre les hôtes agentiques : Copilot, Cursor, Claude Code, Gemini CLI, Codex CLI, OpenCode, Windsurf.
+The host model chooses the objective, reads code, designs a bounded change and
+provides validator commands. TENOR owns mechanical governance: identity,
+targeted memory/graph retrieval, task state, ordered locks, hash preflight,
+atomic apply/rollback, runtime evidence and terminal closure.
 
-## 1. Règle non négociable
+This division is intentional. A small model must not manually drive dozens of
+stateful MCP calls or invent replacement agents when one step fails.
 
-Si le serveur MCP `agent-scribe-graphify` n’est pas visible ou autorisé par le host, le LLM hôte doit stopper. Il ne doit pas coder, ne doit pas simuler SCRIBE, ne doit pas simuler Graphify, et doit demander à l’utilisateur d’autoriser/installer le serveur MCP.
+## Public state machine
 
-## 2. Ordre obligatoire
+```text
+TENOR_INIT_READY
+  -> tenor_task_start
+     -> READY_FOR_CHANGESET | READY_FOR_READ_FINISH | BLOCKED
+  -> tenor_apply_changeset | tenor_task_control
+     -> COMMITTED_AND_FINISHED | ROLLED_BACK_AND_RETRYABLE | TERMINAL
+```
 
-1. `bootstrap`
-2. `register_agent` si bootstrap n’a pas déjà enregistré l’agent
-3. `session_status`
-4. `before_task` pour chaque demande utilisateur
-5. `scribe_query` si demandé par `before_task`
-6. `graphify_query` si demandé par `before_task`
-7. `claim_resource` avant toute écriture
-8. `before_edit` immédiatement avant chaque modification
-9. `finish_task` avant la fin de session
+`tenor_activity` is read-only and may be called at any point after bridge.
 
-## 3. Politique multi-agent
+## Multi-file transaction invariants
 
-Un agent peut lire librement, mais ne peut écrire qu’avec un claim actif.
-Deux agents sur deux ressources différentes peuvent travailler en parallèle.
-Deux agents sur le même fichier ne doivent pas faire de direct edit concurrent. Le serveur retourne `DIRECT_EDIT_REFUSED` et exige une future patch queue.
+- At most 64 unique project-relative files per changeset.
+- No absolute path, traversal, symlink or scope escape.
+- Fresh base hash required for every operation, including create/delete.
+- Every file and relevant legacy ownership surface is checked before writing.
+- Exclusive locks are acquired in deterministic sorted order.
+- Staging and backups are durable before replacement.
+- Validators are argv arrays, use no shell, have bounded timeout/output and run
+  after all files are applied.
+- Any apply or validator failure restores every pre-transaction byte state.
+- Incomplete transactions are recovered on the next server start.
+- Reusing the same request id and payload returns the prior result; reusing it
+  with a different payload is rejected.
 
-## 4. Politique SCRIBE
+## Identity and liveness invariants
 
-Lire SCRIBE souvent via `scribe_query`.
-Écrire SCRIBE seulement quand une trace durable est utile : SCAR, GHOST, VAC, PAT, DEBT ou JOURNAL.
+- The successful bridge binds one agent identity to one MCP process.
+- Task tools derive that identity server-side.
+- Cross-agent task control and changeset application are refused.
+- A daemon heartbeat reports process presence independently of model turns.
+- Valid task activity renews a rolling TTL.
+- A live PID receives bounded grace; a dead or abandoned process expires
+  fail-closed.
+- Parallel agents are observed, never heuristically retired as “ghosts.”
 
-## 5. Politique Graphify
+## Internal compatibility
 
-Consulter Graphify avant les tâches code, architecture, dépendances, registry, stratégie, hook, sécurité ou refactor.
-Mettre à jour Graphify après modification structurante, nouveau fichier source, nouvel import/export ou tâche critique.
-
-## 6. Runtime court terme
-
-La vérité opérationnelle courte durée est `.agent/runtime/coordination.sqlite`.
-SCRIBE reste mémoire longue durée.
-Graphify reste carte structurelle.
-
-## 7. Patch queue
-
-La v0.1 prépare les tables `patches` et `conflicts`.
-La v0.2 ajoutera `propose_patch`, `apply_patch`, base hash obligatoire, overlap detection et conflict resolver.
+Fine-grained V2.15/V2.16 primitives remain internal compatibility APIs. They
+retain their fail-closed contracts and test coverage, including exact first-
+write discovery. They are not advertised to the host and must not be
+reassembled into a public manual workflow.

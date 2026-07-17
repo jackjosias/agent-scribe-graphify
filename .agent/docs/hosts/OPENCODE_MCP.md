@@ -108,11 +108,10 @@ demandes sont approuvées automatiquement. Le profil autonome V2.16 refuse donc
 le tool natif `edit` et refuse par défaut toute commande `bash`. Seules les
 quatre formes exactes, sans suffixe shell, de TENOR INIT ci-dessus restent
 autorisées afin qu'une nouvelle session puisse obtenir sa preuve et son identité
-stable sur Linux, macOS ou Windows. Les mutations passent par `propose_patch` et
-`apply_patch`; la reconstruction structurelle passe par
-`graphify_project_build`. Une validation native qui n'existe pas encore sous
-forme de tool borné doit être exécutée par l'utilisateur dans un terminal
-séparé et ne peut pas être prétendue par le modèle.
+stable sur Linux, macOS ou Windows. Les mutations passent par un unique
+`tenor_apply_changeset` atomique multi-fichier ; la reconstruction
+structurelle passe par `graphify_project_build`. Les validateurs sont fournis
+comme argv bornés au changeset et exécutés sans shell par TENOR.
 
 ## Reconnect requirement
 
@@ -133,26 +132,15 @@ This proves only local server readiness. It does not prove OpenCode exposes the 
 Inside OpenCode, the LLM must be able to call at least:
 
 ```text
-workflow_next
-before_task
-discipline_ping
-scribe_query
-graphify_query
-pre_action_guard
-resource_lock_claim
-resource_lock_release
-claim_resource
 file_hash
-propose_patch
-apply_patch
-delete_resource
-workspace_audit
-scribe_record
-finish_task
 tenor_init_bridge
 portability_check
 graphify_required_check
 graphify_project_build
+tenor_task_start
+tenor_apply_changeset
+tenor_activity
+tenor_task_control
 ```
 
 OpenCode registers MCP tools alongside built-in tools. The terrain proof must come from the actual OpenCode tool interface/call trace, not from local CLI output.
@@ -203,29 +191,18 @@ The server consumes the matching proof atomically; the full bearer token is neve
 TENOR_INIT_READY
 ```
 
-## Complete micro-write proof
+## Complete atomic changeset proof
 
-Use a harmless test file in a dedicated validation workspace and execute the complete MCP chain:
+Use two harmless test files in a dedicated validation workspace:
 
 ```text
-workflow_next
-before_task
-scribe_query
-graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record or auditable skip
-release claim and lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent="write", resources=[file_a, file_b], scope=".")
+tenor_apply_changeset(task_id, changes=[file_a, file_b], validators=[...])
+  -> TENOR_CHANGESET_COMMITTED_TASK_FINISHED
 ```
 
-Do not use OpenCode's built-in edit/write tool for this proof.
+The proof must also execute one validator failure and confirm both files are
+restored byte-for-byte. Do not use OpenCode's built-in edit/write tool.
 
 ## Direct-write bypass test
 

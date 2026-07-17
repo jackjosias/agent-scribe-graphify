@@ -74,11 +74,12 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 - Shared init is serialized by an owned nonce lock.
 - Fresh partial lock files use filesystem `mtime` for age fallback.
 - `SAME_PROJECT` never purges active shared runtime.
-- Every agent has a distinct identity, proof and lease.
+- Every agent has a distinct identity bound to its successfully bridged MCP process.
 - Reads may run concurrently.
-- Writes require resource lock, claim, action lease and patch queue.
-- No agent uses another agent's proof, lease, claim or lock.
-- Finish requires zero active claims, locks and pending patches owned by the agent.
+- Public task calls do not accept caller-supplied identities or context tokens.
+- Writes use one atomic multi-file changeset; TENOR acquires ordered locks, preflights every hash, validates and either commits all files or rolls all files back.
+- No agent may retire, replace, pause, cancel or finish another agent's task.
+- A daemon heartbeat and rolling task TTL keep genuinely active work alive; stale/dead processes still expire fail-closed.
 
 ## Atomic-write contract
 
@@ -93,27 +94,21 @@ This applies to installation manifests, host instruction repair and future share
 For code or architecture work:
 
 ```text
-workflow_next
-before_task
-targeted scribe_query
-targeted graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record or auditable skip
-release claim and lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent, resources, scope)
+  -> internal targeted SCRIBE + Graphify
+tenor_apply_changeset(task_id, changes[], validators[])
+  -> internal preflight + ordered locks + atomic apply/rollback
+  -> internal SCRIBE record + terminal task closure
 ```
 
-Machine intent is restricted to `read`, `write`, `delete`. One `agent_id` owns
-at most one active task and cannot be replaced or retired to escape HARD_STOP.
-A multi-file task rescopes sequentially only after the previous file has an
-MCP applied-patch receipt.
+Machine intent is restricted to `read`, `write`, `delete`. One process-bound
+identity owns at most one active task and cannot be replaced or retired to
+escape a fail-closed verdict. `tenor_activity` reports agent/task/current/last/next
+state. `tenor_task_control` is owner-only for pause/resume/cancel/read-finish.
+
+The older fine-grained tools remain internal compatibility primitives and are
+not advertised to host models. They are runtime implementation details, not a
+workflow the host model should orchestrate.
 
 For read-only or research work, use the smallest safe tier and do not manufacture write ceremony.
 

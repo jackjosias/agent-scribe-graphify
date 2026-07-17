@@ -21,7 +21,7 @@ if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
 import server_ext as mcp
-from runtime import db, discipline
+from runtime import db, discipline, presence
 from host_adapter import host_config
 from host_adapter.launcher import HostLaunchConfig, run_tenor_init_bridge
 from proof_signer import issue_proof
@@ -92,6 +92,7 @@ class TenorInitBridgeTest(unittest.TestCase):
         mcp.tenor_init_bridge.__globals__["_PROOF_SIGNER_AVAILABLE"] = True
 
     def tearDown(self) -> None:
+        presence.stop(self.root, AGENT_SESSION_ID)
         os.chdir(self.old_cwd)
         os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
         for key, previous in self.old_host_env.items():
@@ -252,8 +253,8 @@ class TenorInitBridgeTest(unittest.TestCase):
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_HOST_UNBOUND")
         self.assertEqual(result.get("state"), "HOST_MCP_UNBOUND")
 
-    def test_bridge_retires_ghost_agents(self) -> None:
-        """Bridge should retire other active agents from same host_tool."""
+    def test_bridge_preserves_other_agent_without_guessing_it_is_a_ghost(self) -> None:
+        """Bridge observes another agent but never retires it heuristically."""
         ghost_id = "ghost-agent-001"
         db.register_agent(host_tool=HOST_TOOL, agent_id=ghost_id)
         db.heartbeat(ghost_id)
@@ -269,9 +270,26 @@ class TenorInitBridgeTest(unittest.TestCase):
         self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
         self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
         retired = result.get("retired_ghosts", [])
-        self.assertIn(ghost_id, retired, f"ghost {ghost_id} should be retired, got {retired}")
+        self.assertNotIn(ghost_id, retired)
+        observed_step = next(step for step in result["steps"] if step["step"] == "retire_ghosts")
+        observed = observed_step.get("observed_parallel_agents", [])
+        self.assertIn(ghost_id, [item["agent_id"] for item in observed])
         ghost_status = db.agent_status(ghost_id)
-        self.assertEqual(ghost_status.get("status"), "retired", f"ghost should be retired: {ghost_status}")
+        self.assertEqual(ghost_status.get("status"), "active", ghost_status)
+
+    def test_bridge_binds_identity_to_current_mcp_process_and_starts_presence(self) -> None:
+        result = call_tool(
+            "tenor_init_bridge",
+            agent_session_id=AGENT_SESSION_ID,
+            host_tool=HOST_TOOL,
+            proof_token=self.proof(),
+        )
+        self.assertTrue(result.get("ok"), result)
+        binding = result.get("process_bound_identity", {})
+        self.assertEqual(binding.get("agent_id"), AGENT_SESSION_ID)
+        self.assertEqual(binding.get("pid"), os.getpid())
+        self.assertTrue(binding.get("presence", {}).get("ok"), binding)
+        self.assertFalse(binding.get("caller_supplied_agent_id_required_for_task_tools"))
 
     def test_bridge_does_not_retire_active_parallel_agent(self) -> None:
         """Bridge must NOT retire a parallel agent with an active task context."""

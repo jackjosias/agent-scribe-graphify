@@ -15,26 +15,15 @@ class HostVerdict:
 
 
 _REQUIRED_TOOLS = (
-    "workflow_next",
-    "before_task",
-    "discipline_ping",
-    "scribe_query",
-    "graphify_query",
-    "pre_action_guard",
-    "resource_lock_claim",
-    "resource_lock_release",
-    "claim_resource",
     "file_hash",
-    "propose_patch",
-    "apply_patch",
-    "delete_resource",
-    "workspace_audit",
-    "scribe_record",
-    "finish_task",
     "tenor_init_bridge",
     "portability_check",
     "graphify_required_check",
     "graphify_project_build",
+    "tenor_task_start",
+    "tenor_apply_changeset",
+    "tenor_activity",
+    "tenor_task_control",
 )
 _GUARD_BLOCK_START = "<!-- agent-scribe-graphify:auto-guard:start -->"
 _GUARD_BLOCK_END = "<!-- agent-scribe-graphify:auto-guard:end -->"

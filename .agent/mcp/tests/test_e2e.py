@@ -41,6 +41,10 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 MCP_DIR = HERE.parent
 SERVER_ENTRY = str(MCP_DIR / "server_entry.py")
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+
+from runtime import graphify_readiness, installation_state
 
 RESOURCE = "tracked.txt"
 RESOURCE_B = "other-tracked.txt"
@@ -114,6 +118,9 @@ class McpSubprocessClient:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
+            for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+                if stream is not None:
+                    stream.close()
             self.proc = None
 
     @property
@@ -175,7 +182,10 @@ class E2ETestBase(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="e2e-"))
         self.client = McpSubprocessClient(
             cwd=str(self.root),
-            env_extra={"AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)},
+            env_extra={
+                "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root),
+                graphify_readiness.FIXTURE_ENV: "1",
+            },
         )
 
     def tearDown(self) -> None:
@@ -193,12 +203,6 @@ class E2ETestBase(unittest.TestCase):
         mcp_link = self.root / ".agent" / "mcp"
         if not mcp_link.exists():
             mcp_link.symlink_to(MCP_DIR, target_is_directory=True)
-        if with_graphify:
-            gdir = self.root / "graphify-out"
-            gdir.mkdir(parents=True, exist_ok=True)
-            (gdir / "graph.json").write_text('{"nodes":[],"edges":[]}')
-            (gdir / "GRAPH_REPORT.md").write_text("# Report\n\nEmpty.\n")
-            (gdir / "graph.html").write_text("<html><body></body></html>\n")
         (self.root / RESOURCE).write_text(FILE_CONTENT)
         if extra_files:
             for fname in extra_files:
@@ -208,6 +212,13 @@ class E2ETestBase(unittest.TestCase):
         self._git("config", "user.name", "E2E Test")
         self._git("add", ".")
         self._git("commit", "-m", "initial")
+        prepared = installation_state.ensure_fresh_installation_state(self.root)
+        self.assertTrue(prepared["ok"], prepared)
+        finalized = installation_state.finalize_installation_state(self.root)
+        self.assertTrue(finalized["ok"], finalized)
+        if with_graphify:
+            fixture = graphify_readiness.write_smoke_fixture(self.root)
+            self.assertTrue(fixture["ok"], fixture)
 
     def _git(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -401,7 +412,7 @@ class TestE2EFullReadWorkflow(E2ETestBase):
         self.client.start()
 
         self._register()
-        bt = self._before_task(intent="inspect")
+        bt = self._before_task(intent="write")
         ctx = {"task_id": bt["task_id"], "context_token": bt["context_token"]}
         self._scribe_query(ctx)
 
@@ -645,16 +656,25 @@ class TestE2EMissingGraphify(E2ETestBase):
         self.client.start()
 
         self._register()
-        bt = self._before_task(intent="inspect")
+        bt = self._before_task(intent="write")
         ctx = {"task_id": bt["task_id"], "context_token": bt["context_token"]}
         self._scribe_query(ctx)
+
+        graph = self.client.call_raw(
+            "graphify_query",
+            agent_id=AGENT_A,
+            query="impact of tracked file",
+            resource=RESOURCE,
+            **ctx,
+        )
+        self.assertEqual(graph["verdict"], "GRAPHIFY_UNAVAILABLE", graph)
 
         guard = self.client.call_raw(
             "pre_action_guard", agent_id=AGENT_A, intent="write",
             resource=RESOURCE, planned_action="claim_resource",
             **ctx,
         )
-        self.assertEqual(guard["verdict"], "GRAPHIFY_OUTPUTS_MISSING", guard)
+        self.assertEqual(guard["verdict"], "GRAPHIFY_MISSING", guard)
         self.assertFalse(guard.get("ok", True), guard)
         self.assertFalse(guard.get("write_allowed", True), guard)
 
@@ -675,7 +695,7 @@ class TestE2EUnknownAgent(E2ETestBase):
 
 
 class TestE2EToolsList(E2ETestBase):
-    """Scenario 12: tools/list returns >= 42 tools with required set."""
+    """Scenario 12: tools/list exposes only bootstrap plus four task tools."""
 
     def test_tools_list_contract(self) -> None:
         self._prepare_workspace()
@@ -684,23 +704,13 @@ class TestE2EToolsList(E2ETestBase):
         self.client.initialize()
         tools = self.client.list_tools()
         names = [t["name"] for t in tools]
-        self.assertGreaterEqual(
-            len(tools), 42,
-            f"Expected >=42 tools, got {len(tools)}: {names}",
-        )
         required = {
-            "register_agent", "before_task", "scribe_query",
-            "graphify_query", "pre_action_guard", "claim_resource",
-            "propose_patch", "apply_patch", "finish_task",
-            "workspace_audit", "list_patches", "resume_task_context",
-            "file_hash", "release_claim", "lease_extend",
-            "resource_lock_claim", "resource_lock_release",
-            "resource_lock_status", "resource_lock_heartbeat",
-            "heartbeat", "session_status",
+            "file_hash", "tenor_init_bridge", "portability_check",
+            "graphify_required_check", "graphify_project_build",
+            "tenor_task_start", "tenor_apply_changeset", "tenor_activity",
+            "tenor_task_control",
         }
-        missing = required - set(names)
-        self.assertSetEqual(missing, set(),
-                            f"Required tools missing: {missing}")
+        self.assertSetEqual(set(names), required)
 
 
 class TestE2EResumeToken(E2ETestBase):

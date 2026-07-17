@@ -118,24 +118,19 @@ def render_scribe_rule() -> str:
         Avant toute mutation produit :
 
         ```text
-        workflow_next
-        before_task
-        targeted scribe_query
-        targeted graphify_query
-        pre_action_guard
-        resource_lock_claim
-        claim_resource
-        file_hash
-        propose_patch
-        apply_patch
-        workspace_audit
-        scribe_record ou skip causal auditable
-        release claim et lock
-        finish_task
-        workflow_next -> READY_FOR_NEXT_TASK
+        tenor_task_start(objective, intent, resources, scope)
+          -> SCRIBE cible + Graphify cible, executes en interne
+        tenor_apply_changeset(task_id, changes[], validators[])
+          -> preflight complet + locks ordonnes + commit atomique ou rollback total
+          -> record SCRIBE runtime + cloture terminale
         ```
 
         Les writes directs via shell, redirection, `tee`, `sed -i`, `cp`, `mv`, `rm`, outil natif edit/write/apply-patch ou équivalent sont interdits hors MCP.
+
+        L'API normale de tâche contient seulement `tenor_task_start`,
+        `tenor_apply_changeset`, `tenor_activity` et `tenor_task_control`. Les anciens
+        outils fins restent internes pour compatibilité ; le LLM hôte ne doit jamais
+        reconstruire manuellement leur chorégraphie.
 
         ## Multi-agent
 
@@ -143,8 +138,10 @@ def render_scribe_rule() -> str:
         - Le bootstrap partagé est sérialisé.
         - `TENOR_INIT_SAME_PROJECT` ne purge jamais la coordination active.
         - Les agents partagent runtime SQLite, SCRIBE et Graphify.
-        - Ils ne partagent jamais `agent_id`, preuve serveur one-shot, action lease, claim ou resource lock propriétaire.
-        - Toute clôture laisse zéro claim, lock ou patch en attente.
+        - L'identité est liée au processus MCP après le bridge ; les appels de tâche n'acceptent ni `agent_id` ni token fourni par le LLM.
+        - Un agent ne peut ni retirer ni contrôler la tâche d'un autre agent.
+        - Un heartbeat daemon et un TTL roulant maintiennent l'activité réelle sans masquer un processus mort.
+        - Toute clôture laisse zéro transaction ou lock en attente.
 
         ## Mémoire causale
 
@@ -384,10 +381,12 @@ def render_agents_block() -> str:
         - Never read `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly for normal agent retrieval; use `{RAG_COMMAND}` or MCP `scribe_query`.
         - SCRIBE results must change the plan or be explicitly challenged; retrieval is not a checkbox.
         - Use Graphify before architecture or broad code changes; prefer targeted structure/blast-radius queries over mass file reads.
-        - Every mutation requires `pre_action_guard`, an action lease, resource lock/claim, file hash, patch queue, `workspace_audit`, release and `finish_task`.
+        - The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
+        - `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side. The host model must not replay the legacy internal choreography.
+        - Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with fresh hashes and bounded validator argv arrays; TENOR owns locks, rollback, SCRIBE recording and closure.
         - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.
-        - A prose-only “done” without `finish_task` and `READY_FOR_NEXT_TASK` is not completion.
-        - Each terminal uses its own `agent_id`, server-side one-time proof and lease. The full bearer token is never printed or persisted.
+        - A prose-only “done” without a terminal machine verdict and validator evidence is not completion.
+        - Each terminal uses its own process-bound identity and server-side one-time proof. Task calls never accept caller-supplied `agent_id` or context tokens.
         - `TENOR_INIT_SAME_PROJECT` never repairs the bundle; only the verified project-local MCP entry and binding receipt may be managed automatically.
         - A complete raw copy of `.agent/` is a mandatory supported installation path on Linux, macOS and Windows; relocation is classified from the current root and manifest.
         - Runtime purge preserves `.agent/state/outputs/`; canonical output wins and conflicting legacy output is quarantined under `_legacy_migrated/`.

@@ -22,10 +22,12 @@ from runtime import first_write_hardening  # noqa: E402
 from runtime import first_write_gate_binding  # noqa: E402
 from runtime import patch_queue, task_discovery  # noqa: E402
 from runtime import task_discovery_evidence_patch  # noqa: E402
+from runtime import tenor_public_api  # noqa: E402
 
 task_discovery_evidence_patch.install(task_discovery, patch_queue)
 first_write_hardening.install(server, _IMPL_NAMESPACE)
 first_write_gate_binding.install(server)
+tenor_public_api.install(server)
 
 scribe_query = server.TOOLS["scribe_query"]
 workflow_next = server.TOOLS["workflow_next"]

@@ -16,6 +16,8 @@ class FirstWriteMachineContractTest(unittest.TestCase):
         self.assertTrue(data["activation"]["scribe_unavailable_is_not_a_miss"])
         self.assertTrue(data["activation"]["query_text_is_not_relevance_evidence"])
 
+        # This remains the fail-closed internal protocol. The public host API
+        # executes it server-side instead of exposing the choreography.
         required = set(data["required_tools"])
         for tool in (
             "scope_task_resource",

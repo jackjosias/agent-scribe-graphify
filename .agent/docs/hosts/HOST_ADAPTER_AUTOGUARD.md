@@ -1,47 +1,44 @@
-# Host Adapter Auto-Guard (V2.13)
+# Host Adapter Auto-Guard — V2.16 compact task API
 
-The **Host Adapter Auto-Guard** is a framework designed to automate host discipline, shifting the responsibility of protocol compliance away from human reminders to the agent workflow itself.
+The adapter makes the host load the correct project-local MCP server, verifies
+the nine-tool public surface and installs a marked instruction block without
+overwriting unrelated project instructions.
 
-## Architecture
+## What is automated
 
-An adapter/launcher checks that:
-1. **Preflight**: Compares the host's active tools to check if `discipline_ping`, `pre_action_guard`, and `workspace_audit` are available.
-2. **Auto-Installation**: Automatically adds anti-bypass guidelines (the "auto-guard instructions") into host instruction files (e.g. `AGENTS.md` or `README.md`) between marked delimiters.
-3. **Automated Ping & Guard**: Integrates automatic calls to `discipline_ping` and `pre_action_guard` to enforce state FSM lease rules.
-4. **Bypass Detection Audit**: Calls `workspace_audit` to run Git audits detecting untracked filesystem edits bypassing MCP.
+1. Detect the host and manage only a verified project-local MCP entry.
+2. Require reconnect when host configuration changes.
+3. Verify bootstrap tools plus `tenor_task_start`,
+   `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`.
+4. Tell the host to use the two-call write path rather than the internal
+   fine-grained state machine.
+5. Deny native autonomous mutation where the host permission model allows it.
 
-## Safety Levels
+## Runtime guarantees
 
-We classify host environments into four security categories:
+- Identity is bound to the successfully bridged MCP process.
+- Task start performs targeted SCRIBE and Graphify internally.
+- Changeset apply performs ordered locking, all-file hash preflight, atomic
+  apply/rollback, bounded no-shell validation, SCRIBE evidence and closure.
+- Activity consolidates process presence and current/last/next task state.
+- Task control is owner-only.
 
-* **UNSAFE**: Required MCP tools are missing, OR the host cannot execute the auto-guard protocol.
-* **ACCEPTABLE**: MCP tools are present, but instructions have not been deployed, or FSM checkpoints are occasionally bypassed.
-* **SAFE_CANDIDATE**: MCP tools are present, auto-guard instructions are active, and recent audits succeed. However, native file edit commands are still available to the host.
-* **SAFE**: Complete sandboxing where native write/exec tools are disabled or fully wrapped, making it physically impossible to bypass MCP.
+## CLI diagnostics
 
-## CLI Usage
-
-Run preflight checks:
 ```bash
 python3 .agent/scripts/host_auto_guard.py preflight --host opencode
-```
-
-Deploy auto-guard instructions:
-```bash
 python3 .agent/scripts/host_auto_guard.py install-instructions --host opencode --target .
 ```
 
-Verify planned actions before write/patch operations:
-```bash
-python3 .agent/scripts/host_auto_guard.py guard \
-  --agent-id test-agent \
-  --request "fix bug" \
-  --intent write \
-  --resource src/main.py \
-  --planned-action propose_patch
-```
+The older `guard` and `audit` subcommands remain compatibility diagnostics for
+the internal protocol. They are not the public host workflow.
 
-Run workspace bypass audit:
-```bash
-python3 .agent/scripts/host_auto_guard.py audit --agent-id test-agent --task-id task_xyz
-```
+## Safety classification
+
+- `UNSAFE`: required public tools absent, wrong root or uncontrolled mutation.
+- `ACCEPTABLE`: public API works but native host writes remain freely usable.
+- `SAFE_CANDIDATE`: root/API/permissions are correct, terrain transaction proof pending.
+- `SAFE`: atomic commit and rollback terrain tests pass and bypass paths are denied or detected.
+
+No adapter can neutralize an operating-system principal that has unrestricted
+write access outside the host. That residual boundary must remain explicit.

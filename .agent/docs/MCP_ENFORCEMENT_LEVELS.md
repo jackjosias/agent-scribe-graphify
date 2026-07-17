@@ -1,37 +1,42 @@
-# MCP Enforcement Levels
+# MCP enforcement levels — V2.16 compact surface
 
-## Level 1 — Prompt discipline
+## Level 0 — advisory
 
-Le prompt demande au modèle de suivre le workflow. C'est utile pour l'intention, mais ce n'est pas une barrière technique.
+Documentation alone cannot prevent a writable host from bypassing MCP.
 
-## Level 2 — workflow_next route mécanique
+## Level 1 — host permissions
 
-`workflow_next` est un routeur mécanique MCP. Il ordonne `before_task`, `scribe_query`, `graphify_query`, puis les étapes de claim, hash, patch, delete, record et finish.
+Project-local host configuration denies native autonomous edit and broad shell
+mutation where the host supports it. Unrelated MCP servers are preserved.
 
-Depuis V2.8, `workflow_next` transporte aussi `task_id/context_token` après `before_task` pour que les étapes de contexte puissent être liées aux writes MCP. Depuis V2.8.1, les writes/deletes refusent les contextes wildcard : un task token mutateur doit être scopé à une resource précise.
+## Level 2 — compact public API
 
-## Level 3 — MCP context/write/delete gates
+The host sees four normal task tools, not the internal state machine. Targeted
+SCRIBE/Graphify retrieval and task creation are one server-side operation.
+Multi-file mutation, validation, evidence and closure are one server-side
+operation.
 
-V2.8 ferme le bypass MCP-context avec `task_id/context_token` stocké dans `coordination.sqlite`. V2.8.1 ferme le bypass de scope `resource="" -> target` pour `propose_patch` et `delete_resource`.
+## Level 3 — process-bound authority
 
-`before_task` crée un contexte de tâche scopé à `agent_id`, `request`, `intent` et `resource`, avec TTL. `scribe_query` et `graphify_query` marquent ce contexte comme prêt. Le token brut n'est jamais stocké, seul son hash l'est.
+`tenor_init_bridge` binds the agent identity to the MCP process. Task calls do
+not accept caller-provided identity or context tokens. Owner mismatch blocks
+changeset application and task control.
 
-`propose_patch` et `delete_resource` exigent maintenant un contexte prêt, une resource de contexte non vide, une égalité stricte avec la cible normalisée, et un intent mutateur autorisé avant d'appeler les gates bas niveau.
+## Level 4 — atomic mutation authority
 
-`apply_patch` impose patch propriétaire, status `proposed`, claim actif, `base_hash` et hash courant compatible.
+The runtime enforces project-relative scope, symlink refusal, fresh per-file
+hashes, deterministic locks, durable staging/backups, bounded no-shell
+validators, all-file rollback, crash recovery and idempotent request ids.
 
-`delete_resource` conserve ses protections existantes : confirmation exacte, `base_hash`, claim actif, fichier régulier, et absence de patch `proposed` ou `conflict` en attente.
+## Level 5 — liveness and multi-agent evidence
 
-## Level 4 — Host sans shell/edit direct
+Daemon heartbeat, rolling activity TTL and PID liveness distinguish an active
+process from abandoned work. Parallel agents are preserved and observable via
+`tenor_activity`; they are not heuristically retired.
 
-Le host ne fournit pas de shell direct ni d'outil d'édition direct, ou les désactive pour cette session. Les écritures passent alors par les tools MCP visibles.
+## Residual boundary
 
-## Level 5 — OS sandbox/proxy/daemon
-
-Une sandbox OS, un proxy filesystem ou un daemon de contrôle empêche physiquement les écritures hors MCP. C'est le niveau requis pour bloquer un processus local qui possède autrement les droits filesystem.
-
-## Limites restantes
-
-V2.8 ferme le bypass MCP-context : `bootstrap -> claim_resource -> file_hash -> propose_patch -> apply_patch` sans contexte ne peut plus proposer de patch. V2.8.1 interdit aussi les contextes wildcard pour les writes/deletes : un contexte mutateur sans resource ne peut plus écrire ou supprimer une cible réelle.
-
-Sans sandbox ou désactivation shell/edit, un host peut encore contourner MCP par filesystem direct. Ce point reste un sujet host/OS, pas un sujet `task_id/context_token`.
+A host or human with unrestricted operating-system write access can still
+modify files outside MCP. Host permissions plus the direct-filesystem tripwire
+reduce and detect that risk, but cannot turn an untrusted OS principal into a
+trusted one. This boundary must be stated, not hidden behind a “100%” claim.

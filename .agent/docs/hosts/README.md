@@ -29,7 +29,7 @@ Host integration starts only after the local installation is ready and Graphify 
 6. verify host-process binding and prove MCP root binding
 7. call tenor_init_bridge without exposing the proof bearer token
 8. obtain TENOR_INIT_READY only after the real host confirms every gate
-9. run one complete MCP micro-write
+9. run one complete atomic MCP changeset
 10. test direct-write bypass behavior
 ```
 
@@ -52,26 +52,20 @@ proves only `MCP_LOCAL_SERVER_READY`. It does **not** prove that the host UI exp
 Each host must expose at least:
 
 ```text
-workflow_next
-before_task
-discipline_ping
-scribe_query
-graphify_query
-pre_action_guard
-resource_lock_claim
-resource_lock_release
-claim_resource
 file_hash
-propose_patch
-apply_patch
-delete_resource
-workspace_audit
-scribe_record
-finish_task
 tenor_init_bridge
 portability_check
 graphify_required_check
+graphify_project_build
+tenor_task_start
+tenor_apply_changeset
+tenor_activity
+tenor_task_control
 ```
+
+The five bootstrap tools plus four normal task tools are the complete public
+surface. Fine-grained legacy tools remain server-side compatibility primitives
+and must not be advertised to the host model.
 
 ## Root binding
 
@@ -126,7 +120,7 @@ Stop the task and report the affected files.
 - `UNSAFE` — MCP absent/non-visible, wrong root, or uncontrolled direct writes.
 - `ACCEPTABLE` — MCP visible and root-bound, but direct shell/edit paths remain accessible.
 - `SAFE_CANDIDATE` — MCP visible/root-bound and native writes are denied or strict-ask, but full terrain proof is incomplete.
-- `SAFE` — MCP visible/root-bound, complete micro-write proven, and no uncontrolled project mutation path remains.
+- `SAFE` — MCP visible/root-bound, complete atomic changeset proven, and no uncontrolled project mutation path remains.
 - `UNKNOWN` — not tested or insufficient evidence.
 
 Until host visibility and root binding are proved, report:
@@ -151,7 +145,7 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 - `CURSOR_MCP.md`
 - `GEMINI_CLI_MCP.md`
 
-Every guide must end with a terrain verdict table covering tool visibility, root binding, native write paths, bridge, micro-write and bypass test.
+Every guide must end with a terrain verdict table covering tool visibility, root binding, native write paths, bridge, atomic changeset and bypass test.
 
 ## Documentation maintenance
 

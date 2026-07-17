@@ -235,37 +235,28 @@ The Graphify/SCRIBE bridge refuses structural drift analysis on missing, stub, s
 A mutation requires:
 
 ```text
-workflow_next
-before_task
-targeted scribe_query
-targeted graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record or auditable causal skip
-release claim and lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent, resources, scope)
+  -> internal targeted SCRIBE and Graphify
+tenor_apply_changeset(task_id, changes[], validators[])
+  -> preflight all paths, hashes and locks before any write
+  -> commit every file or rollback every file
+  -> runtime SCRIBE evidence and terminal closure
 ```
 
 Native host shell/edit/write/apply-patch paths are not accepted as equivalent.
 
 Le champ machine `intent` est un enum strict : `read`, `write`, `delete`. La
-description libre reste dans `request`. Une identité ne possède qu'une tâche
-active ; elle ne peut ni s'enregistrer sous un nouveau nom ni se retirer avec
-des tâches, claims, locks ou patches actifs pour échapper à un HARD_STOP.
+description libre reste dans l'objectif. L'identité est liée au processus MCP
+après le bridge et n'est plus fournie par le LLM. Une identité ne possède
+qu'une tâche active et ne peut ni retirer ni contrôler un autre agent.
 
-Une tâche multi-fichier rescope séquentiellement avec
-`scope_task_resource`. Chaque rescopage exact exige le reçu d'un patch MCP
-appliqué sur la ressource précédente et l'absence de propriété en cours.
+Une tâche multi-fichier reste une seule transaction. Elle exige un hash frais
+par fichier, refuse traversal/symlinks/scope escape, acquiert des locks ordonnés
+et exécute des validateurs argv bornés sans shell. Toute erreur restaure tous
+les fichiers. Un record runtime n'est émis qu'après commit et validation.
 
-Un record `FIXED`/`bugfix` exige un `task_id`, un `context_token`, au moins un
-reçu `apply_patch` et un tripwire propre. Un record JSON local n'est jamais une
-preuve de correction à lui seul.
+Les anciens outils fins restent internes pour compatibilité ; ils ne sont pas
+annoncés au host et ne doivent pas être orchestrés manuellement.
 
 ## Graphify sans sortie root
 

@@ -32,7 +32,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import db, direct_fs_tripwire, discipline, patch_queue, task_context
+from runtime import db, direct_fs_tripwire, discipline, graphify_readiness, patch_queue, task_context
 
 RESOURCE = "tracked.txt"
 RESOURCE2 = "other.txt"
@@ -64,11 +64,6 @@ def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 def _make_workspace(root: Path) -> None:
     (root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
-    gdir = root / "graphify-out"
-    gdir.mkdir(parents=True, exist_ok=True)
-    (gdir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-    (gdir / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
-    (gdir / "graph.html").write_text("<html></html>\n", encoding="utf-8")
 
 
 def _init_mcp(root: Path, *, graphify_out: bool = True) -> None:
@@ -92,6 +87,11 @@ def _init_mcp(root: Path, *, graphify_out: bool = True) -> None:
     mcp.discipline = discipline
     db.init_db(root)
     discipline.ensure_schema()
+    if graphify_out:
+        os.environ[graphify_readiness.FIXTURE_ENV] = "1"
+        fixture = graphify_readiness.write_smoke_fixture(root)
+        if not fixture.get("ok"):
+            raise RuntimeError(f"cannot create Graphify integration fixture: {fixture}")
 
 
 def _setup(root: Path, *, graphify_out: bool = True) -> Path:
@@ -111,6 +111,9 @@ def _ready_context(agent_id: str) -> dict[str, str]:
 
 
 def _lease(ctx: dict[str, str], agent_id: str, resource: str, action: str) -> str:
+    fixture_dir = Path(mcp.server.ROOT) / ".agent" / "state" / "outputs" / "graphify-out"
+    if fixture_dir.is_dir():
+        graphify_readiness.write_smoke_fixture(Path(mcp.server.ROOT))
     pg = call_tool("pre_action_guard", agent_id=agent_id, resource=resource, planned_action=action, **ctx)
     assert pg["verdict"] == "PRE_ACTION_GUARD_OK", pg
     return pg["action_lease"]["lease_id"]
@@ -436,13 +439,16 @@ class EdgeCasesAndRecoveryTest(unittest.TestCase):
         agents = call_tool("list_agents")
         self.assertEqual(agents["count"], 1)
 
-    def test_14_list_tools_returns_all_tools(self) -> None:
+    def test_14_list_tools_returns_compact_public_surface(self) -> None:
         tools = call_list_tools()
         names = [t["name"] for t in tools]
-        core = {"register_agent", "before_task", "scribe_query", "graphify_query", "claim_resource",
-                "propose_patch", "apply_patch", "finish_task", "workspace_audit", "pre_action_guard",
-                "resource_lock_claim", "resource_lock_release", "resource_lock_heartbeat", "resource_lock_status"}
-        self.assertTrue(core.issubset(names), f"Missing: {core - set(names)}")
+        public = {
+            "file_hash", "tenor_init_bridge", "portability_check",
+            "graphify_required_check", "graphify_project_build",
+            "tenor_task_start", "tenor_apply_changeset", "tenor_activity",
+            "tenor_task_control",
+        }
+        self.assertSetEqual(set(names), public)
 
     def test_15_finish_task_without_active_task_returns_error(self) -> None:
         call_tool("register_agent", agent_id=AGENT_A, host_tool="test")

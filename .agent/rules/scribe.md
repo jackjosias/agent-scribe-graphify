@@ -70,24 +70,19 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 Avant toute mutation produit :
 
 ```text
-workflow_next
-before_task
-targeted scribe_query
-targeted graphify_query
-pre_action_guard
-resource_lock_claim
-claim_resource
-file_hash
-propose_patch
-apply_patch
-workspace_audit
-scribe_record ou skip causal auditable
-release claim et lock
-finish_task
-workflow_next -> READY_FOR_NEXT_TASK
+tenor_task_start(objective, intent, resources, scope)
+  -> SCRIBE cible + Graphify cible, executes en interne
+tenor_apply_changeset(task_id, changes[], validators[])
+  -> preflight complet + locks ordonnes + commit atomique ou rollback total
+  -> record SCRIBE runtime + cloture terminale
 ```
 
 Les writes directs via shell, redirection, `tee`, `sed -i`, `cp`, `mv`, `rm`, outil natif edit/write/apply-patch ou équivalent sont interdits hors MCP.
+
+L'API normale de tâche contient seulement `tenor_task_start`,
+`tenor_apply_changeset`, `tenor_activity` et `tenor_task_control`. Les anciens
+outils fins restent internes pour compatibilité ; le LLM hôte ne doit jamais
+reconstruire manuellement leur chorégraphie.
 
 ## Multi-agent
 
@@ -95,8 +90,10 @@ Les writes directs via shell, redirection, `tee`, `sed -i`, `cp`, `mv`, `rm`, ou
 - Le bootstrap partagé est sérialisé.
 - `TENOR_INIT_SAME_PROJECT` ne purge jamais la coordination active.
 - Les agents partagent runtime SQLite, SCRIBE et Graphify.
-- Ils ne partagent jamais `agent_id`, preuve serveur one-shot, action lease, claim ou resource lock propriétaire.
-- Toute clôture laisse zéro claim, lock ou patch en attente.
+- L'identité est liée au processus MCP après le bridge ; les appels de tâche n'acceptent ni `agent_id` ni token fourni par le LLM.
+- Un agent ne peut ni retirer ni contrôler la tâche d'un autre agent.
+- Un heartbeat daemon et un TTL roulant maintiennent l'activité réelle sans masquer un processus mort.
+- Toute clôture laisse zéro transaction ou lock en attente.
 
 ## Mémoire causale
 

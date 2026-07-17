@@ -108,10 +108,10 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
     def test_policy_requires_complete_v216_surface(self) -> None:
         required = HostPolicy(self.root).get_required_tools()
         for tool in (
-            "workflow_next", "before_task", "discipline_ping", "scribe_query",
-            "graphify_query", "pre_action_guard", "resource_lock_claim",
-            "propose_patch", "apply_patch", "workspace_audit", "finish_task",
-            "tenor_init_bridge", "graphify_project_build",
+            "file_hash", "tenor_init_bridge", "portability_check",
+            "graphify_required_check", "graphify_project_build",
+            "tenor_task_start", "tenor_apply_changeset", "tenor_activity",
+            "tenor_task_control",
         ):
             self.assertIn(tool, required)
 
@@ -144,8 +144,9 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertIn("AGENT-SCRIBE-GRAPHIFY AUTO-GUARD", instructions)
         self.assertIn("scribe tenor-init", instructions)
         self.assertIn("HOST_MCP_UNBOUND", instructions)
-        self.assertIn("discipline_ping", instructions)
-        self.assertIn("workspace_audit", instructions)
+        self.assertIn("tenor_task_start", instructions)
+        self.assertIn("tenor_apply_changeset", instructions)
+        self.assertIn("all-or-nothing", instructions)
         self.assertIn("prose-only", instructions)
 
     def test_install_instructions_is_atomic_and_idempotent(self) -> None:

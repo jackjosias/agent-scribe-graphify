@@ -51,6 +51,7 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             self.assertIn("Proof receipt        : SERVER_SIDE_ONE_TIME_READY", tenor_init.stdout)
             self.assertIn("Status init          : LOCAL_VALID_HOST_UNBOUND", tenor_init.stdout)
             self.assertIn("MCP local server     : READY", tenor_init.stdout)
+            self.assertIn("TENOR_INIT_LOCAL_MCP_READY tools=9", tenor_init.stdout)
             self.assertIn("Init status          : LOCAL_INIT_READY_HOST_MCP_UNBOUND", tenor_init.stdout)
             self.assertNotIn("Proof token", tenor_init.stdout + tenor_init.stderr)
             self.assertNotIn("v1.", tenor_init.stdout + tenor_init.stderr)

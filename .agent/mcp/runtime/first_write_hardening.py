@@ -23,8 +23,7 @@ def _payload(result: Dict[str, Any]) -> dict[str, Any]:
 
 
 def _coarse(resource: str) -> bool:
-    value = (resource or "").strip().lower()
-    return value in _COARSE or "whole repo" in value
+    return task_context.is_scope_container(resource)
 
 
 def _task(agent_id: str, task_id: str) -> dict[str, Any] | None:

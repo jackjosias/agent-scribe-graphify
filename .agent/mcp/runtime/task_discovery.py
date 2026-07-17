@@ -101,6 +101,17 @@ def _exact_resource(task: dict[str, Any], resource: str) -> str:
         raise TaskDiscoveryError("TASK_DISCOVERY_EXACT_RESOURCE_REQUIRED")
     stored = patch_queue.safe_resource(stored_raw)
     if safe != stored:
+        task_context = _task_context_module()
+        if task_context.is_scope_container(stored) and task_context._scope_contains(stored, safe):
+            raise TaskDiscoveryError(
+                "TASK_DISCOVERY_SCOPE_TASK_RESOURCE_REQUIRED",
+                {
+                    "task_resource": stored,
+                    "action_resource": safe,
+                    "required_internal_action": "scope_task_resource",
+                    "reason": "Discovery evidence stays hash-bound to one exact file even when the task starts at directory scope.",
+                },
+            )
         raise TaskDiscoveryError(
             "TASK_DISCOVERY_RESOURCE_MISMATCH",
             {"task_resource": stored, "action_resource": safe},

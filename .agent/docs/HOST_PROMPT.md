@@ -1,188 +1,34 @@
-# HOST_PROMPT — agent-scribe-graphify V2
+# Host prompt — compact TENOR task protocol
 
-Copie-colle ce prompt court dans le LLM hôte.
-
----
-
-Tu travailles dans un projet contenant `.agent/` V2.
-
-Le MCP obligatoire s'appelle :
+Use this after `TENOR_INIT_READY`.
 
 ```text
-agent-scribe-graphify
+For each user objective, call tenor_task_start exactly once with canonical
+intent read|write|delete, project-relative resources and their common scope.
+
+TENOR executes targeted SCRIBE and Graphify retrieval internally. Use the
+returned evidence in the plan. Do not replay workflow_next/before_task/locks/
+claims/patches manually and do not invent agent_id, task_id or context tokens.
+
+For a write/delete task, inspect the relevant code and submit every intended
+file operation in one tenor_apply_changeset. Supply a fresh base hash per file,
+bounded validator argv arrays, a stable request_id and exact delete
+confirmations. Never use shell/native edit fallback.
+
+For a read task, finish through tenor_task_control(action="finish"). Use that
+tool for explicit pause/resume/cancel. Use tenor_activity for consolidated
+status instead of diagnostic call loops.
+
+Report completion only when TENOR returns a terminal machine verdict. Include
+the changeset id and validator results for writes. If the transaction rolls
+back, report the exact failure and retry the same task after correcting the
+changeset; never create or retire an identity to escape the failure.
 ```
 
-## Règle absolue
-
-Tu ne dois pas décider seul la prochaine étape du workflow.
-
-Avant toute action importante, appelle le tool MCP :
+If tools are not visible in the actual host interface, report exactly:
 
 ```text
-workflow_next
+HOST_MCP_UNBOUND
 ```
 
-Tu dois ensuite exécuter exactement le `must_call.tool` retourné avec les `must_call.args` retournés.
-
-Après chaque tool exécuté, rappelle `workflow_next` avec le dernier `verdict` obtenu.
-
-## Si MCP est indisponible
-
-Arrête-toi et réponds :
-
-```text
-STOP: MCP agent-scribe-graphify indisponible. Je ne peux pas continuer sans le canal de coordination obligatoire.
-```
-
-Tu n'as pas le droit de simuler MCP.
-Tu n'as pas le droit d'inventer un `agent_id`.
-Tu n'as pas le droit d'inventer un résultat de tool.
-
-## Boucle contexte obligatoire
-
-`workflow_next` peut imposer `scribe_query` après `before_task`. C'est une requête RAG ciblée et minimale, jamais une lecture complète de SCRIBE par défaut. Le host doit exécuter ce tool sans l'ignorer.
-
-`workflow_next` peut ensuite imposer `graphify_query` pour les tâches liées au code, architecture, refactor, bug, API, test, backend, frontend, sécurité, base de données, migration ou production. C'est une requête ciblée structure/impact/blast-radius, pas une lecture brute totale de Graphify.
-
-Chemin contexte minimal :
-
-```text
-before_task → targeted_scribe_query → targeted_graphify_query si code/architecture → action
-```
-
-Le host ne décide pas seul quand SCRIBE ou Graphify sont utiles : il suit `workflow_next`.
-
-## Write gate obligatoire
-
-Tu n'as pas le droit d'utiliser un outil host d'écriture directe pour modifier les fichiers du projet.
-
-Toute modification acceptable doit passer par MCP :
-
-```text
-workflow_next
-→ file_hash
-→ propose_patch
-→ workflow_next
-→ apply_patch
-```
-
-`apply_patch` est le seul chemin d'écriture accepté par `.agent` V2.4.
-
-Si tu as un outil direct du type edit/write/save file, considère-le comme interdit sauf instruction humaine explicite de bypass hors protocole.
-
-## Delete gate obligatoire
-
-Tu n'as pas le droit de supprimer un fichier avec un outil host direct.
-
-Toute suppression acceptable doit passer par MCP :
-
-```text
-workflow_next
-→ claim_resource
-→ file_hash
-→ demander permission utilisateur explicite
-→ delete_resource
-→ release_claim
-→ finish_task
-```
-
-Avant d'appeler `delete_resource`, demande la permission utilisateur et exige la phrase exacte :
-
-```text
-DELETE chemin/relatif/du/fichier
-```
-
-Sans cette phrase exacte, n'appelle pas `delete_resource`.
-
-## Premier appel recommandé
-
-Appelle `workflow_next` avec :
-
-```json
-{
-  "request": "résumé exact de la demande utilisateur",
-  "intent": "write|read|finish",
-  "resource": "chemin/projet/si_connu",
-  "host_tool": "nom-du-host",
-  "model_name": "nom-du-modele"
-}
-```
-
-Si `workflow_next` retourne `bootstrap`, appelle `bootstrap`.
-
-Ensuite, utilise l'`agent_id` retourné par `bootstrap` dans tous les appels suivants.
-
-## Boucle obligatoire
-
-```text
-workflow_next
-→ exécuter must_call
-→ récupérer verdict
-→ workflow_next avec last_verdict
-→ exécuter must_call
-→ répéter jusqu'à finish_task
-```
-
-## Interdictions
-
-```text
-- ne modifie aucun fichier avec un outil host direct
-- ne supprime aucun fichier avec un outil host direct
-- ne modifie aucun fichier sans claim_resource
-- ne supprime aucun fichier sans claim_resource, file_hash et permission utilisateur exacte
-- ne propose aucun patch sans file_hash/base_hash
-- n'applique aucun changement sans apply_patch MCP
-- ne termine jamais avec patch pending/conflict
-- ne contourne jamais un refus MCP
-- n'accède jamais à une ressource hors projet
-```
-
-## Si workflow_next demande une entrée manquante
-
-Si `workflow_next` retourne `INPUT_REQUIRED`, demande l'information à l'utilisateur ou lis les fichiers nécessaires. Ne devine pas.
-
-## Gravure mémoire obligatoire
-
-Si `workflow_next` demande `scribe_record`, le host doit l'appeler avant `finish_task`.
-
-Le host ne doit pas écrire directement dans `scribe-out/`. La seule écriture mémoire acceptée côté MCP est :
-
-```text
-scribe_record
-```
-
-`scribe_record` écrit un record local de staging dans `scribe-out/records/`. Ce verdict ne signifie pas que la mémoire durable a été mise à jour. Si le record est durable, le host doit ensuite appeler `scribe_promote_record` avant `finish_task`.
-
-## Fin de tâche
-
-Quand tu penses avoir terminé, appelle encore `workflow_next` avec :
-
-```json
-{
-  "agent_id": "AGENT_ID",
-  "intent": "finish",
-  "last_verdict": "DERNIER_VERDICT"
-}
-```
-
-Exécute le `must_call` retourné.
-
-### Preuve mémoire `AGENT-MEMOIRE_PROJECT_STATUS.scribe`
-
-Si `finish_task` retourne `MEMORY_PROOF_REQUIRED`, le système exige la preuve que
-les patches MCP appliqués ont bien été retenus dans la mémoire canonique.
-
-1. Modifie `AGENT-MEMOIRE_PROJECT_STATUS.scribe` via le protocole MCP contrôlé
-   (`file_hash` → `propose_patch` → `apply_patch`) avec les `patch_id` retournés
-   dans `applied_patch_ids`.
-2. Rappelle `scribe_query` pour rafraîchir le hash mémoire.
-3. Rappelle `finish_task`.
-
-Le commit du fichier mémoire n'est pas automatiquement requis. Si l'utilisateur
-demande explicitement le versioning, `git add` et `git commit` sont autorisés.
-
-Le système vérifie par substring exact-match qu'au moins un `patch_id` des mutations
-autorisées apparaît dans le texte du fichier mémoire. La modification directe de
-`AGENT-MEMOIRE_PROJECT_STATUS.scribe` est détectée comme `DIRECT_WRITE_BYPASS_DETECTED`.
-
-Tu n'as fini que lorsque `finish_task` retourne `TASK_FINISHED_OK`.
+A local `--list-tools` or shell JSON-RPC call is not host visibility proof.

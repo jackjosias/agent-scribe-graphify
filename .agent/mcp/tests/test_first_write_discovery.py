@@ -334,6 +334,67 @@ class FirstWriteDiscoveryTest(unittest.TestCase):
             1,
         )
 
+    def test_existing_directory_scope_narrows_to_descendant_without_patch_catch_22(self) -> None:
+        directory = "components/technical-analysis"
+        exact = f"{directory}/hooks/useDrawingManager.ts"
+        (self.root / directory / "hooks").mkdir(parents=True)
+        (self.root / exact).write_text("export const manager = true;\n", encoding="utf-8")
+        outside = "components/other.ts"
+        (self.root / "components" / "other.ts").write_text("export {};\n", encoding="utf-8")
+
+        task_id, token = self.new_task(directory)
+        task_context.mark_scribe_done(
+            self.agent_id,
+            task_id,
+            token,
+            result_count=0,
+            result_resources=directory,
+        )
+        task_context.mark_graphify_done(self.agent_id, task_id, token)
+
+        with self.assertRaises(task_discovery.TaskDiscoveryError) as exact_required:
+            task_discovery.mark_scribe_miss(
+                self.agent_id,
+                task_id,
+                token,
+                exact,
+                query="directory-scoped discovery",
+                stdout="",
+                reason="no history",
+            )
+        self.assertEqual(
+            exact_required.exception.code,
+            "TASK_DISCOVERY_SCOPE_TASK_RESOURCE_REQUIRED",
+        )
+
+        scoped = payload(mcp.scope_task_resource(
+            agent_id=self.agent_id,
+            task_id=task_id,
+            context_token=token,
+            resource=exact,
+        ))
+        self.assertEqual(scoped["verdict"], "TASK_RESOURCE_SCOPED", scoped)
+        self.assertEqual(scoped["previous_resource"], directory)
+        self.assertEqual(scoped["resource"], exact)
+
+        # A container is authority for descendants only, never for a sibling.
+        task_context.finish_task_context(self.agent_id, task_id, token)
+        next_context = task_context.create_task_context(
+            self.agent_id,
+            "directory scope sibling refusal",
+            intent="write",
+            resource=directory,
+            requires_graphify=False,
+        )
+        with self.assertRaises(task_context.TaskContextError) as refused:
+            task_context.scope_task_resource(
+                self.agent_id,
+                next_context["task_id"],
+                next_context["context_token"],
+                outside,
+            )
+        self.assertEqual(refused.exception.code, "TASK_RESOURCE_OUTSIDE_CONTAINER_SCOPE")
+
     def test_tools_are_registered_with_strict_schemas(self) -> None:
         self.assertIn("record_task_discovery", mcp.server.TOOLS)
         self.assertIn("scope_task_resource", mcp.server.TOOLS)

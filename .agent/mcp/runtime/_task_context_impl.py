@@ -286,8 +286,21 @@ def resume_task_context(agent_id: str, task_id: str) -> dict[str, Any]:
         data = dict(row)
         if data["agent_id"] != agent_id:
             raise TaskContextError("TASK_CONTEXT_AGENT_MISMATCH")
-        if data["status"] != "active" or data["expires_at"] < refreshed:
+        if data["status"] != "active":
             raise TaskContextError("TASK_CONTEXT_EXPIRED_RENEW_REQUIRED")
+        replacement = con.execute(
+            """
+            SELECT task_id FROM task_context_v2
+            WHERE agent_id=? AND task_id<>? AND status='active' AND expires_at>=?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (agent_id, task_id, refreshed),
+        ).fetchone()
+        if replacement:
+            raise TaskContextError(
+                "TASK_CONTEXT_REPLACED_BY_ACTIVE_TASK",
+                {"replacement_task_id": replacement["task_id"]},
+            )
         con.execute(
             "UPDATE task_context_v2 SET token_hash=?, expires_at=? WHERE task_id=? AND agent_id=?",
             (_hash(token), expires, task_id, agent_id),
@@ -313,6 +326,14 @@ def _load_ready(agent_id: str, task_id: str, context_token: str) -> dict[str, An
         raise TaskContextError("TASK_CONTEXT_EXPIRED_RENEW_REQUIRED")
     if not hmac.compare_digest(data["token_hash"], _hash(context_token)):
         raise TaskContextError("TASK_CONTEXT_TOKEN_MISMATCH")
+    refreshed_expiry = now_ts() + ttl_seconds()
+    require_agent_active(agent_id)
+    with connect() as con:
+        con.execute(
+            "UPDATE task_context_v2 SET expires_at=? WHERE task_id=? AND agent_id=? AND status='active'",
+            (refreshed_expiry, task_id, agent_id),
+        )
+    data["expires_at"] = refreshed_expiry
     return data
 
 

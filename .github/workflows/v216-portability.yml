@@ -8,7 +8,6 @@ on:
   push:
     branches:
       - "agent/v2-16-tenor-init-single-authority"
-      - "agent/v2-16-raw-copy-portability-staging"
       - "v2"
     paths:
       - ".agent/**"
@@ -58,6 +57,9 @@ jobs:
           .agent/mcp/runtime/_task_context_first_write_impl.py
           .agent/mcp/runtime/task_context.py
           .agent/mcp/runtime/db.py
+          .agent/mcp/runtime/presence.py
+          .agent/mcp/runtime/tenor_changeset.py
+          .agent/mcp/runtime/tenor_public_api.py
           .agent/mcp/_server_ext_impl.py
           .agent/mcp/server_entry.py
           .agent/host_adapter/policy.py
@@ -97,6 +99,9 @@ jobs:
               ("host_adapter", ".agent/mcp/tests/test_host_adapter_autoguard.py"),
               ("tenor_task_prompt", ".agent/mcp/tests/test_tenor_task_prompt.py"),
               ("stable_agent_identity", ".agent/mcp/tests/test_stable_agent_identity.py"),
+              ("tenor_agent_activity", ".agent/mcp/tests/test_tenor_agent_activity.py"),
+              ("tenor_changeset_transaction", ".agent/mcp/tests/test_tenor_changeset_transaction.py"),
+              ("tenor_public_api", ".agent/mcp/tests/test_tenor_public_api.py"),
               ("multi_agent_resource_lock", ".agent/mcp/tests/test_multi_agent_resource_lock.py"),
               ("terrain_enforcement", ".agent/mcp/tests/test_v216_terrain_enforcement.py"),
           ]
