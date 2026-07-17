@@ -805,6 +805,14 @@ def tenor_init_bridge(*args: Any, **kwargs: Any) -> dict[str, Any]:
                 "caller_supplied_agent_id_required_for_task_tools": False,
             }
             payload["normal_task_tools"] = list(PUBLIC_TASK_TOOLS)
+            payload["bridge_verdict"] = "TENOR_INIT_BRIDGE_OK"
+            payload["verdict"] = "TENOR_INIT_READY"
+            payload["state"] = "TENOR_INIT_READY"
+            payload["ready_scope"] = "HOST_PROCESS_ROOT_AND_SESSION"
+            payload["mcp_tools_visible_to_host_llm"] = True
+            payload["terminal"] = True
+            payload["next_action"] = "READY_FOR_NEXT_TASK"
+            payload.pop("tenor_init_ready_must_be_reported_by_real_host_after_root_binding", None)
             return _ok(payload)
     return result
 

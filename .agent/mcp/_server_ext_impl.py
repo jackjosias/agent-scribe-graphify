@@ -2741,11 +2741,21 @@ def tenor_init_bridge(
             "steps": steps,
         })
     bound_host = str(binding.get("host_id") or "unknown")
+    root_binding = {
+        "ok": True,
+        "verdict": "MCP_ROOT_BOUND_TO_HOST_PROCESS",
+        "project_root": str(server.ROOT.resolve()),
+        "host_id": bound_host,
+        "binding_id": str(binding.get("binding_id") or ""),
+        "config_path": str(binding.get("config_path") or ""),
+        "config_sha256": str(binding.get("config_sha256") or ""),
+    }
     steps.append({
         "step": "verify_host_process_binding",
         "ok": True,
         "verdict": binding.get("verdict", "HOST_PROCESS_BOUND"),
         "host_id": bound_host,
+        "project_root": root_binding["project_root"],
         "config_sha256": binding.get("config_sha256", ""),
     })
 
@@ -2883,6 +2893,7 @@ def tenor_init_bridge(
         "host_tool": bound_host,
         "model_name": model_name or "",
         "host_binding": binding,
+        "root_binding": root_binding,
         "ready_scope": "MCP_BRIDGE_ONLY",
         "tenor_init_ready_must_be_reported_by_real_host_after_root_binding": True,
         "steps": steps,

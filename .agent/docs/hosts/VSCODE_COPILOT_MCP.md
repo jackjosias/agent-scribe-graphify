@@ -31,9 +31,9 @@ Local `--list-tools` proves only local MCP startup. In the actual Copilot/agent 
 Then prove:
 
 ```text
-sentinel hash match
+host-bound receipt/config/root proof
 current workspace root
-tenor_init_bridge OK
+tenor_init_bridge -> TENOR_INIT_READY
 complete MCP micro-write
 native terminal/edit bypass controlled
 ```
@@ -61,7 +61,7 @@ Audit terminal commands, workspace edits, native patch/write tools, redirects, `
 Workspace MCP config on final head: NOT_TESTED
 MCP tools visible to Copilot LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

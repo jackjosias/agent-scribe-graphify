@@ -146,8 +146,11 @@ class PersistentMcpClient:
         if process.stdin is not None and not process.stdin.closed:
             try:
                 process.stdin.close()
-            except OSError:
-                pass
+            except OSError as exc:
+                print(
+                    f"MCP_PERSISTENT_STDIN_CLOSE_WARNING error={type(exc).__name__}:{exc}",
+                    file=sys.stderr,
+                )
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:

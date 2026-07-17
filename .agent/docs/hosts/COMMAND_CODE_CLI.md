@@ -44,8 +44,8 @@ Do not invent a filename or reuse another host's schema.
 
 ```text
 complete MCP tools visible to LLM
-root binding by sentinel hash
-tenor_init_bridge OK
+root binding by host receipt/config hash
+tenor_init_bridge -> TENOR_INIT_READY
 TENOR_INIT_READY
 complete MCP micro-write
 direct-write bypass refused or detected
@@ -60,7 +60,7 @@ Exact host identity: UNKNOWN
 Official MCP schema: UNKNOWN
 MCP tools visible: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

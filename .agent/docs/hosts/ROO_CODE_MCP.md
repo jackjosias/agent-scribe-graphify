@@ -31,9 +31,9 @@ Inside Roo Code, prove the full `.agent` tool surface is visible. Local `--list-
 Then prove:
 
 ```text
-host/MCP sentinel hash match
+host-bound receipt/config/root proof
 current project root
-tenor_init_bridge OK
+tenor_init_bridge -> TENOR_INIT_READY
 complete MCP micro-write
 native write paths controlled
 ```
@@ -61,7 +61,7 @@ Audit Roo Code modes, auto-approval, terminal, native edits, redirects, `tee`, `
 Roo MCP config on final head: NOT_TESTED
 MCP tools visible to Roo LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

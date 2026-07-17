@@ -31,6 +31,18 @@ Sous Windows :
 py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
+Dans une session hôte connue, `<host-id>` n'est jamais un placeholder à
+deviner : utiliser immédiatement l'identité exacte du host. Dans OpenCode, la
+commande est donc strictement :
+
+```bash
+.agent/workflow/scribe/scribe tenor-init --type cli --host opencode
+```
+
+`--host auto` est réservé à un opérateur réellement incapable d'identifier le
+host ; il ne doit jamais être essayé puis corrigé par un petit modèle déjà
+exécuté dans OpenCode, Codex ou Claude Code.
+
 Sous OpenCode autonome, le profil project-local refuse tout `edit` natif et
 toute commande shell sauf les formes exactes de cette commande TENOR INIT. Ne
 lui ajoute ni redirection, ni pipe, ni `&&`, ni `;` : un suffixe ferait refuser
@@ -99,6 +111,20 @@ SCRIBE_MEMORY_CREATE
 ```
 
 Le SCRIBE n'est traité qu'après la classification d'installation.
+
+Une réussite locale se termine par le contrat machine suivant :
+
+```text
+TENOR_INIT_TERMINAL=false
+TENOR_INIT_NEXT_TOOL=tenor_init_bridge
+TENOR_INIT_AGENT_SESSION=<id>
+TENOR_INIT_RESPONSE_POLICY=CONTINUE_WITHOUT_USER_RESPONSE
+```
+
+Ce contrat interdit une réponse utilisateur intermédiaire : le modèle appelle
+immédiatement le tool MCP indiqué dans le même tour. Les requêtes SCRIBE et
+Graphify ciblées sont différées vers `tenor_task_start`; TENOR INIT ne lance
+plus quatre recherches RAG générales qui ralentissaient l'entrée de session.
 
 ## Graphify non prêt
 
@@ -186,7 +212,12 @@ Init status: LOCAL_INIT_READY_HOST_MCP_UNBOUND
 
 Aucune tâche produit n'est autorisée.
 
-Si les tools sont visibles, comparer une sentinelle stable calculée côté host et via MCP (`file_hash`) pour prouver que le MCP est lié au projet courant.
+L'appel réel à `tenor_init_bridge` constitue la preuve de visibilité. Il
+vérifie ensuite mécaniquement que le processus MCP porte l'identité du host,
+que le reçu project-local correspond au root résolu, et que le hash de la
+configuration chargée correspond au reçu. Cette preuve ne dépend d'aucun
+fichier propre à un framework (`package.json`, Cargo, Maven, CMake, etc.) et
+reste donc portable dans une codebase C++, Java, Rust ou autre.
 
 Mauvais root :
 
@@ -209,10 +240,16 @@ tenor_init_bridge(
 Résultat attendu :
 
 ```text
-TENOR_INIT_BRIDGE_OK
+TENOR_INIT_READY
 ```
 
-Le serveur consomme atomiquement la preuve one-shot correspondante sans exposer de bearer token. Une compatibilité explicite avec l'ancien paramètre `proof_token` reste acceptée, mais ce n'est plus le chemin canonique.
+Le résultat conserve `bridge_verdict=TENOR_INIT_BRIDGE_OK` comme preuve
+interne, puis retourne le verdict terminal unique `TENOR_INIT_READY` avec la
+preuve de root, l'identité liée au processus, `terminal=true` et
+`next_action=READY_FOR_NEXT_TASK`. Le serveur consomme atomiquement la preuve
+one-shot correspondante sans exposer de bearer token. Une compatibilité
+explicite avec l'ancien paramètre `proof_token` reste acceptée, mais ce n'est
+plus le chemin canonique.
 
 Six terminaux partagent runtime SQLite, SCRIBE, Graphify et l'autorité de
 transaction, mais chacun conserve une identité liée à son propre processus
@@ -229,7 +266,7 @@ Graphify readiness verdict
 MCP local server ready
 MCP tools visible to host LLM
 MCP root binding
-Agent session bridged (scope MCP_BRIDGE_ONLY)
+Agent session bridged (scope HOST_PROCESS_ROOT_AND_SESSION)
 Active agents/claims/locks
 Next action
 ```

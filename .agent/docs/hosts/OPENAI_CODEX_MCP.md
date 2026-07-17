@@ -45,7 +45,8 @@ Do not handcraft the binding id. TENOR records it with the config hash, returns 
 
 Local `--list-tools` proves only the local server. Inside Codex, prove that the complete required MCP surface is visible, including guard, locks, claims, patch queue, audit, finish and `tenor_init_bridge`.
 
-Then prove root binding with a sentinel hash and call:
+Then call the bridge from the actual Codex tool surface; it verifies the
+project-local receipt, configuration hash and resolved root:
 
 ```text
 tenor_init_bridge(
@@ -55,7 +56,10 @@ tenor_init_bridge(
 )
 ```
 
-The bound server atomically consumes its one-time proof without printing a bearer token. `TENOR_INIT_BRIDGE_OK` has `MCP_BRIDGE_ONLY` scope; only it plus host/root proof permits `TENOR_INIT_READY`.
+The bound server atomically consumes its one-time proof without printing a
+bearer token. The public result is terminal `TENOR_INIT_READY` with
+`HOST_PROCESS_ROOT_AND_SESSION` scope and preserves the internal
+`bridge_verdict=TENOR_INIT_BRIDGE_OK` receipt.
 
 ## Native mutation audit
 
@@ -79,7 +83,7 @@ Local TENOR INIT: PROVED on isolated projects
 Local MCP list-tools: PROVED
 Codex tools visible on final head: NOT_REPLAYED
 Root binding: NOT_TESTED
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: OPEN
 Final verdict: UNKNOWN

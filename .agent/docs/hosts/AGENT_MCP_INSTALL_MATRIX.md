@@ -72,8 +72,8 @@ No host may be promoted by documentation assumption.
 3. Run TENOR with the exact host id; accept automatic configuration only for a verified host.
 4. Restart/reconnect the host when required.
 5. Capture evidence that the LLM sees the required MCP tools.
-6. Hash one sentinel from host and MCP to prove the root.
-7. Call `tenor_init_bridge` through the actual host-bound MCP process and require `TENOR_INIT_BRIDGE_OK` with `MCP_BRIDGE_ONLY` scope.
+6. Call `tenor_init_bridge` through the actual host-bound MCP process; it proves visibility, receipt/config hash and resolved root without a framework-specific sentinel.
+7. Require terminal `TENOR_INIT_READY` with `HOST_PROCESS_ROOT_AND_SESSION` scope and internal `bridge_verdict=TENOR_INIT_BRIDGE_OK`.
 8. Execute one complete MCP micro-write.
 9. Attempt a native direct write and prove denial/approval gate or `DIRECT_WRITE_BYPASS_DETECTED`.
 10. Update this matrix and the host guide with actual evidence.

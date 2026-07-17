@@ -154,10 +154,14 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 
 ## Root-binding proof
 
-1. Create or select a stable sentinel inside the current project.
-2. Calculate its hash from the host-visible workspace.
-3. Call MCP `file_hash` for the exact relative path.
-4. Compare the hashes and resolved root.
+Do not choose a framework-specific sentinel. The actual OpenCode call to
+`tenor_init_bridge` verifies all of the following inside the launched MCP
+process:
+
+1. `AGENT_MCP_HOST=opencode` is present;
+2. the binding id matches `.agent/state/install/host-binding.json`;
+3. the receipt project root equals the resolved server root;
+4. the loaded `opencode.jsonc` hash still matches the receipt.
 
 Mismatch:
 
@@ -169,7 +173,9 @@ Do not continue to product work after a mismatch.
 
 ## Session bridge
 
-After tool visibility and root binding are proven, call through the MCP tool surface:
+When the local command prints `TENOR_INIT_TERMINAL=false`, call immediately
+through the MCP tool surface. Do not summarize the local output or wait for a
+new user message:
 
 ```text
 tenor_init_bridge(
@@ -182,14 +188,16 @@ tenor_init_bridge(
 Required verdict:
 
 ```text
-TENOR_INIT_BRIDGE_OK
-```
-
-The server consumes the matching proof atomically; the full bearer token is never printed or persisted. A successful bridge has scope `MCP_BRIDGE_ONLY`. Only the actual OpenCode host, after its independent root proof, may report:
-
-```text
 TENOR_INIT_READY
 ```
+
+The server consumes the matching proof atomically; the full bearer token is
+never printed or persisted. The payload preserves
+`bridge_verdict=TENOR_INIT_BRIDGE_OK` and returns
+`ready_scope=HOST_PROCESS_ROOT_AND_SESSION`, `terminal=true` and
+`next_action=READY_FOR_NEXT_TASK`. Because this tool invocation itself came
+from OpenCode and its process binding verifies the root, no second manual hash
+choreography is required.
 
 ## Complete atomic changeset proof
 
@@ -230,7 +238,7 @@ Local MCP list-tools: PROVED
 OpenCode config on final validation workspace: NOT_TESTED
 MCP tools visible in OpenCode LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct write bypass: NOT_TESTED
 Final verdict: UNKNOWN

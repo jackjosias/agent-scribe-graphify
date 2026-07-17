@@ -69,7 +69,10 @@ and must not be advertised to the host model.
 
 ## Root binding
 
-MCP visibility alone is insufficient. The host and MCP must hash the same stable sentinel in the current project.
+MCP visibility alone is insufficient. The host-visible `tenor_init_bridge`
+call must validate the project-local binding receipt, resolved server root,
+host identity and current configuration hash. This proof is independent of the
+project language and framework.
 
 Mismatch verdict:
 

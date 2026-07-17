@@ -10,7 +10,6 @@ from scribe_bootstrap import bootstrap_project, print_report
 from scribe_identity import DEFAULT_TTL_SECONDS, write_presence
 from scribe_output_paths import graphify_out_dir
 from scribe_tenor_init import (
-    RAG_COMMAND,
     SKILL_PATH,
     _issue_proof,
     build_parser,
@@ -237,26 +236,6 @@ def main() -> int:
         )
         return 5
 
-    _flush("TENOR_INIT_STAGE load_scribe_and_graphify_context")
-    rag = str(project_root / RAG_COMMAND)
-    scribe_command = str(project_root / ".agent/workflow/scribe/scribe")
-    whoami = run_command(
-        (scribe_command, "whoami", "--agent", agent_id, "--type", args.agent_type, "--surface", args.surface),
-        project_root,
-    )
-    workflow_read = run_command(
-        (scribe_command, "workflow", "read", "--agent", agent_id, "--type", args.agent_type),
-        project_root,
-    )
-    workflow_check = run_command(
-        (scribe_command, "workflow", "check", "--agent", agent_id),
-        project_root,
-    )
-    rag_context = run_command((rag, "context"), project_root)
-    rag_journal = run_command((rag, "query", "dernier JOURNAL session recente", "--limit", "3"), project_root)
-    rag_scars = run_command((rag, "query", "SCAR TIER hot bug regression test_binding", "--limit", "5"), project_root)
-    rag_ne_pas = run_command((rag, "query", "ne_pas_reproposer alternatives rejetees ghost", "--limit", "5"), project_root)
-
     _flush("TENOR_INIT_STAGE emit_machine_proof")
     return emit_report(
         project_root=project_root,
@@ -264,13 +243,6 @@ def main() -> int:
         agent_type=args.agent_type,
         graph=graph,
         bootstrap_ok=True,
-        whoami=whoami,
-        workflow_read=workflow_read,
-        workflow_check=workflow_check,
-        rag_context=rag_context,
-        rag_journal=rag_journal,
-        rag_scars=rag_scars,
-        rag_ne_pas=rag_ne_pas,
         proof_issued=proof_issued,
         host_report=host_report,
         local_mcp=local_mcp,

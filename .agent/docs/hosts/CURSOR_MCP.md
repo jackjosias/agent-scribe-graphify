@@ -30,10 +30,10 @@ Local `server_entry.py --list-tools` proves only the server. Inside Cursor, prov
 
 Then:
 
-1. compare a host sentinel hash with MCP `file_hash`;
-2. require the current project root;
-3. call `tenor_init_bridge` with the TENOR session and proof;
-4. obtain `TENOR_INIT_BRIDGE_OK`;
+1. call `tenor_init_bridge` with the TENOR session and proof from Cursor's actual MCP surface;
+2. let it prove the project-local receipt, config hash and current root;
+3. bind the independent session;
+4. obtain terminal `TENOR_INIT_READY`;
 5. run one complete MCP micro-write;
 6. test native edit/terminal bypass behavior.
 
@@ -60,7 +60,7 @@ Audit Cursor terminal, agent edits, native patch/write tools, redirects, `tee`, 
 Cursor MCP config on final head: NOT_TESTED
 MCP tools visible to Cursor LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

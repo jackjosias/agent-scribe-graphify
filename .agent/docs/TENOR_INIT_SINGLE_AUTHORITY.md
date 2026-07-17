@@ -281,11 +281,10 @@ Correct order:
 4. configure only the verified workspace-local integration for OpenCode, Claude Code or Codex;
 5. fail closed to the exact guide for any other or ambiguous host;
 6. restart/reconnect and rerun TENOR when configuration changed;
-7. prove tools are visible in the actual LLM interface;
-8. prove the MCP process binding from config environment, binding receipt and config hash;
-9. prove root binding;
-10. call `tenor_init_bridge`, which atomically consumes the server-side one-time proof;
-11. obtain `TENOR_INIT_READY` only from the real host after all checks.
+7. on the local non-terminal marker, call `tenor_init_bridge` immediately from the actual LLM tool interface without responding to the user;
+8. let that single call prove tool visibility, MCP process binding, config environment, binding receipt, config hash and resolved root;
+9. atomically consume the server-side one-time proof and bind the independent session;
+10. obtain the terminal public verdict `TENOR_INIT_READY` from that same call.
 
 `server_entry.py --list-tools` and manually piped shell JSON-RPC never prove host visibility. Before host proof:
 
@@ -298,17 +297,41 @@ No global/user configuration and no Chrome/DevTools installation is performed wi
 
 TENOR never prints or persists the full proof bearer token. `tenor_init_bridge` normally receives only `agent_session_id`, `host_tool` and `model_name`; the bound MCP server consumes the newest matching proof exactly once under an inter-process owned lock. The deprecated explicit `proof_token` argument remains compatibility-only.
 
-`TENOR_INIT_BRIDGE_OK` has scope `MCP_BRIDGE_ONLY`; it is not, by itself, permission to claim global readiness. The actual host must also prove tool visibility and matching root.
+The base bridge proof remains available as
+`bridge_verdict=TENOR_INIT_BRIDGE_OK`. The public MCP wrapper returns
+`TENOR_INIT_READY` only after the same actual host call has also proved the
+process-bound root and bound the independent identity. There is no prose-only
+promotion from bridge to readiness.
 
 ## Root binding
 
-Host and MCP must hash the same stable sentinel in the current workspace. A mismatch yields:
+The host-launched MCP process must match the project-local binding receipt,
+resolved root, host identity and current configuration hash. This proof is
+framework-neutral and does not assume `package.json`, Cargo, Maven, Gradle,
+CMake or any other project marker. A mismatch yields:
 
 ```text
 INIT_BLOCKED_MCP_WRONG_ROOT
 ```
 
 No product write is allowed while root binding is unproven.
+
+## Non-terminal local continuation
+
+The local CLI deliberately does not load general SCRIBE RAG context. Targeted
+SCRIBE and Graphify retrieval belongs to `tenor_task_start`, after an objective
+exists. The local success prints:
+
+```text
+TENOR_INIT_TERMINAL=false
+TENOR_INIT_NEXT_TOOL=tenor_init_bridge
+TENOR_INIT_RESPONSE_POLICY=CONTINUE_WITHOUT_USER_RESPONSE
+```
+
+A host model that summarizes, asks the user or stops after `SCRIBE BOOTSTRAP`
+has violated the machine contract. The generated host instructions contain the
+exact host id, so OpenCode must never try `--host auto` before the allowed
+`--host opencode` command.
 
 ## Retry and degradation
 
@@ -367,7 +390,7 @@ The branch must remain draft until all are complete on the final head:
 - complete diff audit;
 - real host LLM sees the tools;
 - correct root binding proved;
-- `TENOR_INIT_BRIDGE_OK` proved;
+- terminal `TENOR_INIT_READY` bridge result proved;
 - one complete MCP micro-write;
 - native direct-write bypass attempt refused or detected;
 - real six-terminal terrain replay;

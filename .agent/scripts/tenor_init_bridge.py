@@ -21,7 +21,10 @@ if not _ENTRY.exists():
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Bridge TENOR INIT agent session into MCP runtime registry.",
+        description=(
+            "Compatibility diagnostic for the TENOR bridge. Normal host sessions "
+            "must call the host-visible MCP tool directly."
+        ),
     )
     parser.add_argument(
         "--agent-session-id", "-a",
@@ -110,7 +113,7 @@ def main() -> int:
     if args.as_json:
         print(json.dumps(outer, ensure_ascii=False, indent=2))
     elif outer.get("ok"):
-        verdict = outer.get("verdict", "TENOR_INIT_BRIDGE_OK")
+        verdict = outer.get("verdict", "TENOR_INIT_READY")
         aid = outer.get("agent_session_id", args.agent_session_id)
         steps = outer.get("steps", [])
         print(f"Verdict : {verdict}")
@@ -122,6 +125,7 @@ def main() -> int:
             icon = "OK" if step_ok else "FAIL"
             detail = s.get("verdict") or s.get("status") or s.get("error") or ""
             print(f"  [{icon}] {step_name}{' : ' + detail if detail else ''}")
+        print(f"Terminal: {bool(outer.get('terminal'))}")
         if not all(s.get("ok") for s in steps):
             print("ATTENTION : certaines etapes ont echoue.")
             return 1

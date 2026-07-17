@@ -37,7 +37,10 @@ Do not invent a config file or write globally.
 
 ## Required V2.16 proof
 
-Local `--list-tools` proves only local readiness. Inside Kilo Code, prove the complete `.agent` tool surface, matching root sentinel, `TENOR_INIT_BRIDGE_OK`, one complete MCP micro-write and controlled native-write paths.
+Local `--list-tools` proves only local readiness. Inside Kilo Code, call
+`tenor_init_bridge` from the actual MCP surface and require terminal
+`TENOR_INIT_READY`; the call proves the receipt/config/root binding. Then run
+one complete MCP micro-write and audit controlled native-write paths.
 
 Wrong root:
 
@@ -63,7 +66,7 @@ Official MCP schema: UNVERIFIED
 Kilo MCP config on final head: NOT_TESTED
 MCP tools visible to Kilo LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

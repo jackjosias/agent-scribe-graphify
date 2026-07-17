@@ -38,10 +38,10 @@ Inside Gemini CLI, prove the complete `.agent` MCP surface is visible. Local `--
 
 Then:
 
-1. compare the host sentinel hash with MCP `file_hash`;
-2. prove the current project root;
-3. call `tenor_init_bridge` with the TENOR proof;
-4. require `TENOR_INIT_BRIDGE_OK`;
+1. call `tenor_init_bridge` from the actual Gemini MCP surface;
+2. let it prove the project-local receipt, config hash and current root;
+3. let it consume the TENOR proof;
+4. require terminal `TENOR_INIT_READY`;
 5. run one complete MCP micro-write;
 6. audit shell/edit/hook bypass behavior.
 
@@ -60,7 +60,7 @@ Official MCP schema on installed version: UNVERIFIED
 Gemini MCP config on final head: NOT_TESTED
 MCP tools visible to Gemini LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

@@ -44,6 +44,22 @@ def call_tool(name: str, **args: Any) -> dict[str, Any]:
     }))
 
 
+def scribe_backend_globals() -> dict[str, Any]:
+    current = mcp.server.TOOLS["scribe_query"]
+    visited: set[int] = set()
+    while callable(current) and id(current) not in visited:
+        visited.add(id(current))
+        globals_dict = getattr(current, "__globals__", {})
+        if "_BASE_SCRIBE_QUERY" in globals_dict:
+            return globals_dict
+        closure = {
+            name: cell.cell_contents
+            for name, cell in zip(current.__code__.co_freevars, current.__closure__ or ())
+        }
+        current = closure.get("current_scribe")
+    raise AssertionError("unable to locate the wrapped SCRIBE backend")
+
+
 def git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=str(root), text=True, capture_output=True, timeout=15, check=False)
 
@@ -148,6 +164,12 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertIn("tenor_apply_changeset", instructions)
         self.assertIn("all-or-nothing", instructions)
         self.assertIn("prose-only", instructions)
+        self.assertIn("--host opencode", instructions)
+        self.assertNotIn("--host <host-id>", instructions)
+        self.assertIn("Never substitute `--host auto`", instructions)
+        self.assertIn("TENOR_INIT_TERMINAL=false", instructions)
+        self.assertIn("do not summarize, ask the user, wait, or stop", instructions)
+        self.assertIn("Only `TENOR_INIT_READY`", instructions)
 
     def test_install_instructions_is_atomic_and_idempotent(self) -> None:
         target = self.root / "AGENTS.md"
@@ -298,7 +320,10 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
             "verdict": "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE",
             "result": {"returncode": 0, "stdout": "unrelated historical result"},
         })
-        with mock.patch.object(mcp, "_BASE_SCRIBE_QUERY", return_value=irrelevant):
+        with mock.patch.dict(
+            scribe_backend_globals(),
+            {"_BASE_SCRIBE_QUERY": mock.Mock(return_value=irrelevant)},
+        ):
             scribe = call_tool(
                 "scribe_query",
                 agent_id=agent_id,
@@ -306,29 +331,43 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
                 context_token=token,
                 query="some logic",
             )
-        self.assertEqual(scribe["verdict"], "SCRIBE_HISTORY_ABSENT_FIRST_WRITE_DISCOVERY_REQUIRED")
+        self.assertEqual(scribe["verdict"], "SCRIBE_CONTEXT_MISS_FOR_WRITE")
         call_tool("graphify_query", agent_id=agent_id, task_id=task_id, context_token=token, query="some logic", resource="code.py")
 
         blocked = run_pre_action_guard(config, "fix bug", "write", "code.py", "claim_resource", task_id, token)
-        self.assertEqual(blocked.get("verdict"), "FIRST_WRITE_DISCOVERY_REQUIRED")
-        self.assertEqual(blocked.get("must_call", {}).get("tool"), "scribe_record")
+        self.assertEqual(blocked.get("verdict"), "TASK_DISCOVERY_BASE_HASH_REQUIRED")
+        self.assertEqual(blocked.get("must_call", {}).get("tool"), "file_hash")
 
-        record = call_tool(
-            "scribe_record",
+        current_hash = call_tool("file_hash", resource="code.py")["hash"]
+        routed = call_tool(
+            "workflow_next",
             agent_id=agent_id,
             task_id=task_id,
             context_token=token,
-            record_type="task_local_discovery",
-            memory_policy="local_only",
-            request="First-write discovery for code.py",
-            summary="Observed the existing code path and selected a bounded correction that reuses current infrastructure.",
-            evidence="Graphify identifies code.py, its neighboring modules, dependencies and the regression tests that cover it.",
-            root_cause="No relevant historical SCRIBE entry exists because code.py is a genuine first intervention in this fixture.",
-            verdict="TASK_LOCAL_DISCOVERY_EVIDENCE",
-            resources=["code.py"],
+            request="fix bug",
+            intent="write",
+            resource="code.py",
+            base_hash=current_hash,
+            last_verdict="FILE_HASH",
         )
-        self.assertEqual(record["verdict"], "SCRIBE_RECORD_STAGED_ONLY")
-        self.assertFalse(record["canonical_memory_required"])
+        self.assertEqual(routed["verdict"], "TASK_DISCOVERY_REQUIRED")
+        self.assertEqual(routed["must_call"]["tool"], "record_task_discovery")
+
+        recorded = call_tool(
+            "record_task_discovery",
+            agent_id=agent_id,
+            task_id=task_id,
+            context_token=token,
+            resource="code.py",
+            base_hash=current_hash,
+            summary="Inspected code.py and selected the smallest correction that reuses the existing host gate.",
+            evidence=(
+                "code.py is the exact target. Graphify was queried for dependencies and blast radius; "
+                "the host-adapter workflow and regression tests were inspected before ownership."
+            ),
+        )
+        self.assertEqual(recorded["verdict"], "TASK_DISCOVERY_RECORDED")
+        self.assertEqual(recorded["base_hash"], current_hash)
 
         result = run_pre_action_guard(config, "fix bug", "write", "code.py", "claim_resource", task_id, token)
         self.assertEqual(result.get("verdict"), "PRE_ACTION_GUARD_OK")

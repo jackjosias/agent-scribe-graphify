@@ -112,7 +112,11 @@ class TenorInitBridgeTest(unittest.TestCase):
             proof_token=self.proof(),
         )
         self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
-        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_READY")
+        self.assertEqual(result.get("bridge_verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertTrue(result.get("terminal"))
+        self.assertEqual(result.get("next_action"), "READY_FOR_NEXT_TASK")
+        self.assertEqual(result.get("root_binding", {}).get("project_root"), str(self.root.resolve()))
         self.assertEqual(result.get("agent_session_id"), AGENT_SESSION_ID)
         steps = result.get("steps", [])
         self.assertGreaterEqual(len(steps), 3)
@@ -152,7 +156,7 @@ class TenorInitBridgeTest(unittest.TestCase):
         # Second call with a different token — bridge is idempotent for same agent_id
         r2 = call_tool("tenor_init_bridge", agent_session_id=AGENT_SESSION_ID, host_tool=HOST_TOOL, proof_token=self.proof())
         self.assertTrue(r2.get("ok"))
-        self.assertEqual(r2.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertEqual(r2.get("verdict"), "TENOR_INIT_READY")
 
     def test_bridge_discipline_ping_sets_phase(self) -> None:
         """Bridge should record a guard ping with phase post-init."""
@@ -189,7 +193,7 @@ class TenorInitBridgeTest(unittest.TestCase):
             proof_token=self.proof(),
         )
         self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
-        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_READY")
         steps = result.get("steps", [])
         proof_step = next((s for s in steps if s["step"] == "verify_proof"), None)
         self.assertIsNotNone(proof_step, f"no verify_proof step in {steps}")
@@ -268,7 +272,7 @@ class TenorInitBridgeTest(unittest.TestCase):
             proof_token=self.proof(),
         )
         self.assertTrue(result.get("ok"), f"bridge failed: {result.get('reason', '')}")
-        self.assertEqual(result.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertEqual(result.get("verdict"), "TENOR_INIT_READY")
         retired = result.get("retired_ghosts", [])
         self.assertNotIn(ghost_id, retired)
         observed_step = next(step for step in result["steps"] if step["step"] == "retire_ghosts")
@@ -397,7 +401,7 @@ class TenorInitBridgeTest(unittest.TestCase):
             proof_token=token,
         )
         self.assertTrue(r2.get("ok"), f"bridge after verify peek failed: {r2.get('reason', '')}")
-        self.assertEqual(r2.get("verdict"), "TENOR_INIT_BRIDGE_OK")
+        self.assertEqual(r2.get("verdict"), "TENOR_INIT_READY")
 
     def test_bridge_consumes_token(self) -> None:
         """Bridge is the sole consumer — a second bridge with the same token must fail."""

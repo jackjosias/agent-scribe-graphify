@@ -16,6 +16,8 @@
     "direct_cli_allowed_for_ci_scripts_and_humans": true,
     "bootstrap_is_internal_or_legacy": true,
     "bootstrap_must_not_bypass_tenor_init": true,
+    "known_host_must_use_explicit_host_id": true,
+    "opencode_must_never_try_auto_first": true,
     "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>"
   },
   "authority_order": [
@@ -132,6 +134,19 @@
     "bare_python_on_posix_forbidden": true,
     "list_tools_proves_only_local_server": true,
     "list_tools_does_not_prove_host_visibility": true
+  },
+  "local_cli_continuation_contract": {
+    "terminal": false,
+    "terminal_marker": "TENOR_INIT_TERMINAL=false",
+    "next_tool": "tenor_init_bridge",
+    "response_policy": "CONTINUE_WITHOUT_USER_RESPONSE",
+    "user_response_before_bridge_forbidden": true,
+    "general_rag_queries_during_init_forbidden": true,
+    "targeted_scribe_and_graphify_deferred_to": "tenor_task_start",
+    "allowed_terminal_interruptions": [
+      "HOST_RECONNECT_REQUIRED",
+      "explicit_fail_closed_verdict"
+    ]
   },
   "atomic_write_policy": {
     "exclusive_temp_creation_required": true,
@@ -276,7 +291,8 @@
       "project_writes_allowed": false
     },
     "root_binding": {
-      "requires_host_and_mcp_sentinel_hash_match": true,
+      "verified_by_host_process_binding_receipt_and_config_hash": true,
+      "framework_specific_sentinel_forbidden": true,
       "wrong_root_status": "INIT_BLOCKED_MCP_WRONG_ROOT"
     },
     "host_process_binding": {
@@ -292,9 +308,11 @@
     },
     "when_tools_visible_and_root_bound": {
       "run_tenor_init_bridge": true,
-      "required_bridge_verdict": "TENOR_INIT_BRIDGE_OK",
-      "bridge_scope": "MCP_BRIDGE_ONLY",
-      "final_status": "TENOR_INIT_READY"
+      "internal_bridge_verdict": "TENOR_INIT_BRIDGE_OK",
+      "public_terminal_verdict": "TENOR_INIT_READY",
+      "bridge_scope": "HOST_PROCESS_ROOT_AND_SESSION",
+      "terminal": true,
+      "next_action": "READY_FOR_NEXT_TASK"
     }
   },
   "host_adapter_resolution": {

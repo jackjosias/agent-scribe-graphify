@@ -28,7 +28,10 @@ Prefer project/workspace scope when supported. Do not point to another checkout 
 
 Inside Cline, prove the complete guard/lock/claim/patch/audit/finish/bridge surface is visible to the model. Local `--list-tools` is insufficient.
 
-Then prove a matching sentinel hash, current root, `TENOR_INIT_BRIDGE_OK`, one complete MCP micro-write and controlled native-write behavior.
+Then call `tenor_init_bridge` from Cline's actual MCP surface and require
+terminal `TENOR_INIT_READY`; the call itself proves the project-local receipt,
+config hash and current root. Follow it with one complete MCP micro-write and
+controlled native-write behavior.
 
 Wrong root:
 
@@ -53,7 +56,7 @@ Audit Cline terminal access, native file edits, auto-approval settings, redirect
 Cline MCP config on final head: NOT_TESTED
 MCP tools visible to Cline LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

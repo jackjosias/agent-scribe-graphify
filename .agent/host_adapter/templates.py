@@ -2,23 +2,39 @@ from __future__ import annotations
 
 
 CANONICAL_TENOR_TRIGGER = "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]"
-CANONICAL_TENOR_COMMAND = ".agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>"
+CANONICAL_TENOR_COMMAND = ".agent/workflow/scribe/scribe tenor-init --type cli --host {host_id}"
+
+_HOST_IDS = {
+    "opencode": "opencode",
+    "codex": "codex-cli",
+    "codex-cli": "codex-cli",
+    "gemini": "gemini-cli",
+    "gemini-cli": "gemini-cli",
+    "antigravity": "antigravity",
+}
+
+
+def canonical_tenor_command(host_type: str) -> str:
+    normalized = str(host_type or "unknown").strip().lower().replace("_", "-")
+    host_id = _HOST_IDS.get(normalized, normalized if normalized and normalized != "unknown" else "auto")
+    return CANONICAL_TENOR_COMMAND.format(host_id=host_id)
 
 
 def render_minimal_host_instructions(host_type: str = "unknown") -> str:
     host = str(host_type or "unknown").upper()
+    command = canonical_tenor_command(host_type)
     core_block = f"""# AUTO-GUARD FOR HOST: {host}
 AGENT-SCRIBE-GRAPHIFY AUTO-GUARD
 
 Session entry contract:
 1. Human/LLM trigger: `{CANONICAL_TENOR_TRIGGER}`.
 2. Read the project-local `.agent/skills/init-tenor/SKILL.md` before global host instructions.
-3. Mechanical command: `{CANONICAL_TENOR_COMMAND}` from the current project root.
+3. Mechanical command for this host: `{command}` from the current project root. Never substitute `--host auto` when this host id is known.
 4. If TENOR INIT returns a bounded Graphify build action, use the canonical command before host binding or MCP `graphify_project_build` after binding; never run `graphify update .` in the product root.
 5. Let TENOR manage only the verified project-local MCP entry; reconnect and rerun when it reports `HOST_RECONNECT_REQUIRED`.
-6. Verify the project-local MCP server, then prove that this host exposes the tools to the LLM.
-7. Prove MCP root binding; local `--list-tools` or shell JSON-RPC is not host visibility proof.
-8. Register/bridge the independent agent session through the actual host-bound MCP process. Until then report `HOST_MCP_UNBOUND`.
+6. A local success is explicitly non-terminal. On `TENOR_INIT_TERMINAL=false`, immediately call the host-visible `tenor_init_bridge` with the emitted session id; do not summarize, ask the user, wait, or stop between the CLI and bridge.
+7. The bridge verifies host visibility, project-local process binding, config hash, resolved root, one-time proof and independent session in one call. Local `--list-tools` or shell JSON-RPC is not host proof.
+8. Only `TENOR_INIT_READY`, `HOST_RECONNECT_REQUIRED`, or an explicit fail-closed verdict may end the init turn. Prose after `SCRIBE BOOTSTRAP` is never completion.
 9. On `TENOR_INIT_SAME_PROJECT`, bundle repair is explicit via `scribe install --force`; only verified project-local MCP binding metadata may be managed automatically.
 10. Runtime purge preserves `.agent/state/outputs/`; preserved Graphify output must still pass root/fingerprint readiness before use.
 

@@ -42,10 +42,10 @@ Inside Claude Code, prove the complete MCP tool surface is visible to the model.
 
 Then:
 
-1. compare a sentinel hash from the host workspace and MCP `file_hash`;
-2. require matching root;
-3. call `tenor_init_bridge` with the TENOR session through the actual host-bound process; the server consumes its one-time proof without exposing a token;
-4. obtain `TENOR_INIT_BRIDGE_OK`;
+1. call `tenor_init_bridge` with the TENOR session through the actual host-bound process;
+2. let it validate the project-local receipt, config hash and resolved root;
+3. let the server consume its one-time proof without exposing a token;
+4. obtain terminal `TENOR_INIT_READY` with the internal bridge receipt;
 5. execute one complete MCP micro-write;
 6. audit native shell/edit bypass paths.
 
@@ -72,7 +72,7 @@ Verify Claude Code permissions for shell, native edits, redirects, `tee`, `sed -
 MCP configuration on final head: NOT_TESTED
 MCP tools visible to Claude Code LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN

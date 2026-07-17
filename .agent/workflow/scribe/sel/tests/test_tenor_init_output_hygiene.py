@@ -53,6 +53,12 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             self.assertIn("MCP local server     : READY", tenor_init.stdout)
             self.assertIn("TENOR_INIT_LOCAL_MCP_READY tools=9", tenor_init.stdout)
             self.assertIn("Init status          : LOCAL_INIT_READY_HOST_MCP_UNBOUND", tenor_init.stdout)
+            self.assertIn("TENOR_INIT_TERMINAL=false", tenor_init.stdout)
+            self.assertIn("TENOR_INIT_NEXT_TOOL=tenor_init_bridge", tenor_init.stdout)
+            self.assertIn("TENOR_INIT_RESPONSE_POLICY=CONTINUE_WITHOUT_USER_RESPONSE", tenor_init.stdout)
+            self.assertIn("Contexte ciblé       : DEFERRED_TO_TENOR_TASK_START", tenor_init.stdout)
+            self.assertNotIn("TENOR_INIT_STAGE load_scribe_and_graphify_context", tenor_init.stdout)
+            self.assertNotIn("scribe-rag query", tenor_init.stdout)
             self.assertNotIn("Proof token", tenor_init.stdout + tenor_init.stderr)
             self.assertNotIn("v1.", tenor_init.stdout + tenor_init.stderr)
             self.assert_root_outputs_absent(root)
@@ -67,6 +73,13 @@ class TenorInitOutputHygieneTests(unittest.TestCase):
             self.assertEqual(rag_context.returncode, 0, rag_context.stderr + rag_context.stdout)
             self.assertTrue((scribe_out / "rag-index.json").is_file())
             self.assert_root_outputs_absent(root)
+
+    def test_v216_init_defers_heavy_rag_queries_to_tenor_task(self) -> None:
+        source = (
+            AGENT_ROOT / "workflow" / "scribe" / "sel" / "scripts" / "scribe_tenor_init_v216.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn('run_command((rag, "query"', source)
+        self.assertNotIn("load_scribe_and_graphify_context", source)
 
     def test_legacy_root_outputs_are_migrated_without_dangerous_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

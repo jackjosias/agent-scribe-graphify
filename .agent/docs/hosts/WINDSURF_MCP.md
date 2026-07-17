@@ -36,7 +36,10 @@ Do not invent a path, copy another host's config or edit global settings without
 
 ## Required V2.16 proof
 
-Inside Windsurf/Cascade, prove the complete `.agent` tool surface is visible. Then prove the current root by sentinel hash, call `tenor_init_bridge`, require `TENOR_INIT_BRIDGE_OK`, run one complete MCP micro-write and audit native writes.
+Inside Windsurf/Cascade, call `tenor_init_bridge` from the actual MCP surface
+and require terminal `TENOR_INIT_READY`; the call proves visibility and the
+receipt/config/root binding. Then run one complete MCP micro-write and audit
+native writes.
 
 Local `--list-tools` alone is insufficient.
 
@@ -51,7 +54,7 @@ Official MCP schema: UNVERIFIED
 Windsurf config on final head: NOT_TESTED
 MCP tools visible to Windsurf LLM: UNKNOWN
 Root binding: UNKNOWN
-TENOR_INIT_BRIDGE_OK: NOT_TESTED
+TENOR_INIT_READY terminal bridge: NOT_TESTED
 Complete MCP micro-write: NOT_TESTED
 Direct-write bypass: NOT_TESTED
 Final verdict: UNKNOWN
