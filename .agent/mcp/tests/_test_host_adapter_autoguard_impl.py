@@ -23,7 +23,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import server_ext as mcp
-from host_adapter import host_config
+from host_adapter import host_config, instructions as host_instructions
 from host_adapter.instructions import install_host_instructions, update_marked_block, verify_instruction_installation
 from host_adapter.launcher import HostLaunchConfig, TENOR_INIT_REQUIRED, run_pre_action_guard, run_preflight, run_workspace_audit
 from host_adapter.policy import HostPolicy, HostVerdict
@@ -160,6 +160,31 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertEqual(content, target.read_text(encoding="utf-8"))
         self.assertTrue(verify_instruction_installation(target))
         self.assert_no_instruction_residue(target)
+
+    def test_atomic_instruction_replace_retries_windows_sharing_violation(self) -> None:
+        target = self.root / "AGENTS.md"
+        attempts = 0
+        real_replace = os.replace
+
+        def transient_replace(source: Path | str, destination: Path | str) -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                error = PermissionError("transient Windows sharing violation")
+                error.winerror = 5
+                raise error
+            real_replace(source, destination)
+
+        with (
+            mock.patch.object(host_instructions._impl, "IS_WINDOWS", True),
+            mock.patch.object(host_instructions._impl.os, "replace", transient_replace),
+            mock.patch.object(host_instructions._impl.time, "sleep") as sleeper,
+        ):
+            host_instructions._impl._atomic_text_write(target, "portable\n")
+
+        self.assertEqual(attempts, 3)
+        self.assertEqual(sleeper.call_count, 2)
+        self.assertEqual(target.read_bytes(), b"portable\n")
 
     def test_concurrent_install_instructions_is_collision_proof(self) -> None:
         target = self.root / "AGENTS.md"

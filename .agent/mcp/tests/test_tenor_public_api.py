@@ -25,7 +25,7 @@ class TenorPublicApiTest(unittest.TestCase):
         self.root = Path(self.tmp.name) / "project"
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True)
         (self.root / "src").mkdir()
-        (self.root / "src" / "feature.txt").write_text("before\n", encoding="utf-8")
+        (self.root / "src" / "feature.txt").write_bytes(b"before\n")
         self.old_cwd = Path.cwd()
         self.old_root = mcp.server.ROOT
         self.old_bound = getattr(mcp.server, "_MCP_BOUND_AGENT_ID", "")

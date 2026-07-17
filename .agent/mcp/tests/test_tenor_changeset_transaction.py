@@ -30,12 +30,12 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.root = Path(self.tmp.name) / "project"
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True)
         (self.root / "src").mkdir()
-        (self.root / "src" / "a.txt").write_text("alpha\n", encoding="utf-8")
-        (self.root / "src" / "b.txt").write_text("beta\n", encoding="utf-8")
+        (self.root / "src" / "a.txt").write_bytes(b"alpha\n")
+        (self.root / "src" / "b.txt").write_bytes(b"beta\n")
         self.previous_root = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
         os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(self.root)
         db.init_db(self.root)
-        db.register_agent("test", "unit", "agent-a")
+        db.register_agent("test", "unit", "agent-a", project_root=self.root)
 
     def tearDown(self) -> None:
         if self.previous_root is None:

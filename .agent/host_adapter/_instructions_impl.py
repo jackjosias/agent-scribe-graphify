@@ -20,6 +20,11 @@ _END = "<!-- agent-scribe-graphify:auto-guard:end -->"
 _BLOCK_PATTERN = re.compile(re.escape(_START) + r".*?" + re.escape(_END), re.DOTALL)
 _LOCK_TIMEOUT_SECONDS = 15.0
 _LOCK_STALE_SECONDS = 60.0
+_ATOMIC_REPLACE_ATTEMPTS = 10
+_ATOMIC_REPLACE_INITIAL_DELAY_SECONDS = 0.01
+_ATOMIC_REPLACE_MAX_DELAY_SECONDS = 0.25
+_WINDOWS_TRANSIENT_REPLACE_ERRORS = {5, 32, 33}
+IS_WINDOWS = os.name == "nt"
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[str, threading.RLock] = {}
 
@@ -140,7 +145,7 @@ def _pid_is_alive(pid: object) -> bool:
         return False
     if value <= 0:
         return False
-    if os.name == "nt":
+    if IS_WINDOWS:
         return _windows_pid_is_alive(value)
     try:
         os.kill(value, 0)
@@ -238,6 +243,25 @@ def _instruction_transaction(target: Path) -> Iterator[None]:
                     pass
 
 
+def _atomic_replace_with_retry(source: Path, destination: Path) -> None:
+    """Replace a file atomically, retrying bounded Windows sharing races."""
+
+    delay = _ATOMIC_REPLACE_INITIAL_DELAY_SECONDS
+    for attempt in range(_ATOMIC_REPLACE_ATTEMPTS):
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as exc:
+            retryable = IS_WINDOWS and (
+                isinstance(exc, PermissionError)
+                or getattr(exc, "winerror", None) in _WINDOWS_TRANSIENT_REPLACE_ERRORS
+            )
+            if not retryable or attempt + 1 >= _ATOMIC_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay = min(_ATOMIC_REPLACE_MAX_DELAY_SECONDS, delay * 2)
+
+
 def _atomic_text_write(path: Path, content: str) -> None:
     """Write content through an exclusive sibling temporary and atomic replace."""
 
@@ -259,7 +283,7 @@ def _atomic_text_write(path: Path, content: str) -> None:
             os.chmod(temporary, existing_mode)
         except OSError:
             pass
-        os.replace(temporary, path)
+        _atomic_replace_with_retry(temporary, path)
     finally:
         try:
             temporary.unlink(missing_ok=True)

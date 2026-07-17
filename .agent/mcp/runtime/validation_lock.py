@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,56 +29,17 @@ def default_lock_path(root: Path | None = None) -> Path:
 
 
 def reset_validation_runtime_database(root: Path | None = None, retries: int = 20) -> None:
-    """Reset validation rows without repeatedly unlinking a healthy WAL database.
+    """Remove the disposable validation database and all journal sidecars.
 
-    Callers must hold ``validation_runtime_lock``. Healthy databases keep their
-    migrated schema and are transactionally emptied, which avoids rapid
-    unlink/recreate WAL races on overlay filesystems and Windows. A malformed
-    fixture falls back to sidecar-first removal with bounded handle retries.
+    Callers must hold ``validation_runtime_lock`` and must stop child MCP
+    processes first. Validation state is intentionally disposable: rebuilding a
+    fresh migrated database avoids carrying free-list or journal state between
+    independent smoke runs. Sidecars are removed first and Windows sharing
+    violations receive bounded retries.
     """
 
     base = (root or Path(__file__).resolve().parents[3]).resolve()
     runtime = base / ".agent" / "state" / "runtime"
-    database = runtime / "coordination.sqlite"
-    if database.exists():
-        try:
-            with sqlite3.connect(str(database), timeout=5.0, isolation_level=None) as connection:
-                connection.execute("PRAGMA busy_timeout=5000")
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-                integrity = connection.execute("PRAGMA integrity_check").fetchone()
-                if integrity is None or str(integrity[0]) != "ok":
-                    raise sqlite3.DatabaseError(
-                        f"database disk image is malformed: {integrity[0] if integrity else 'no result'}"
-                    )
-                connection.execute("PRAGMA foreign_keys=OFF")
-                tables = [
-                    str(row[0])
-                    for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                    )
-                    if str(row[0]) != "schema_migrations"
-                ]
-                connection.execute("BEGIN IMMEDIATE")
-                try:
-                    for table in tables:
-                        quoted = table.replace('"', '""')
-                        connection.execute(f'DELETE FROM "{quoted}"')
-                    connection.execute("COMMIT")
-                except Exception:
-                    connection.execute("ROLLBACK")
-                    raise
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-                integrity = connection.execute("PRAGMA integrity_check").fetchone()
-                if integrity is None or str(integrity[0]) != "ok":
-                    raise sqlite3.DatabaseError(
-                        f"database disk image is malformed after reset: {integrity[0] if integrity else 'no result'}"
-                    )
-            return
-        except sqlite3.DatabaseError as exc:
-            message = str(exc).lower()
-            if "malformed" not in message and "not a database" not in message:
-                raise
-
     attempts = max(1, min(int(retries), 100))
     for suffix in ("-shm", "-wal", ""):
         path = runtime / f"coordination.sqlite{suffix}"

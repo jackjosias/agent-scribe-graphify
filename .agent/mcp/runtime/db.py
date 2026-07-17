@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -287,42 +288,48 @@ def _run_migrations(project_root: Optional[Path] = None) -> list[str]:
 # DB init  (Fix #2 — integrity_check at bootstrap)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Per-process cache and lock. Every new MCP process still migrates and verifies
+# independently, while repeated tool calls in one server never replay DDL.
+_init_db_checked: dict[str, bool] = {}
+_init_db_lock = threading.RLock()
+
 def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
     """Idempotent DB bootstrap: run migrations + integrity check.
 
     Called at server startup and before the first operation in each CLI run.
-    Idempotent: safe to call on every request (migrations cache via applied_ids).
+    Idempotent: safe to call on every request. Migrations and integrity checks
+    run once per database path and process, protected against concurrent threads.
 
     Fix #2: PRAGMA integrity_check is run on the first bootstrap of a process.
     A failed check is terminal: continuing with corrupt coordination state can
     fabricate ownership, patch or task verdicts.
     """
     p = paths(project_root)
+    database_key = str(p["db"])
 
-    _run_migrations(project_root)
-
-    # Integrity check: run at most once per process (not per-call).
-    # Gate via a module-level flag so concurrent workers don't double-check.
-    if not _init_db_checked.get(str(p["db"]), False):
-        try:
-            with connect(project_root) as con:
-                result = con.execute("PRAGMA integrity_check").fetchone()
-                if result and str(result[0]) != "ok":
-                    logger.critical(
-                        "SQLite integrity_check FAILED for %s: %s",
-                        p["db"],
-                        result[0],
-                    )
-                    raise CoordinationError(
-                        f"SQLITE_INTEGRITY_CHECK_FAILED: {result[0]}"
-                    )
-                else:
-                    logger.debug("SQLite integrity_check OK: %s", p["db"])
-            _init_db_checked[str(p["db"])] = True
-        except CoordinationError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise CoordinationError(f"SQLITE_INTEGRITY_CHECK_ERROR: {exc}") from exc
+    if not _init_db_checked.get(database_key, False):
+        with _init_db_lock:
+            if not _init_db_checked.get(database_key, False):
+                _run_migrations(project_root)
+                try:
+                    with connect(project_root) as con:
+                        integrity = [str(row[0]) for row in con.execute("PRAGMA integrity_check")]
+                        if integrity != ["ok"]:
+                            diagnostic = "; ".join(integrity) if integrity else "no result"
+                            logger.critical(
+                                "SQLite integrity_check FAILED for %s: %s",
+                                p["db"],
+                                diagnostic,
+                            )
+                            raise CoordinationError(
+                                f"SQLITE_INTEGRITY_CHECK_FAILED: {diagnostic}"
+                            )
+                        logger.debug("SQLite integrity_check OK: %s", p["db"])
+                    _init_db_checked[database_key] = True
+                except CoordinationError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    raise CoordinationError(f"SQLITE_INTEGRITY_CHECK_ERROR: {exc}") from exc
 
     return {
         "ok": True,
@@ -333,11 +340,6 @@ def init_db(project_root: Optional[Path] = None) -> Dict[str, Any]:
         "scribe_out": str(p["scribe_out"]),
         "graphify_out": str(p["graphify_out"]),
     }
-
-
-# Module-level dict: db_path_str -> bool, tracks if integrity_check ran this process.
-_init_db_checked: dict[str, bool] = {}
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Events
@@ -603,15 +605,16 @@ def register_agent(
     host_tool: str,
     model_name: str = "",
     agent_id: Optional[str] = None,
+    project_root: Optional[Path] = None,
 ) -> Dict[str, Any]:
     if not host_tool or not isinstance(host_tool, str):
         raise CoordinationError("host_tool is required")
-    init_db()
+    init_db(project_root)
     aid = agent_id or new_id(
         host_tool.replace(" ", "-").lower()[:20] or "agent"
     )
     t = now_ts()
-    with connect() as con:
+    with connect(project_root) as con:
         expire_stale(con)
         con.execute(
             """

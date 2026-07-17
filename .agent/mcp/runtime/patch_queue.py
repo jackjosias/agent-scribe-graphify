@@ -7,8 +7,9 @@ import os
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from .state_paths import prepare_state_dirs, project_root_from
@@ -37,13 +38,17 @@ def db_path() -> Path:
     return prepare_state_dirs(root())["db"]
 
 
-def connect() -> sqlite3.Connection:
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
     con = sqlite3.connect(str(db_path()), timeout=30, isolation_level=None)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.execute("PRAGMA busy_timeout=30000")
-    return con
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 def ensure_schema() -> None:

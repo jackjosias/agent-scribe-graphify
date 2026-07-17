@@ -248,6 +248,9 @@ class V216TerrainEnforcementTest(unittest.TestCase):
 
     def test_runtime_database_integrity_failure_is_fail_closed(self) -> None:
         class CorruptCursor:
+            def __iter__(self):
+                return iter((("freelist corruption",),))
+
             def fetchone(self) -> tuple[str]:
                 return ("freelist corruption",)
 

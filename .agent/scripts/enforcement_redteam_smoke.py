@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import shutil
 import subprocess
 import sys
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +25,148 @@ from runtime.validation_lock import (
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
 REDTEAM_DIR = ROOT / ".agent" / "state" / "redteam"
+TRIPWIRE_TARGET = ROOT / "tenor-redteam-tripwire-target.txt"
 
 
 def fail(message: str) -> None:
     raise SystemExit(f"ENFORCEMENT_REDTEAM_FAIL: {message}")
+
+
+class PersistentMcpClient:
+    """One bounded stdio MCP session matching real host process lifetime."""
+
+    def __init__(self, root: Path, entry: Path, timeout_seconds: float = 30.0) -> None:
+        self.root = root
+        self.entry = entry
+        self.timeout_seconds = max(1.0, float(timeout_seconds))
+        self.process: subprocess.Popen[str] | None = None
+        self.stdout_queue: queue.Queue[str | None] = queue.Queue(maxsize=64)
+        self.stderr_lines: deque[str] = deque(maxlen=200)
+        self.request_lock = threading.Lock()
+        self.stdout_thread: threading.Thread | None = None
+        self.stderr_thread: threading.Thread | None = None
+        self.request_id = 0
+
+    def __enter__(self) -> "PersistentMcpClient":
+        try:
+            self.process = subprocess.Popen(
+                [sys.executable, str(self.entry)],
+                cwd=str(self.root),
+                text=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=1,
+            )
+            self.stdout_thread = threading.Thread(
+                target=self._drain_stdout,
+                name="tenor-redteam-mcp-stdout",
+                daemon=True,
+            )
+            self.stderr_thread = threading.Thread(
+                target=self._drain_stderr,
+                name="tenor-redteam-mcp-stderr",
+                daemon=True,
+            )
+            self.stdout_thread.start()
+            self.stderr_thread.start()
+            initialized = self._rpc("initialize", {})
+            if initialized.get("protocolVersion") != "2024-11-05":
+                fail(f"MCP initialize returned an unexpected payload: {initialized}")
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+    def _drain_stdout(self) -> None:
+        process = self.process
+        if process is None or process.stdout is None:
+            self.stdout_queue.put(None)
+            return
+        try:
+            for line in process.stdout:
+                self.stdout_queue.put(line)
+        finally:
+            self.stdout_queue.put(None)
+
+    def _drain_stderr(self) -> None:
+        process = self.process
+        if process is None or process.stderr is None:
+            return
+        for line in process.stderr:
+            self.stderr_lines.append(line.rstrip("\n"))
+
+    def _stderr_tail(self) -> str:
+        return "\n".join(list(self.stderr_lines)[-50:])
+
+    def _rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        with self.request_lock:
+            process = self.process
+            if process is None or process.stdin is None:
+                fail("persistent MCP process is not started")
+            if process.poll() is not None:
+                fail(f"persistent MCP process exited rc={process.returncode}\nSTDERR={self._stderr_tail()}")
+            self.request_id += 1
+            request_id = self.request_id
+            request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            try:
+                process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                fail(f"persistent MCP write failed: {exc}\nSTDERR={self._stderr_tail()}")
+            try:
+                raw = self.stdout_queue.get(timeout=self.timeout_seconds)
+            except queue.Empty:
+                fail(f"persistent MCP response timeout method={method}\nSTDERR={self._stderr_tail()}")
+            if raw is None:
+                fail(f"persistent MCP stdout closed method={method}\nSTDERR={self._stderr_tail()}")
+            try:
+                response = json.loads(raw)
+            except json.JSONDecodeError:
+                fail(f"persistent MCP returned non-json output method={method}: {raw!r}\nSTDERR={self._stderr_tail()}")
+            if response.get("id") != request_id:
+                fail(f"persistent MCP response id mismatch expected={request_id} got={response.get('id')}")
+            if "error" in response:
+                fail(f"persistent MCP protocol error method={method}: {response['error']}")
+            result = response.get("result")
+            if not isinstance(result, dict):
+                fail(f"persistent MCP result must be an object method={method}: {result!r}")
+            return result
+
+    def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        return self._rpc("tools/call", {"name": name, "arguments": args})
+
+    def close(self) -> None:
+        process = self.process
+        if process is None:
+            return
+        if process.stdin is not None and not process.stdin.closed:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+        for thread in (self.stdout_thread, self.stderr_thread):
+            if thread is not None:
+                thread.join(timeout=2)
+        self.process = None
+
+
+ACTIVE_CLIENT: PersistentMcpClient | None = None
 
 
 def clean_runtime(root: Path = ROOT) -> None:
@@ -34,6 +175,7 @@ def clean_runtime(root: Path = ROOT) -> None:
 
 def clean_redteam() -> None:
     shutil.rmtree(REDTEAM_DIR, ignore_errors=True)
+    TRIPWIRE_TARGET.unlink(missing_ok=True)
 
 
 def prepare_redteam() -> None:
@@ -45,18 +187,9 @@ def rel(path: Path) -> str:
 
 
 def call_tool(name: str, args: dict[str, Any]) -> dict[str, Any]:
-    proc = subprocess.run(
-        [sys.executable, str(ENTRY), "--call", name, "--args", json.dumps(args)],
-        cwd=str(ROOT),
-        text=True,
-        capture_output=True,
-        timeout=30,
-    )
-    raw_text = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
-    try:
-        outer = json.loads(raw_text)
-    except json.JSONDecodeError:
-        fail(f"{name} returned non-json output rc={proc.returncode}\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}")
+    if ACTIVE_CLIENT is None:
+        fail("persistent MCP client is not active")
+    outer = ACTIVE_CLIENT.call_tool(name, args)
     if "content" in outer:
         return json.loads(outer["content"][0]["text"])
     return outer
@@ -185,7 +318,7 @@ def expect_patch(agent_id: str, target: str, base_hash: str, ctx: dict[str, str]
 
 
 def test_positive_context_path() -> None:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("positive-context.txt")
     agent = bootstrap("redteam-positive")
     ctx = ready_context(agent, target, "redteam positive context path")
@@ -199,7 +332,7 @@ def test_positive_context_path() -> None:
 
 
 def test_claim_requires_scribe_and_graphify() -> None:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("missing-context.txt")
     agent = bootstrap("redteam-missing-context")
     ctx = start_context(agent, target, "redteam missing scribe")
@@ -211,7 +344,7 @@ def test_claim_requires_scribe_and_graphify() -> None:
 
 
 def test_fake_token_and_read_intent_refused_at_claim() -> None:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("fake-token.txt")
     agent = bootstrap("redteam-fake-token")
     ctx = ready_context(agent, target, "redteam fake token")
@@ -219,7 +352,7 @@ def test_fake_token_and_read_intent_refused_at_claim() -> None:
     result = call_tool("claim_resource", {"agent_id": agent, "resource": target, "mode": "patch_queue", "ttl_seconds": 600, **bad_ctx})
     assert_refused(result, "TASK_CONTEXT_TOKEN_MISMATCH", "claim_resource with fake token")
 
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("read-intent.txt")
     agent = bootstrap("redteam-read-intent")
     read_ctx = ready_context(agent, target, "redteam read intent", intent="read")
@@ -228,7 +361,7 @@ def test_fake_token_and_read_intent_refused_at_claim() -> None:
 
 
 def test_propose_apply_and_delete_guards() -> None:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("guards.txt")
     agent = bootstrap("redteam-guards")
     ctx = ready_context(agent, target, "redteam guards")
@@ -249,7 +382,7 @@ def test_propose_apply_and_delete_guards() -> None:
     result = call_tool("apply_patch", {"agent_id": agent, "patch_id": patch_id, **ctx, "action_lease_id": apply_lease})
     assert_refused(result, "claim required", "apply_patch without active claim")
 
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("delete-confirmation.txt")
     agent = bootstrap("redteam-delete")
     ctx = ready_context(agent, target, "redteam delete")
@@ -261,7 +394,7 @@ def test_propose_apply_and_delete_guards() -> None:
 
 
 def test_resource_mismatch_refused_at_claim() -> None:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     file_a = write_target("resource-a.txt")
     file_b = write_target("resource-b.txt")
     agent = bootstrap("redteam-resource-mismatch")
@@ -271,7 +404,7 @@ def test_resource_mismatch_refused_at_claim() -> None:
 
 
 def test_context_bypass() -> str:
-    clean_runtime(); clean_redteam()
+    clean_redteam()
     target = write_target("context-bypass.txt")
     agent = bootstrap("redteam-context-bypass")
     lease_id = acquire_lease(agent, "claim_resource", resource=target)
@@ -312,14 +445,13 @@ def test_direct_fs_write() -> str:
 
 
 def test_direct_fs_bypass_detection() -> str:
-    clean_runtime(); clean_redteam()
-    target = ".agent/mcp/tests/fixtures/direct_fs_tripwire_target.txt"
-    direct = ROOT / target
-    original = direct.read_bytes()
+    clean_redteam()
+    TRIPWIRE_TARGET.write_text("redteam original\n", encoding="utf-8")
+    target = rel(TRIPWIRE_TARGET)
     try:
         agent = bootstrap("redteam-tripwire-bypass")
         ctx = ready_context(agent, target, "redteam tripwire bypass")
-        direct.write_text("tamper after snapshot\n", encoding="utf-8")
+        TRIPWIRE_TARGET.write_text("tamper after snapshot\n", encoding="utf-8")
         result = call_tool("workspace_audit", {"agent_id": agent, "task_id": ctx["task_id"], "resource": target})
         if result.get("verdict") == "DIRECT_WRITE_BYPASS_DETECTED":
             print("DIRECT_FS_BYPASS_DETECTED_BY_TRIPWIRE")
@@ -327,29 +459,35 @@ def test_direct_fs_bypass_detection() -> str:
         print("DIRECT_FS_BYPASS_NOT_DETECTED")
         return "MISSED"
     finally:
-        direct.write_bytes(original)
+        TRIPWIRE_TARGET.unlink(missing_ok=True)
 
 
 def main() -> int:
+    global ACTIVE_CLIENT
     parser = argparse.ArgumentParser()
     parser.add_argument("--strict-context", action="store_true", help="fail if direct MCP write path bypasses before_task/scribe_query/graphify_query")
     args = parser.parse_args()
     if not ENTRY.is_file():
         fail(f"missing entrypoint: {ENTRY}")
+    clean_runtime()
+    clean_redteam()
     try:
-        test_positive_context_path()
-        test_claim_requires_scribe_and_graphify()
-        test_fake_token_and_read_intent_refused_at_claim()
-        test_propose_apply_and_delete_guards()
-        test_resource_mismatch_refused_at_claim()
-        context_bypass = test_context_bypass()
-        direct_fs = test_direct_fs_write()
-        tripwire = test_direct_fs_bypass_detection()
-        print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs} direct_fs_tripwire={tripwire}")
-        if args.strict_context and context_bypass == "OPEN":
-            return 2
-        return 0
+        with PersistentMcpClient(ROOT, ENTRY) as client:
+            ACTIVE_CLIENT = client
+            test_positive_context_path()
+            test_claim_requires_scribe_and_graphify()
+            test_fake_token_and_read_intent_refused_at_claim()
+            test_propose_apply_and_delete_guards()
+            test_resource_mismatch_refused_at_claim()
+            context_bypass = test_context_bypass()
+            direct_fs = test_direct_fs_write()
+            tripwire = test_direct_fs_bypass_detection()
+            print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs} direct_fs_tripwire={tripwire}")
+            if args.strict_context and context_bypass == "OPEN":
+                return 2
+            return 0
     finally:
+        ACTIVE_CLIENT = None
         clean_redteam()
         clean_runtime()
 

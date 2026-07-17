@@ -7,7 +7,10 @@ import sys
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 MCP_DIR = HERE.parent
@@ -20,6 +23,7 @@ from runtime.validation_lock import (
     validation_runtime_busy_message,
     validation_runtime_lock,
 )
+from runtime import db, patch_queue
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -87,6 +91,12 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertIn("validation_runtime_lock", text)
         self.assertIn("VALIDATION_RUNTIME_LOCK_ACQUIRED", text)
         self.assertIn("validation_runtime_busy_message", text)
+        self.assertEqual(text.count("clean_runtime()"), 2)
+        self.assertNotIn(".agent/mcp/tests/fixtures/direct_fs_tripwire_target.txt", text)
+        self.assertIn("tenor-redteam-tripwire-target.txt", text)
+        self.assertIn("class PersistentMcpClient", text)
+        self.assertIn("subprocess.Popen", text)
+        self.assertNotIn("subprocess.run(", text)
 
     def test_08_same_runtime_is_serialized(self) -> None:
         proc = mp.Process(target=hold_lock, args=(str(self.root), 0.3))
@@ -107,17 +117,17 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertLess(lock_pos, smoke_pos)
         self.assertLess(smoke_pos, redteam_pos)
 
-    def test_10_reset_checkpoints_and_transactionally_clears_valid_wal_database(self) -> None:
+    def test_10_reset_removes_valid_database_and_wal_sidecars(self) -> None:
         database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("CREATE TABLE sample(value TEXT)")
             connection.execute("INSERT INTO sample(value) VALUES('ok')")
+            connection.commit()
         reset_validation_runtime_database(self.root)
-        self.assertTrue(database.exists())
-        with sqlite3.connect(database) as connection:
-            self.assertEqual(connection.execute("PRAGMA quick_check").fetchone()[0], "ok")
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM sample").fetchone()[0], 0)
+        self.assertFalse(database.exists())
+        self.assertFalse((database.parent / "coordination.sqlite-wal").exists())
+        self.assertFalse((database.parent / "coordination.sqlite-shm").exists())
 
     def test_11_reset_removes_malformed_database_and_sidecars(self) -> None:
         runtime = self.root / ".agent" / "state" / "runtime"
@@ -129,6 +139,63 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         self.assertFalse(database.exists())
         self.assertFalse((runtime / "coordination.sqlite-wal").exists())
         self.assertFalse((runtime / "coordination.sqlite-shm").exists())
+
+    def test_12_repeated_cross_process_wal_resets_remain_integral(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        writer = """
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1], timeout=5.0, isolation_level=None)
+try:
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("CREATE TABLE IF NOT EXISTS churn(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)")
+    connection.execute("BEGIN IMMEDIATE")
+    connection.executemany(
+        "INSERT INTO churn(payload) VALUES(?)",
+        [(f"cycle-row-{index}-" + "x" * 512,) for index in range(128)],
+    )
+    connection.execute("COMMIT")
+finally:
+    connection.close()
+"""
+        for cycle in range(20):
+            process = subprocess.run(
+                [sys.executable, "-c", writer, str(database)],
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+            self.assertEqual(process.returncode, 0, f"cycle={cycle}: {process.stderr}")
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(connection.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM churn").fetchone()[0], 128)
+            reset_validation_runtime_database(self.root)
+            self.assertFalse(database.exists())
+            self.assertFalse((database.parent / "coordination.sqlite-wal").exists())
+            self.assertFalse((database.parent / "coordination.sqlite-shm").exists())
+
+    def test_13_patch_queue_context_closes_sqlite_connection(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        with mock.patch.object(patch_queue, "db_path", return_value=database):
+            with patch_queue.connect() as connection:
+                self.assertEqual(connection.execute("SELECT 1").fetchone()[0], 1)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+
+    def test_14_init_db_runs_migrations_once_under_thread_contention(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        db._init_db_checked.pop(str(database), None)
+        original = db._run_migrations
+        with mock.patch.object(db, "_run_migrations", wraps=original) as migrations:
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(executor.map(lambda _index: db.init_db(self.root), range(32)))
+        self.assertEqual(migrations.call_count, 1)
+        self.assertTrue(all(result["db"] == str(database) for result in results))
+        with closing(sqlite3.connect(database)) as connection:
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+        db._init_db_checked.pop(str(database), None)
+
 
 
 
