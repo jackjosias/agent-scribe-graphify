@@ -1104,6 +1104,15 @@ def scribe_commit_gate_resolve(
     return server.ok(resolved)
 
 
+def _project_relative_path(path: Path) -> str:
+    try:
+        resolved_root = server.ROOT.resolve(strict=True)
+        resolved_path = path.resolve(strict=True)
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise server.ToolError("SCRIBE_RECORD_OUTSIDE_PROJECT") from exc
+
+
 def scribe_record(
     agent_id: str = "",
     request: str = "",
@@ -1211,6 +1220,7 @@ def scribe_record(
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, target)
+        record_path = _project_relative_path(target)
         if task_id and context_token:
             try:
                 task_context.mark_scribe_record_staged(
@@ -1219,7 +1229,7 @@ def scribe_record(
                     context_token,
                     required=required,
                     policy=policy,
-                    record_path=str(target.relative_to(server.ROOT)),
+                    record_path=record_path,
                     record_digest=digest,
                 )
             except task_context.TaskContextError as exc:
@@ -1242,7 +1252,7 @@ def scribe_record(
         "promotion_required": required,
         "promotion_tool": "scribe_promote_record" if required else "",
         "memory_policy": policy,
-        "record_path": str(target.relative_to(server.ROOT)),
+        "record_path": record_path,
         "entry": payload,
     })
 
@@ -1271,8 +1281,7 @@ def scribe_promote_record(
         source = source.resolve()
     if not source.is_file():
         raise server.ToolError("SCRIBE_RECORD_NOT_FOUND")
-    if not source.is_relative_to(server.ROOT):
-        raise server.ToolError("SCRIBE_RECORD_OUTSIDE_PROJECT")
+    _project_relative_path(source)
     record = json.loads(source.read_text(encoding="utf-8"))
     policy = canonical_memory_gate.derive_memory_policy(
         str(record.get("record_type") or record.get("type") or ""),

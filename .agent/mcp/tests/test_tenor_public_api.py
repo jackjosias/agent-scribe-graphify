@@ -242,6 +242,32 @@ class TenorPublicApiTest(unittest.TestCase):
         self.assertEqual(finished["verdict"], "TENOR_TASK_FINISHED")
         self.assertTrue(finished["terminal"])
 
+    def test_scribe_receipt_survives_project_root_symlink_alias(self) -> None:
+        alias_root = Path(self.tmp.name) / "project-alias"
+        try:
+            alias_root.symlink_to(self.root, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+        mcp.server.ROOT = alias_root
+        started = self.call(
+            "tenor_task_start",
+            objective="inspect through aliased root",
+            intent="read",
+            resources=["src/feature.txt"],
+        )
+        self.assertTrue(started["ok"], started)
+        finished = self.call(
+            "tenor_task_control",
+            task_id=started["task_id"],
+            action="finish",
+            summary="aliased-root inspection complete",
+        )
+        self.assertTrue(finished["ok"], finished)
+        self.assertEqual(finished["verdict"], "TENOR_TASK_FINISHED")
+        record_path = str(finished["scribe_record"])
+        self.assertFalse(Path(record_path).is_absolute())
+        self.assertTrue((self.root / record_path).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
