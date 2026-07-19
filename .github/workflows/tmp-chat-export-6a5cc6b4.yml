@@ -27,7 +27,11 @@ jobs:
       - name: Extract complete visible public conversation
         env:
           SHARE_URL: https://chatgpt.com/share/6a5cc6b4-e414-83ea-919a-21248677c938
-        run: python tmp_chat_export/export_public_share_exhaustive.py
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p tmp_chat_export/result
+          python tmp_chat_export/export_public_share_exhaustive.py 2>&1 | tee tmp_chat_export/result/run.log
 
       - name: Verify extraction integrity
         shell: bash
@@ -48,17 +52,12 @@ jobs:
           print(diag)
           PY
 
-      - name: Upload exact transcript and verification files
+      - name: Upload transcript and all verification files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: chatgpt-public-6a5cc6b4-integrale
-          path: |
-            tmp_chat_export/result/conversation-chatgpt-public-6a5cc6b4-e414-83ea-919a-21248677c938-INTEGRALE.txt
-            tmp_chat_export/result/diagnostics.txt
-            tmp_chat_export/result/first-last-preview.txt
-            tmp_chat_export/result/public-share.html
-            tmp_chat_export/result/decoded-react-stream.txt
-            tmp_chat_export/result/decoded-public-payload.json
+          path: tmp_chat_export/result/
           if-no-files-found: error
           retention-days: 1
           compression-level: 9
