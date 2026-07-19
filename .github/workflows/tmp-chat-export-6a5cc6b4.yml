@@ -1,0 +1,64 @@
+name: Temporary exhaustive ChatGPT transcript export
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install extraction dependencies
+        run: python -m pip install --disable-pip-version-check curl-cffi beautifulsoup4
+
+      - name: Extract complete visible public conversation
+        env:
+          SHARE_URL: https://chatgpt.com/share/6a5cc6b4-e414-83ea-919a-21248677c938
+        run: python tmp_chat_export/export_public_share_exhaustive.py
+
+      - name: Verify extraction integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIAG="tmp_chat_export/result/diagnostics.txt"
+          TXT="tmp_chat_export/result/conversation-chatgpt-public-6a5cc6b4-e414-83ea-919a-21248677c938-INTEGRALE.txt"
+          test -s "$DIAG"
+          test -s "$TXT"
+          grep -q '^share_url=https://chatgpt.com/share/6a5cc6b4-e414-83ea-919a-21248677c938$' "$DIAG"
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          diag = Path('tmp_chat_export/result/diagnostics.txt').read_text(encoding='utf-8')
+          match = re.search(r'^visible_entries=(\d+)$', diag, re.M)
+          if not match or int(match.group(1)) < 2:
+              raise SystemExit('Extraction incomplete: visible_entries < 2')
+          print(diag)
+          PY
+
+      - name: Upload exact transcript and verification files
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-public-6a5cc6b4-integrale
+          path: |
+            tmp_chat_export/result/conversation-chatgpt-public-6a5cc6b4-e414-83ea-919a-21248677c938-INTEGRALE.txt
+            tmp_chat_export/result/diagnostics.txt
+            tmp_chat_export/result/first-last-preview.txt
+            tmp_chat_export/result/public-share.html
+            tmp_chat_export/result/decoded-react-stream.txt
+            tmp_chat_export/result/decoded-public-payload.json
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
