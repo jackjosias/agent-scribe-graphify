@@ -31,7 +31,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p tmp_chat_export/result
-          python tmp_chat_export/export_public_share_exhaustive.py 2>&1 | tee tmp_chat_export/result/run.log
+          python tmp_chat_export/run_exhaustive_export.py 2>&1 | tee tmp_chat_export/result/run.log
 
       - name: Verify extraction integrity
         shell: bash
