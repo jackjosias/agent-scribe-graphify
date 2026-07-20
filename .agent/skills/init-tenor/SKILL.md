@@ -12,12 +12,12 @@ description: >
 Pour une session pilotée par un LLM hôte, le démarrage commence par :
 
 ```text
-TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact "./.agent/skills/init-tenor/SKILL.md"; n’utilise jamais "~/.agent", "~/.agents" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]
 ```
 
-Ce déclencheur signifie : lire ce fichier local **avant** toute configuration globale OpenCode, Codex, Gemini, Cursor ou autre host, puis lire `.agent/rules/tenor-init-v2.json`.
+Ce déclencheur est une instruction conversationnelle autonome, pas une invocation d'un registre de skills. Le host utilise son lecteur normal de fichiers pour ouvrir le chemin project-local exact `./.agent/skills/init-tenor/SKILL.md`, sans résolution sous `~/.agent`, `~/.agents` ou un autre emplacement global, puis lit `.agent/rules/tenor-init-v2.json`.
 
-L'ancien raccourci `[[.agent/skills/init-tenor/SKILL.md]]` peut être reconnu pour compatibilité historique, mais les nouvelles docs, prompts et templates doivent utiliser uniquement la forme canonique ci-dessus.
+Les anciens raccourcis `TENOR INIT::[.agent/skills/init-tenor/SKILL.md]` et `[[.agent/skills/init-tenor/SKILL.md]]` peuvent être reconnus pour compatibilité historique, mais les nouvelles docs, prompts et templates doivent utiliser uniquement la phrase project-local explicite ci-dessus.
 
 Pour CI, scripts ou opérateurs humains, la commande peut être appelée directement :
 

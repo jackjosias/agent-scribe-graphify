@@ -1,7 +1,8 @@
 {
   "name": "TENOR_INIT_V2_16",
-  "human_trigger": "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]",
+  "human_trigger": "TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact \"./.agent/skills/init-tenor/SKILL.md\"; n’utilise jamais \"~/.agent\", \"~/.agents\" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]",
   "legacy_human_triggers": [
+    "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]",
     "[[.agent/skills/init-tenor/SKILL.md]]"
   ],
   "entry_file": ".agent/skills/init-tenor/SKILL.md",
@@ -18,7 +19,10 @@
     "bootstrap_must_not_bypass_tenor_init": true,
     "known_host_must_use_explicit_host_id": true,
     "opencode_must_never_try_auto_first": true,
-    "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>"
+    "canonical_command": ".agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown> --host <host-id|auto>",
+    "project_local_file_read_required": true,
+    "global_skill_resolution_forbidden": true,
+    "conversational_bootstrap_is_self_contained": true
   },
   "authority_order": [
     "resolve_current_project_root",
@@ -203,7 +207,11 @@
     "canonical_output_only": ".agent/state/outputs/graphify-out/"
   },
   "task_machine_contract": {
-    "canonical_intents": ["read", "write", "delete"],
+    "canonical_intents": [
+      "read",
+      "write",
+      "delete"
+    ],
     "descriptive_intent_forbidden": true,
     "one_active_task_per_agent": true,
     "replacement_identity_for_hard_stop_forbidden": true,
@@ -383,11 +391,11 @@
     "defense_layers": [
       "host permissions",
       "project-local instructions",
-        "resource locks and claims",
-        "atomic multi-file changeset",
-        "SCRIBE/Graphify decision capsule",
-        "structured edit and destructive replacement guards",
-        "hash preflight and validator rollback",
+      "resource locks and claims",
+      "atomic multi-file changeset",
+      "SCRIBE/Graphify decision capsule",
+      "structured edit and destructive replacement guards",
+      "hash preflight and validator rollback",
       "direct filesystem tripwire",
       "workspace audit",
       "canonical memory admission and finish gate"

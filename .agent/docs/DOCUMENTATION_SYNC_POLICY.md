@@ -27,7 +27,7 @@ A lower-level or historical document must never override a higher-level current 
 Human/LLM trigger:
 
 ```text
-TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact "./.agent/skills/init-tenor/SKILL.md"; n’utilise jamais "~/.agent", "~/.agents" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]
 ```
 
 Mechanical command:
@@ -36,7 +36,7 @@ Mechanical command:
 .agent/workflow/scribe/scribe tenor-init --type <cli|extension|api|unknown>
 ```
 
-The old `[[.agent/skills/init-tenor/SKILL.md]]` trigger may be recognized for compatibility but must not be emitted by new templates or docs.
+The old `TENOR INIT::[.agent/skills/init-tenor/SKILL.md]` and `[[.agent/skills/init-tenor/SKILL.md]]` triggers may be recognized for compatibility but must not be emitted by new templates or docs. The canonical phrase is self-contained and requires a normal project-local file read, never global skill resolution.
 
 `bootstrap` is internal/legacy. It is not the public installation, relocation or recovery authority in V2.16.
 
@@ -47,6 +47,7 @@ Any change to installation, relocation, runtime purge, output migration, Graphif
 ```text
 README.md
 AGENTS.md
+.agent/README.md
 .agent/rules/scribe.md
 .agent/rules/tenor-init-v2.json
 .agent/skills/init-tenor/SKILL.md
@@ -84,7 +85,7 @@ For every protocol evolution:
 Examples of forbidden drift:
 
 - presenting `scribe bootstrap` as the normal V2.16 start;
-- using a trigger different from `TENOR INIT::[.agent/skills/init-tenor/SKILL.md]` in new docs;
+- using a trigger different from `TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact "./.agent/skills/init-tenor/SKILL.md"; n’utilise jamais "~/.agent", "~/.agents" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]` in new docs;
 - treating `server_entry.py --list-tools` as host visibility proof;
 - declaring `TENOR_INIT_READY` without host visibility, root binding and bridge proof;
 - documenting only `nodes + edges` after real Graphify proved NetworkX `nodes + links`;

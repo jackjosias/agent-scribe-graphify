@@ -19,7 +19,7 @@ The current branch has already proved the local engine on Linux/macOS/Windows CI
 Human/LLM trigger:
 
 ```text
-TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact "./.agent/skills/init-tenor/SKILL.md"; n’utilise jamais "~/.agent", "~/.agents" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]
 ```
 
 Mechanical command from the current project root:
@@ -34,7 +34,7 @@ Windows-compatible command:
 py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
-The old `[[.agent/skills/init-tenor/SKILL.md]]` form is compatibility-only. New documentation and templates must emit the canonical trigger above.
+The old `TENOR INIT::[.agent/skills/init-tenor/SKILL.md]` and `[[.agent/skills/init-tenor/SKILL.md]]` forms are compatibility-only. New documentation and templates must emit the explicit project-local trigger above. The trigger is a self-contained instruction to use the host's normal file reader; it is not a request to resolve a global skill.
 
 `bootstrap` is an internal/legacy primitive. It is not the public V2.16 authority for installation, relocation or recovery.
 
