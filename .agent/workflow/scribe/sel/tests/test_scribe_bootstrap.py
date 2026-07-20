@@ -26,6 +26,7 @@ scribe_state = load_script_module("scribe_state")
 update_state_after_write = getattr(scribe_state, "update_state_after_write")
 
 scribe_install_templates = load_script_module("scribe_install_templates")
+TENOR_TRIGGER = getattr(scribe_install_templates, "TENOR_TRIGGER")
 render_scribe_adapter = getattr(scribe_install_templates, "render_scribe_adapter")
 render_scribe_rule = getattr(scribe_install_templates, "render_scribe_rule")
 render_agents_block = getattr(scribe_install_templates, "render_agents_block")
@@ -169,7 +170,7 @@ class ScribeBootstrapTests(unittest.TestCase):
         compile(adapter, "<installed-scribe-adapter>", "exec")
 
     def test_generated_surfaces_use_only_canonical_v216_entry(self) -> None:
-        trigger = "TENOR INIT::[.agent/skills/init-tenor/SKILL.md]"
+        trigger = TENOR_TRIGGER
         for rendered in (render_scribe_rule(), render_agents_block()):
             self.assertIn(trigger, rendered)
             self.assertIn("tenor-init --type", rendered)

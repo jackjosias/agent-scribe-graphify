@@ -10,7 +10,7 @@ marker is required.
 Run from the destination project root:
 
 ```text
-TENOR INIT::[.agent/skills/init-tenor/SKILL.md]
+TENOR INIT ::[— depuis la racine du workspace courant, lis comme un fichier local avec l’outil normal de lecture de fichiers — jamais avec un résolveur de skills — le chemin exact "./.agent/skills/init-tenor/SKILL.md"; n’utilise jamais "~/.agent", "~/.agents" ni aucun chemin global; applique ensuite intégralement ce fichier et continue automatiquement jusqu’à TENOR_INIT_READY, HOST_RECONNECT_REQUIRED ou un verdict FAIL_CLOSED explicite.]
 ```
 
 The mechanical command is:
