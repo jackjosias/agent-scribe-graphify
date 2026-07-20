@@ -11,6 +11,7 @@ import unittest
 import uuid
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -167,6 +168,29 @@ class MultiAgentResourceLockTest(unittest.TestCase):
             return json.loads(result["content"][0]["text"])
         return result
 
+    def _read_response_json(self, response_path: Path, deadline: float) -> dict[str, Any]:
+        """Read an atomically published IPC response through transient Windows sharing locks."""
+        last_error: OSError | json.JSONDecodeError | None = None
+        while True:
+            try:
+                return json.loads(response_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                last_error = exc
+
+            returncode = self._server_proc.poll()
+            if returncode is not None:
+                stdout, stderr = self._server_proc.communicate(timeout=10)
+                raise RuntimeError(
+                    f"persistent MCP test server exited {returncode}; "
+                    f"stdout={stdout[-1000:]}; stderr={stderr[-1000:]}"
+                ) from last_error
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "persistent MCP response remained unreadable before the deadline: "
+                    f"{response_path.name}; last_error={last_error!r}"
+                ) from last_error
+            time.sleep(0.01)
+
     def call(self, tool: str, **args: object) -> dict[str, Any]:
         self._sequence += 1
         request = {
@@ -194,10 +218,8 @@ class MultiAgentResourceLockTest(unittest.TestCase):
                 raise TimeoutError(f"persistent MCP call timed out: {tool}")
             time.sleep(0.005)
 
-        try:
-            raw = json.loads(response_path.read_text(encoding="utf-8"))
-        finally:
-            response_path.unlink(missing_ok=True)
+        raw = self._read_response_json(response_path, deadline)
+        response_path.unlink(missing_ok=True)
         return self._decode_tool_response(raw)
 
     def race_lock_claims(
@@ -301,6 +323,17 @@ class MultiAgentResourceLockTest(unittest.TestCase):
         return pg["action_lease"]["lease_id"]
 
     # ── Tests ─────────────────────────────────────────────────
+
+    def test_00_response_reader_retries_windows_sharing_violation(self) -> None:
+        response_path = self._ipc_dir / "synthetic.response.json"
+        with mock.patch.object(
+            Path,
+            "read_text",
+            side_effect=[PermissionError(13, "sharing violation"), '{"result":{"ok":true}}'],
+        ) as read_text:
+            raw = self._read_response_json(response_path, time.monotonic() + 1.0)
+        self.assertEqual(raw, {"result": {"ok": True}})
+        self.assertEqual(read_text.call_count, 2)
 
     def test_01_apply_without_lock_rejected(self) -> None:
         aid = "no-lock-agent"
