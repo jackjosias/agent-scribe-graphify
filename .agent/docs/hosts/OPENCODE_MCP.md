@@ -109,7 +109,13 @@ le tool natif `edit` et refuse par défaut toute commande `bash`. Seules les
 quatre formes exactes, sans suffixe shell, de TENOR INIT ci-dessus restent
 autorisées afin qu'une nouvelle session puisse obtenir sa preuve et son identité
 stable sur Linux, macOS ou Windows. Les mutations passent par un unique
-`tenor_apply_changeset` atomique multi-fichier ; la reconstruction
+`tenor_apply_changeset` atomique multi-fichier. Les modifications textuelles
+utilisent `operation=edit` avec des ancres exactes ; `replace` signifie toujours
+le fichier complet et une réduction destructive exige une confirmation liée
+aux hashes. Au moins un validateur est obligatoire. La capsule SCRIBE/Graphify
+est vérifiée avant l'écriture et la tâche ne se ferme qu'après un verdict
+d'admission mémoire. OpenCode ne demande jamais à l'utilisateur d'appliquer un
+patch manuel. La reconstruction
 structurelle requise par INIT est exécutée par TENOR lui-même, sous son verrou
 partagé et dans la même commande autorisée. OpenCode ne doit donc ni demander
 la commande Graphify à l'utilisateur, ni appeler `graphify_project_build`, ni
@@ -214,7 +220,9 @@ tenor_apply_changeset(task_id, changes=[file_a, file_b], validators=[...])
 ```
 
 The proof must also execute one validator failure and confirm both files are
-restored byte-for-byte. Do not use OpenCode's built-in edit/write tool.
+restored byte-for-byte, reject a 2051-to-5-line unconfirmed replacement, and
+show the decision-capsule hash plus memory-admission verdict. Do not use
+OpenCode's built-in edit/write tool or ask the human to apply a patch.
 
 ## Direct-write bypass test
 

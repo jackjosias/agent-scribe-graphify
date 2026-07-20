@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import sqlite3
 import subprocess
 import sys
@@ -193,8 +194,156 @@ finally:
         self.assertEqual(migrations.call_count, 1)
         self.assertTrue(all(result["db"] == str(database) for result in results))
         with closing(sqlite3.connect(database)) as connection:
-            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchall(), [("ok",)])
+            self.assertEqual(
+                [str(row[0]) for row in connection.execute("PRAGMA integrity_check")],
+                ["ok"],
+            )
         db._init_db_checked.pop(str(database), None)
+
+    def test_15_crashed_wal_writer_cannot_poison_next_database_generation(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        crashed_writer = """
+import os
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1], timeout=5.0, isolation_level=None)
+connection.execute("PRAGMA journal_mode=WAL")
+connection.execute("PRAGMA wal_autocheckpoint=0")
+connection.execute("CREATE TABLE IF NOT EXISTS crashed_writer(id INTEGER PRIMARY KEY, payload TEXT)")
+connection.execute("BEGIN IMMEDIATE")
+connection.executemany(
+    "INSERT INTO crashed_writer(payload) VALUES(?)",
+    [(f"row-{index}-" + "x" * 1024,) for index in range(256)],
+)
+connection.execute("COMMIT")
+os._exit(0)
+"""
+        for cycle in range(20):
+            process = subprocess.run(
+                [sys.executable, "-c", crashed_writer, str(database)],
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+            self.assertEqual(process.returncode, 0, f"cycle={cycle}: {process.stderr}")
+            reset_validation_runtime_database(self.root)
+            self.assertFalse(database.exists(), f"cycle={cycle}")
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute("CREATE TABLE generation(id INTEGER PRIMARY KEY)")
+                connection.commit()
+                self.assertEqual(
+                    connection.execute("PRAGMA integrity_check").fetchall(),
+                    [("ok",)],
+                    f"cycle={cycle}",
+                )
+            reset_validation_runtime_database(self.root)
+
+    def test_16_default_runtime_policy_uses_portable_full_sync_delete_journal(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        db._init_db_checked.pop(str(database), None)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(db.SQLITE_JOURNAL_MODE_ENV, None)
+            with db.connect(self.root) as connection:
+                self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "delete")
+                self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)
+                self.assertEqual(connection.execute("PRAGMA foreign_keys").fetchone()[0], 1)
+                self.assertEqual(
+                    connection.execute("PRAGMA busy_timeout").fetchone()[0],
+                    db.DEFAULT_BUSY_TIMEOUT_MS,
+                )
+                self.assertEqual(connection.execute("PRAGMA application_id").fetchone()[0], db._DB_APP_ID)
+
+    def test_17_patch_queue_and_coordination_db_share_one_journal_policy(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        with mock.patch.dict(os.environ, {db.SQLITE_JOURNAL_MODE_ENV: "TRUNCATE"}, clear=False):
+            with mock.patch.object(patch_queue, "db_path", return_value=database):
+                with patch_queue.connect() as connection:
+                    self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "truncate")
+                    self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)
+                    self.assertEqual(
+                        connection.execute("PRAGMA busy_timeout").fetchone()[0],
+                        db.DEFAULT_BUSY_TIMEOUT_MS,
+                    )
+            with db.connect(self.root) as connection:
+                self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "truncate")
+
+    def test_18_wal_requires_explicit_validated_opt_in(self) -> None:
+        with mock.patch.dict(os.environ, {db.SQLITE_JOURNAL_MODE_ENV: "WAL"}, clear=False):
+            with db.connect(self.root) as connection:
+                self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+                self.assertEqual(connection.execute("PRAGMA synchronous").fetchone()[0], 2)
+
+    def test_19_invalid_journal_policy_fails_closed(self) -> None:
+        with mock.patch.dict(os.environ, {db.SQLITE_JOURNAL_MODE_ENV: "MEMORY"}, clear=False):
+            with self.assertRaisesRegex(db.CoordinationError, "SQLITE_JOURNAL_MODE_INVALID"):
+                with db.connect(self.root):
+                    pass
+
+    def test_20_delete_journal_survives_cross_process_write_contention(self) -> None:
+        database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"
+        with mock.patch.dict(os.environ, {db.SQLITE_JOURNAL_MODE_ENV: "DELETE"}, clear=False):
+            with db.connect(self.root) as connection:
+                connection.execute(
+                    "CREATE TABLE process_stress("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, writer INTEGER NOT NULL, payload TEXT NOT NULL)"
+                )
+
+        writer = """
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, sys.argv[1])
+from runtime import db
+
+root = Path(sys.argv[2])
+writer_id = int(sys.argv[3])
+os.environ[db.SQLITE_JOURNAL_MODE_ENV] = "DELETE"
+with db.connect(root) as connection:
+    connection.execute("BEGIN IMMEDIATE")
+    connection.executemany(
+        "INSERT INTO process_stress(writer,payload) VALUES(?,?)",
+        [(writer_id, f"writer-{writer_id}-row-{row}-" + "x" * 128) for row in range(64)],
+    )
+    connection.execute("COMMIT")
+"""
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    writer,
+                    str(MCP_DIR),
+                    str(self.root),
+                    str(writer_id),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for writer_id in range(16)
+        ]
+        for writer_id, process in enumerate(processes):
+            stdout, stderr = process.communicate(timeout=45)
+            self.assertEqual(
+                process.returncode,
+                0,
+                f"writer={writer_id} stdout={stdout!r} stderr={stderr!r}",
+            )
+
+        with db.connect(self.root) as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM process_stress").fetchone()[0],
+                16 * 64,
+            )
+            self.assertEqual(
+                [str(row[0]) for row in connection.execute("PRAGMA integrity_check")],
+                ["ok"],
+            )
+        self.assertFalse(database.with_name(f"{database.name}-wal").exists())
+        self.assertFalse(database.with_name(f"{database.name}-shm").exists())
 
 
 

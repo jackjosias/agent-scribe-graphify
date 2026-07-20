@@ -6,9 +6,11 @@ Design principles (production-grade):
      at runtime only. This makes the .agent directory truly portable across
      machines, operating systems, and users.
 
-  2. DURABILITY : WAL journal mode + synchronous=NORMAL + busy_timeout are
-     set on every connection. SQLite integrity_check runs at bootstrap.
-     Backup is performed automatically before any schema migration.
+  2. DURABILITY : a portable rollback journal + synchronous=FULL + bounded
+     busy_timeout are set on every connection. WAL remains an explicit opt-in
+     for filesystems that have been qualified for shared-memory semantics.
+     SQLite integrity_check runs at bootstrap. Backup is performed
+     automatically before any schema migration.
 
   3. SCHEMA VERSIONING : A `schema_migrations` table tracks applied migrations.
      All migrations are idempotent: running them twice is a no-op. This
@@ -53,6 +55,10 @@ IS_WINDOWS = os.name == "nt"
 # Bump this whenever a new migration is added to _MIGRATIONS below.
 # Format: "YYYY-MM-DD-NNN" (sortable string = canonical execution order).
 _DB_APP_ID = 0x41475900  # "AGY\x00" as 32-bit big-endian integer.
+SQLITE_JOURNAL_MODE_ENV = "AGENT_SQLITE_JOURNAL_MODE"
+DEFAULT_SQLITE_JOURNAL_MODE = "DELETE"
+SUPPORTED_SQLITE_JOURNAL_MODES = frozenset({"DELETE", "TRUNCATE", "WAL"})
+DEFAULT_BUSY_TIMEOUT_MS = 30_000
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,18 +89,88 @@ def paths(project_root: Optional[Path] = None) -> Dict[str, Path]:
 # Connection factory
 # ─────────────────────────────────────────────────────────────────────────────
 
+def configured_journal_mode() -> str:
+    """Return the validated journal policy shared by every runtime client.
+
+    Rollback journaling is the portable default because ``.agent`` is copied
+    between arbitrary projects, hosts, containers and filesystems. WAL relies
+    on shared-memory and locking behavior that is not safe on every mounted or
+    synchronized filesystem. Operators may opt in only after qualifying their
+    deployment by setting ``AGENT_SQLITE_JOURNAL_MODE=WAL``.
+    """
+
+    requested = os.environ.get(
+        SQLITE_JOURNAL_MODE_ENV,
+        DEFAULT_SQLITE_JOURNAL_MODE,
+    ).strip().upper()
+    if requested not in SUPPORTED_SQLITE_JOURNAL_MODES:
+        supported = ",".join(sorted(SUPPORTED_SQLITE_JOURNAL_MODES))
+        raise CoordinationError(
+            f"SQLITE_JOURNAL_MODE_INVALID: {requested or '<empty>'}; "
+            f"supported={supported}"
+        )
+    return requested
+
+
+def configure_connection(
+    con: sqlite3.Connection,
+    *,
+    busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
+) -> str:
+    """Apply and verify the single SQLite policy used by the MCP runtime.
+
+    Returns the effective journal mode. A mismatch is terminal: silently
+    continuing with a different mode would recreate split-brain behavior
+    between the coordination and patch-queue paths.
+    """
+
+    try:
+        timeout_ms = int(busy_timeout_ms)
+    except (TypeError, ValueError) as exc:
+        raise CoordinationError("SQLITE_BUSY_TIMEOUT_INVALID") from exc
+    if not 1 <= timeout_ms <= 120_000:
+        raise CoordinationError("SQLITE_BUSY_TIMEOUT_INVALID")
+
+    requested_mode = configured_journal_mode()
+    try:
+        con.execute(f"PRAGMA busy_timeout={timeout_ms}")
+        row = con.execute(f"PRAGMA journal_mode={requested_mode}").fetchone()
+        effective_mode = str(row[0]).strip().upper() if row else ""
+        if effective_mode != requested_mode:
+            raise CoordinationError(
+                "SQLITE_JOURNAL_MODE_MISMATCH: "
+                f"requested={requested_mode} effective={effective_mode or '<empty>'}"
+            )
+        con.execute("PRAGMA synchronous=FULL")
+        con.execute("PRAGMA foreign_keys=ON")
+
+        application_id = int(con.execute("PRAGMA application_id").fetchone()[0])
+        if application_id not in {0, _DB_APP_ID}:
+            raise CoordinationError(
+                "SQLITE_APPLICATION_ID_MISMATCH: "
+                f"expected={_DB_APP_ID} actual={application_id}"
+            )
+        if application_id == 0:
+            con.execute(f"PRAGMA application_id={_DB_APP_ID}")
+    except CoordinationError:
+        raise
+    except sqlite3.Error as exc:
+        raise CoordinationError(f"SQLITE_CONNECTION_POLICY_FAILED: {exc}") from exc
+    return effective_mode
+
+
 @contextmanager
 def connect(project_root: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
-    """Open a WAL-mode SQLite connection, yielding it as a context manager.
+    """Open a policy-bound SQLite connection as a context manager.
 
     Invariants guaranteed on every connection:
-      - WAL journal: concurrent readers never block writers.
-      - synchronous=NORMAL: durable on OS crash (not power loss), but ×10 faster
-        than FULL. Acceptable for coordination metadata.
+      - DELETE journal by default: portable across local, mounted and copied
+        workspaces; WAL is available only through an explicit environment opt-in.
+      - synchronous=FULL: committed coordination survives power loss as far as
+        the host filesystem and storage stack honor fsync.
       - foreign_keys: referential integrity enforced.
-      - busy_timeout=10 000 ms: prevents SQLITE_BUSY under concurrent load.
-        Generous for African/high-latency networks where OS scheduling latency
-        can spike.
+      - busy_timeout=30 000 ms: bounded contention handling for concurrent MCP
+        processes without infinite waits.
       - application_id: marks the DB as owned by this tool (prevents accidental
         open of unrelated SQLite files).
     """
@@ -102,11 +178,7 @@ def connect(project_root: Optional[Path] = None) -> Iterator[sqlite3.Connection]
     con = sqlite3.connect(str(p["db"]), timeout=30, isolation_level=None)
     con.row_factory = sqlite3.Row
     try:
-        con.execute("PRAGMA journal_mode=WAL")
-        con.execute("PRAGMA synchronous=NORMAL")
-        con.execute("PRAGMA foreign_keys=ON")
-        con.execute("PRAGMA busy_timeout=10000")
-        con.execute(f"PRAGMA application_id={_DB_APP_ID}")
+        configure_connection(con)
         yield con
     finally:
         con.close()
@@ -207,7 +279,8 @@ def _backup_db(project_root: Optional[Path] = None) -> Optional[str]:
     """Create a timestamped backup of the SQLite DB before migration.
 
     Uses SQLite's online backup API so the backup is consistent even with
-    concurrent WAL writers. Returns the backup path string, or None on error.
+    concurrent connections under SQLite locking. Returns the backup path
+    string, or None on error.
 
     Production rationale: if a migration corrupts the DB (extremely unlikely
     with idempotent DDL, but non-zero), the operator can restore within seconds.

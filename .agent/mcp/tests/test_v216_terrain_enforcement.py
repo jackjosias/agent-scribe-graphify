@@ -339,6 +339,11 @@ class V216TerrainEnforcementTest(unittest.TestCase):
         )
         task_start = next(item for item in tools if item["name"] == "tenor_task_start")
         self.assertEqual(task_start["inputSchema"]["properties"]["intent"]["enum"], ["read", "write", "delete"])
+        changeset = next(item for item in tools if item["name"] == "tenor_apply_changeset")["inputSchema"]
+        self.assertIn("validators", changeset["required"])
+        self.assertEqual(changeset["properties"]["validators"]["minItems"], 1)
+        self.assertIn("edit", changeset["properties"]["changes"]["items"]["properties"]["operation"]["enum"])
+        self.assertIn("confirm_full_replacements", changeset["properties"])
 
     def test_runtime_database_integrity_failure_is_fail_closed(self) -> None:
         class CorruptCursor:

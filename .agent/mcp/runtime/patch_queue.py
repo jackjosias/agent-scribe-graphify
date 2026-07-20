@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 try:
+    from . import db as coordination_db
     from .state_paths import prepare_state_dirs, project_root_from
 except Exception:
+    import db as coordination_db  # type: ignore
     from state_paths import prepare_state_dirs, project_root_from  # type: ignore
 
 NEW_FILE_HASH = "__new_file__"
@@ -42,10 +44,8 @@ def db_path() -> Path:
 def connect() -> Iterator[sqlite3.Connection]:
     con = sqlite3.connect(str(db_path()), timeout=30, isolation_level=None)
     con.row_factory = sqlite3.Row
-    con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
-    con.execute("PRAGMA busy_timeout=30000")
     try:
+        coordination_db.configure_connection(con)
         yield con
     finally:
         con.close()

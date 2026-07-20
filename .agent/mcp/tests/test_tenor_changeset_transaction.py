@@ -32,6 +32,10 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         (self.root / "src").mkdir()
         (self.root / "src" / "a.txt").write_bytes(b"alpha\n")
         (self.root / "src" / "b.txt").write_bytes(b"beta\n")
+        (self.root / "src" / "large.ts").write_text(
+            "".join(f"export const value{index} = {index};\n" for index in range(2051)),
+            encoding="utf-8",
+        )
         self.previous_root = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
         os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(self.root)
         db.init_db(self.root)
@@ -59,10 +63,104 @@ class TenorChangesetTransactionTest(unittest.TestCase):
             agent_id="agent-a",
             task_id="task-a",
             changes=changes,
-            validators=kwargs.pop("validators", []),
-            allowed_resources=["src/a.txt", "src/b.txt", "src/new.txt", "src/link.txt"],
+            validators=kwargs.pop("validators", [{
+                "argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                "timeout_seconds": 20,
+            }]),
+            allowed_resources=["src/a.txt", "src/b.txt", "src/new.txt", "src/link.txt", "src/large.ts"],
             **kwargs,
         )
+
+    def test_validator_is_mandatory_for_every_mutating_changeset(self) -> None:
+        result = self.apply(
+            [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
+            validators=[],
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_VALIDATORS_REQUIRED")
+        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+
+    def test_destructive_full_replace_2051_lines_to_5_is_rejected_before_write(self) -> None:
+        target = self.root / "src" / "large.ts"
+        before = target.read_bytes()
+        result = self.apply([{
+            "path": "src/large.ts",
+            "operation": "replace",
+            "base_hash": hashlib.sha256(before).hexdigest(),
+            "content": "one\ntwo\nthree\nfour\nfive\n",
+        }])
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_DESTRUCTIVE_REPLACE_REJECTED")
+        self.assertEqual(result["path"], "src/large.ts")
+        self.assertEqual(result["before_lines"], 2051)
+        self.assertEqual(result["after_lines"], 5)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_destructive_full_replace_requires_hash_bound_confirmation(self) -> None:
+        target = self.root / "src" / "large.ts"
+        before = target.read_bytes()
+        content = "one\ntwo\nthree\nfour\nfive\n"
+        after_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        wrong = self.apply([{
+            "path": "src/large.ts",
+            "operation": "replace",
+            "base_hash": hashlib.sha256(before).hexdigest(),
+            "content": content,
+        }], confirm_full_replacements=[{
+            "path": "src/large.ts",
+            "base_hash": hashlib.sha256(before).hexdigest(),
+            "new_hash": "0" * 64,
+        }], request_id="wrong-full-replace-confirmation")
+        self.assertEqual(wrong["verdict"], "TENOR_CHANGESET_DESTRUCTIVE_REPLACE_REJECTED")
+        self.assertEqual(target.read_bytes(), before)
+
+        accepted = self.apply([{
+            "path": "src/large.ts",
+            "operation": "replace",
+            "base_hash": hashlib.sha256(before).hexdigest(),
+            "content": content,
+        }], confirm_full_replacements=[{
+            "path": "src/large.ts",
+            "base_hash": hashlib.sha256(before).hexdigest(),
+            "new_hash": after_hash,
+        }], request_id="correct-full-replace-confirmation")
+        self.assertTrue(accepted["ok"], accepted)
+        self.assertEqual(target.read_text(encoding="utf-8"), content)
+
+    def test_structured_edit_applies_multiple_unique_anchors_atomically(self) -> None:
+        result = self.apply([{
+            "path": "src/a.txt",
+            "operation": "edit",
+            "base_hash": sha256(self.root / "src" / "a.txt"),
+            "edits": [
+                {"old_text": "alpha", "new_text": "first", "expected_occurrences": 1},
+                {"old_text": "first\n", "new_text": "first-second\n", "expected_occurrences": 1},
+            ],
+        }])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "first-second\n")
+
+    def test_structured_edit_rejects_missing_or_ambiguous_anchor_without_write(self) -> None:
+        target = self.root / "src" / "a.txt"
+        original = target.read_bytes()
+        missing = self.apply([{
+            "path": "src/a.txt",
+            "operation": "edit",
+            "base_hash": sha256(target),
+            "edits": [{"old_text": "absent", "new_text": "value", "expected_occurrences": 1}],
+        }], request_id="missing-anchor")
+        self.assertEqual(missing["verdict"], "TENOR_CHANGESET_EDIT_ANCHOR_MISMATCH")
+        self.assertEqual(target.read_bytes(), original)
+
+        target.write_text("alpha alpha\n", encoding="utf-8")
+        ambiguous = self.apply([{
+            "path": "src/a.txt",
+            "operation": "edit",
+            "base_hash": sha256(target),
+            "edits": [{"old_text": "alpha", "new_text": "beta", "expected_occurrences": 1}],
+        }], request_id="ambiguous-anchor")
+        self.assertEqual(ambiguous["verdict"], "TENOR_CHANGESET_EDIT_ANCHOR_MISMATCH")
+        self.assertEqual(target.read_text(encoding="utf-8"), "alpha alpha\n")
 
     def test_two_files_commit_as_one_validated_changeset(self) -> None:
         result = self.apply(
@@ -108,6 +206,23 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_CHANGESET_VALIDATION_FAILED_ROLLED_BACK")
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
         self.assertEqual((self.root / "src" / "b.txt").read_text(encoding="utf-8"), "beta\n")
+
+    def test_validator_target_mutation_is_detected_and_rolled_back(self) -> None:
+        result = self.apply(
+            [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
+            validators=[{
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; Path('src/a.txt').write_text('validator-drift\\n')",
+                ],
+                "timeout_seconds": 20,
+            }],
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK")
+        self.assertEqual(result["drifted_resources"], ["src/a.txt"])
+        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
 
     def test_mid_commit_failure_rolls_back_already_replaced_file(self) -> None:
         result = self.apply(
@@ -192,7 +307,6 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         create = {
             "path": "src/new.txt",
             "operation": "create",
-            "base_hash": tenor_changeset.NEW_FILE_HASH,
             "content": "new\n",
         }
         delete = {

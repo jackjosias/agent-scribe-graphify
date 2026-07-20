@@ -809,7 +809,8 @@ def delete_resource(
     if deleted.get("verdict") == "RESOURCE_DELETED":
         direct_fs_tripwire.record_authorized_mutation(
             task_id=task_id, agent_id=agent_id, resource=resource,
-            tool="delete_resource", before_hash=base_hash,
+            tool="delete_resource", patch_id=str(deleted.get("patch_id") or ""),
+            before_hash=base_hash,
             project_root=server.ROOT,
         )
     return server.ok(deleted)

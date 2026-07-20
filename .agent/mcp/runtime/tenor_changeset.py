@@ -17,6 +17,7 @@ from runtime import db, patch_queue
 
 NEW_FILE_HASH = patch_queue.NEW_FILE_HASH
 MAX_FILES = 64
+MAX_EDITS_PER_FILE = 128
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_CHANGESET_BYTES = 16 * 1024 * 1024
 MAX_VALIDATORS = 12
@@ -108,11 +109,102 @@ def _current_hash(path: Path) -> str:
     return _sha256_file(path)
 
 
+def _line_count(data: bytes) -> int:
+    if not data:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def _replacement_risk(original: bytes, replacement: bytes) -> dict[str, Any] | None:
+    before_lines = _line_count(original)
+    after_lines = _line_count(replacement)
+    before_bytes = len(original)
+    after_bytes = len(replacement)
+    line_collapse = before_lines >= 100 and after_lines < max(10, before_lines // 2)
+    byte_collapse = before_bytes >= 4096 and after_bytes < before_bytes // 2
+    if not (line_collapse or byte_collapse):
+        return None
+    return {
+        "before_lines": before_lines,
+        "after_lines": after_lines,
+        "before_bytes": before_bytes,
+        "after_bytes": after_bytes,
+    }
+
+
+def _apply_structured_edits(resource: str, original: str, edits: Any) -> str:
+    if not isinstance(edits, list) or not edits or len(edits) > MAX_EDITS_PER_FILE:
+        raise ChangesetError(
+            "TENOR_CHANGESET_INVALID_EDITS",
+            {"path": resource, "count": len(edits) if isinstance(edits, list) else -1, "maximum": MAX_EDITS_PER_FILE},
+        )
+    content = original
+    for index, raw in enumerate(edits):
+        if not isinstance(raw, dict):
+            raise ChangesetError("TENOR_CHANGESET_INVALID_EDIT", {"path": resource, "edit_index": index})
+        old_text = raw.get("old_text")
+        new_text = raw.get("new_text")
+        if not isinstance(old_text, str) or not old_text:
+            raise ChangesetError(
+                "TENOR_CHANGESET_EDIT_ANCHOR_REQUIRED",
+                {"path": resource, "edit_index": index},
+            )
+        if not isinstance(new_text, str):
+            raise ChangesetError(
+                "TENOR_CHANGESET_EDIT_REPLACEMENT_REQUIRED",
+                {"path": resource, "edit_index": index},
+            )
+        try:
+            expected = int(raw.get("expected_occurrences", 1))
+        except (TypeError, ValueError) as exc:
+            raise ChangesetError(
+                "TENOR_CHANGESET_EDIT_OCCURRENCES_INVALID",
+                {"path": resource, "edit_index": index},
+            ) from exc
+        if expected < 1 or expected > 1024:
+            raise ChangesetError(
+                "TENOR_CHANGESET_EDIT_OCCURRENCES_INVALID",
+                {"path": resource, "edit_index": index, "expected_occurrences": expected},
+            )
+        actual = content.count(old_text)
+        if actual != expected:
+            raise ChangesetError(
+                "TENOR_CHANGESET_EDIT_ANCHOR_MISMATCH",
+                {
+                    "path": resource,
+                    "edit_index": index,
+                    "expected_occurrences": expected,
+                    "actual_occurrences": actual,
+                },
+            )
+        content = content.replace(old_text, new_text, expected)
+    if content == original:
+        raise ChangesetError("TENOR_CHANGESET_NO_OP", {"path": resource})
+    return content
+
+
+def _full_replace_confirmations(raw_confirmations: list[dict[str, Any]]) -> dict[str, tuple[str, str]]:
+    if not isinstance(raw_confirmations, list):
+        raise ChangesetError("TENOR_CHANGESET_REPLACE_CONFIRMATION_INVALID")
+    result: dict[str, tuple[str, str]] = {}
+    for index, raw in enumerate(raw_confirmations):
+        if not isinstance(raw, dict):
+            raise ChangesetError("TENOR_CHANGESET_REPLACE_CONFIRMATION_INVALID", {"index": index})
+        path = str(raw.get("path") or "").strip().replace("\\", "/")
+        base_hash = str(raw.get("base_hash") or "").strip()
+        new_hash = str(raw.get("new_hash") or "").strip()
+        if not path or len(base_hash) != 64 or len(new_hash) != 64 or path in result:
+            raise ChangesetError("TENOR_CHANGESET_REPLACE_CONFIRMATION_INVALID", {"index": index, "path": path})
+        result[path] = (base_hash, new_hash)
+    return result
+
+
 def _canonical_changes(
     root: Path,
     changes: list[dict[str, Any]],
     allowed_resources: list[str],
     confirm_deletions: list[str],
+    confirm_full_replacements: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     if not isinstance(changes, list) or not changes or len(changes) > MAX_FILES:
         raise ChangesetError(
@@ -124,6 +216,7 @@ def _canonical_changes(
         for path in (confirm_deletions or [])
         if str(path).strip()
     }
+    replace_confirmations = _full_replace_confirmations(confirm_full_replacements)
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
     total_bytes = 0
@@ -138,9 +231,11 @@ def _canonical_changes(
         if not _path_in_scope(resource, allowed_resources):
             raise ChangesetError("TENOR_CHANGESET_RESOURCE_OUT_OF_SCOPE", {"path": resource})
         operation = str(raw.get("operation") or "patch").strip().lower()
-        if operation not in {"patch", "replace", "create", "delete"}:
+        if operation not in {"patch", "edit", "replace", "create", "delete"}:
             raise ChangesetError("TENOR_CHANGESET_INVALID_OPERATION", {"path": resource, "operation": operation})
         base_hash = str(raw.get("base_hash") or "").strip()
+        if operation == "create" and not base_hash:
+            base_hash = NEW_FILE_HASH
         if not base_hash:
             raise ChangesetError("TENOR_CHANGESET_BASE_HASH_REQUIRED", {"path": resource})
         current_hash = _current_hash(target)
@@ -151,7 +246,7 @@ def _canonical_changes(
             )
         if operation == "create" and current_hash != NEW_FILE_HASH:
             raise ChangesetError("TENOR_CHANGESET_CREATE_TARGET_EXISTS", {"path": resource})
-        if operation in {"patch", "replace", "delete"} and current_hash == NEW_FILE_HASH:
+        if operation in {"patch", "edit", "replace", "delete"} and current_hash == NEW_FILE_HASH:
             raise ChangesetError("TENOR_CHANGESET_TARGET_MISSING", {"path": resource})
         if operation == "delete":
             delete_paths.add(resource)
@@ -167,11 +262,38 @@ def _canonical_changes(
                 content_bytes = patch_queue.apply_unified_diff(original, diff_text).encode("utf-8")
             except (UnicodeDecodeError, patch_queue.PatchQueueError) as exc:
                 raise ChangesetError("TENOR_CHANGESET_PATCH_INVALID", {"path": resource, "reason": str(exc)}) from exc
+        elif operation == "edit":
+            try:
+                original = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError as exc:
+                raise ChangesetError("TENOR_CHANGESET_EDIT_REQUIRES_UTF8", {"path": resource}) from exc
+            content_bytes = _apply_structured_edits(resource, original, raw.get("edits")).encode("utf-8")
         else:
             content = raw.get("content")
             if not isinstance(content, str):
                 raise ChangesetError("TENOR_CHANGESET_CONTENT_REQUIRED", {"path": resource})
             content_bytes = content.encode("utf-8")
+            if operation == "replace":
+                original_bytes = target.read_bytes()
+                if content_bytes == original_bytes:
+                    raise ChangesetError("TENOR_CHANGESET_NO_OP", {"path": resource})
+                risk = _replacement_risk(original_bytes, content_bytes)
+                if risk is not None:
+                    confirmation = replace_confirmations.get(resource)
+                    expected = (base_hash, _sha256_bytes(content_bytes))
+                    if confirmation != expected:
+                        raise ChangesetError(
+                            "TENOR_CHANGESET_DESTRUCTIVE_REPLACE_REJECTED",
+                            {
+                                "path": resource,
+                                **risk,
+                                "required_confirmation": {
+                                    "path": resource,
+                                    "base_hash": base_hash,
+                                    "new_hash": expected[1],
+                                },
+                            },
+                        )
         if len(content_bytes) > MAX_FILE_BYTES:
             raise ChangesetError("TENOR_CHANGESET_FILE_TOO_LARGE", {"path": resource, "maximum": MAX_FILE_BYTES})
         total_bytes += len(content_bytes)
@@ -196,6 +318,8 @@ def _canonical_changes(
 def _canonical_validators(root: Path, validators: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not isinstance(validators, list) or len(validators) > MAX_VALIDATORS:
         raise ChangesetError("TENOR_CHANGESET_INVALID_VALIDATORS", {"maximum": MAX_VALIDATORS})
+    if not validators:
+        raise ChangesetError("TENOR_CHANGESET_VALIDATORS_REQUIRED")
     result: list[dict[str, Any]] = []
     for index, raw in enumerate(validators):
         if not isinstance(raw, dict):
@@ -523,12 +647,17 @@ def _request_fingerprint(
     changes: list[dict[str, Any]],
     validators: list[dict[str, Any]],
     confirm_deletions: list[str],
+    confirm_full_replacements: list[dict[str, Any]],
 ) -> str:
     payload = {
         "task_id": task_id,
         "changes": changes,
         "validators": validators,
         "confirm_deletions": sorted(confirm_deletions or []),
+        "confirm_full_replacements": sorted(
+            confirm_full_replacements or [],
+            key=lambda item: str(item.get("path") or "") if isinstance(item, dict) else "",
+        ),
     }
     return hashlib.sha256(_json(payload).encode("utf-8")).hexdigest()
 
@@ -542,6 +671,7 @@ def apply_changeset(
     validators: list[dict[str, Any]] | None = None,
     allowed_resources: list[str] | None = None,
     confirm_deletions: list[str] | None = None,
+    confirm_full_replacements: list[dict[str, Any]] | None = None,
     request_id: str = "",
     _test_fail_after_replaces: int | None = None,
 ) -> dict[str, Any]:
@@ -549,6 +679,7 @@ def apply_changeset(
     validators = validators or []
     allowed_resources = allowed_resources or []
     confirm_deletions = confirm_deletions or []
+    confirm_full_replacements = confirm_full_replacements or []
     if not agent_id or not task_id:
         return {"ok": False, "verdict": "TENOR_CHANGESET_TASK_IDENTITY_REQUIRED"}
     request_id = (request_id or uuid.uuid4().hex).strip()
@@ -556,7 +687,13 @@ def apply_changeset(
         return {"ok": False, "verdict": "TENOR_CHANGESET_REQUEST_ID_INVALID"}
     ensure_schema(root)
     recover_incomplete(root)
-    fingerprint = _request_fingerprint(task_id, changes, validators, confirm_deletions)
+    fingerprint = _request_fingerprint(
+        task_id,
+        changes,
+        validators,
+        confirm_deletions,
+        confirm_full_replacements,
+    )
     with db.connect(root) as con:
         existing = con.execute(
             f"SELECT * FROM {TRANSACTION_TABLE} WHERE agent_id=? AND request_id=?",
@@ -581,7 +718,13 @@ def apply_changeset(
             "error": json.loads(existing["error_json"] or "{}"),
         }
     try:
-        canonical = _canonical_changes(root, changes, allowed_resources, confirm_deletions)
+        canonical = _canonical_changes(
+            root,
+            changes,
+            allowed_resources,
+            confirm_deletions,
+            confirm_full_replacements,
+        )
         canonical_validators = _canonical_validators(root, validators)
     except ChangesetError as exc:
         return {"ok": False, "verdict": exc.verdict, **exc.details}
@@ -675,6 +818,31 @@ def apply_changeset(
                 "ok": False,
                 "verdict": error["verdict"],
                 "changeset_id": changeset_id,
+                "restored": restored,
+                "validators": validation_results,
+            }
+        drifted_resources: list[str] = []
+        for item in canonical:
+            try:
+                observed_hash = _current_hash(item["target"])
+            except ChangesetError:
+                observed_hash = "__invalid_target__"
+            if observed_hash != item["new_hash"]:
+                drifted_resources.append(item["path"])
+        if drifted_resources:
+            restored = _rollback(root, changeset_id)
+            error = {
+                "verdict": "TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK",
+                "drifted_resources": sorted(drifted_resources),
+                "restored": restored,
+                "validators": validation_results,
+            }
+            _update_transaction(root, changeset_id, "rolled_back", error=error)
+            return {
+                "ok": False,
+                "verdict": error["verdict"],
+                "changeset_id": changeset_id,
+                "drifted_resources": error["drifted_resources"],
                 "restored": restored,
                 "validators": validation_results,
             }

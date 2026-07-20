@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -28,6 +29,47 @@ def default_lock_path(root: Path | None = None) -> Path:
     return base / ".agent" / "state" / "runtime" / "validation-smoke.lock"
 
 
+def _quiesce_validation_database(database: Path) -> None:
+    """Checkpoint a healthy WAL database before disposable-state removal.
+
+    A malformed database is intentionally not repaired here: validation state
+    owns no project truth and will be removed by the caller.  The checkpoint
+    prevents an old WAL generation from being attached to the next database
+    created at the same path on filesystems with delayed metadata visibility.
+    """
+
+    if not database.is_file():
+        return
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(str(database), timeout=5.0, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        mode = connection.execute("PRAGMA journal_mode=DELETE").fetchone()
+        if not mode or str(mode[0]).lower() != "delete":
+            raise sqlite3.OperationalError("validation database did not leave WAL mode")
+    except sqlite3.Error:
+        # Corrupt disposable validation state is removed by the bounded sweep.
+        return
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist unlink metadata where directory fsync is supported."""
+
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY)
+        os.fsync(descriptor)
+    except OSError:
+        return
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def reset_validation_runtime_database(root: Path | None = None, retries: int = 20) -> None:
     """Remove the disposable validation database and all journal sidecars.
 
@@ -40,19 +82,35 @@ def reset_validation_runtime_database(root: Path | None = None, retries: int = 2
 
     base = (root or Path(__file__).resolve().parents[3]).resolve()
     runtime = base / ".agent" / "state" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    database = runtime / "coordination.sqlite"
+    _quiesce_validation_database(database)
     attempts = max(1, min(int(retries), 100))
-    for suffix in ("-shm", "-wal", ""):
-        path = runtime / f"coordination.sqlite{suffix}"
-        for attempt in range(attempts):
+    targets = (
+        database,
+        runtime / "coordination.sqlite-wal",
+        runtime / "coordination.sqlite-shm",
+    )
+    last_errors: dict[str, str] = {}
+    for attempt in range(attempts):
+        last_errors = {}
+        for path in targets:
             try:
                 path.unlink()
-                break
             except FileNotFoundError:
-                break
-            except PermissionError:
-                if attempt + 1 >= attempts:
-                    raise
-                time.sleep(0.05)
+                continue
+            except PermissionError as exc:
+                last_errors[str(path)] = str(exc)
+        remaining = [str(path) for path in targets if path.exists()]
+        if not remaining:
+            _fsync_directory(runtime)
+            return
+        if attempt + 1 < attempts:
+            time.sleep(min(0.25, 0.01 * (2 ** min(attempt, 5))))
+    raise RuntimeError(
+        "VALIDATION_RUNTIME_RESET_FAILED "
+        f"remaining={remaining} errors={last_errors}"
+    )
 
 
 @contextmanager

@@ -76,8 +76,8 @@ La copie brute et complète de `.agent/` dans n'importe quel projet compatible L
 6. Le schéma Graphify réel NetworkX utilise `nodes + links`; le format historique supporté utilise `nodes + edges`. Toute autre représentation doit être explicitement reconnue ou refusée.
 7. Une requête SCRIBE ou Graphify doit modifier le plan ou produire une contradiction auditable.
 8. Chaque terminal reçoit une session, une preuve serveur one-shot et des leases distincts. Le bearer token complet n'est ni imprimé ni persisté.
-9. Aucune écriture produit directe : locks, claims, lease, patch queue, audit et clôture MCP sont obligatoires.
-10. Une réponse prose « terminé » sans preuve terminale MCP n'est pas une fin.
+9. Aucune écriture produit directe : capsule SCRIBE/Graphify, transaction atomique, validateurs, audit et admission mémoire MCP sont obligatoires.
+10. Une réponse prose « terminé » sans preuve terminale MCP, validateurs et verdict d'admission mémoire n'est pas une fin.
 
 # PHASE 1 — TENOR INIT LOCAL
 
@@ -303,18 +303,39 @@ Ordre public d'une écriture :
 ```text
 tenor_task_start(objective, intent, resources, scope)
   -> targeted SCRIBE + Graphify, internes
+  -> capsule décisionnelle liée aux hashes SCRIBE/Graphify et aux ressources
 tenor_apply_changeset(task_id, changes[], validators[])
   -> preflight de tous les chemins/hashes/locks avant la première écriture
   -> commit de tous les fichiers ou rollback de tous les fichiers
-  -> validation, record SCRIBE runtime et clôture terminale
+  -> validation obligatoire, filtrage/promotion SCRIBE et clôture terminale
 ```
 
-Le changeset accepte jusqu'à 64 fichiers, refuse traversal et symlinks, exige
-un hash de base pour chaque opération, acquiert les locks dans un ordre stable,
-exécute les validateurs sous forme d'argv sans shell et supporte les retries
-idempotents via `request_id`. Toute suppression exige la confirmation exacte
-du chemin. `tenor_activity` fournit l'état consolidé ; `tenor_task_control`
-gère pause/reprise/annulation et la clôture d'une tâche de lecture.
+Le changeset accepte jusqu'à 64 fichiers, refuse traversal et symlinks et
+acquiert les locks dans un ordre stable. Pour un fichier texte existant,
+`operation="edit"` est canonique : une seule entrée par chemin peut contenir
+plusieurs remplacements structurés `old_text/new_text`, chacun avec un nombre
+d'occurrences exact. `operation="replace"` signifie toujours le contenu
+intégral ; une réduction destructive exige une confirmation portant le chemin,
+le hash avant et le hash après. `create` déduit le sentinel de nouveau fichier
+en interne. Toute mutation exige au moins un validateur argv sans shell.
+
+La capsule décisionnelle est vérifiée immédiatement avant l'écriture. Si une
+autre tâche enrichit SCRIBE ou renouvelle le manifeste Graphify, le même appel
+`tenor_task_start` avec le même objectif et les mêmes ressources rafraîchit la
+capsule dans le même `task_id`; aucun agent de remplacement n'est créé.
+
+Après un commit validé, chaque résultat reçoit exactement un verdict mémoire :
+`promote`, `runtime_only` avec raison, `ask_user` ou `conflict`. Un fix source
+durable est promu automatiquement dans
+`AGENT-MEMOIRE_PROJECT_STATUS.scribe`; une lecture ou un changement sans valeur
+causale reste un reçu runtime motivé. Une décision architecturale ambiguë reste
+ouverte jusqu'à `tenor_task_control(action="memory_promote"|"memory_skip")`.
+Il n'existe aucune clôture silencieuse sans admission mémoire.
+
+Une erreur de payload ou d'ancre reste récupérable dans la même tâche. Si
+l'opérateur abandonne une tâche non commitée, `tenor_task_control(action="cancel")`
+la ferme sans changeset factice. Le modèle ne demande jamais à l'utilisateur
+d'appliquer un patch manuel et ne bascule jamais vers Edit/Bash.
 
 Hors TENOR INIT, un opérateur ou un contrôle de maintenance peut appeler
 `graphify_project_build(timeout_seconds=180)`. Ce tool est idempotent,
@@ -335,6 +356,9 @@ Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision p
 - lire massivement des fichiers quand Graphify suffit
 - interroger SCRIBE puis ignorer le résultat
 - écrire via shell/Edit/write_file/apply_patch natif hors MCP
+- utiliser `replace` avec un fragment ou sans confirmation destructive liée aux hashes
+- muter sans validateur argv réussi
+- demander à l'utilisateur d'appliquer un patch manuel
 - créer un agent ou une tâche de remplacement pour contourner un verdict fail-closed
 - utiliser un intent descriptif au lieu de read|write|delete
 - lancer graphify update . ou graphify watch dans le projet portable
@@ -342,7 +366,7 @@ Si SCRIBE retrouve un SCAR, GHOST, `ne_pas_reproposer`, invariant ou décision p
 - retirer, remplacer ou contrôler un autre agent
 - présenter un shell JSON-RPC comme preuve de visibilité host
 - supprimer le lock d'un propriétaire vivant
-- déclarer terminé sans verdict terminal machine et preuve des validateurs
+- déclarer terminé sans verdict terminal machine, capsule, preuve des validateurs et admission mémoire
 ```
 
 # SYNCHRONISATION DOCUMENTAIRE

@@ -103,9 +103,10 @@ A product mutation requires:
 ```text
 tenor_task_start(objective, intent, resources, scope)
   -> targeted SCRIBE + Graphify inside TENOR
+  -> decision capsule bound to memory/graph evidence and exact resources
 tenor_apply_changeset(task_id, changes[], validators[])
   -> all-file preflight + deterministic locks + atomic commit/rollback
-  -> runtime SCRIBE receipt + terminal closure
+  -> mandatory validation + explicit SCRIBE memory admission + terminal closure
 ```
 
 Direct native writes are not an equivalent fallback.
@@ -118,7 +119,11 @@ Machine invariants:
 - cross-agent task control is forbidden;
 - daemon heartbeat and rolling TTL preserve live work but expire dead work;
 - a multi-file changeset commits all files or restores all files;
-- a runtime SCRIBE receipt requires a validated committed changeset.
+- normal text mutations use exact structured edits; a fragment is never a full-file replace;
+- every mutating changeset has at least one successful validator;
+- a runtime SCRIBE receipt requires a validated committed changeset;
+- every completion persists one memory decision: promote, runtime-only reason, ask-user or conflict;
+- a failed uncommitted task cancels directly without a no-op patch or replacement identity.
 
 The host sees only four normal task tools. Fine-grained legacy tools remain
 internal compatibility primitives and are not a public workflow.
@@ -138,6 +143,12 @@ Every terminal runs its own TENOR INIT. The shared bootstrap is serialized; each
 Agents share runtime SQLite, SCRIBE, Graphify and transaction authority, but
 never share process-bound identity or proof. `tenor_activity` shows consolidated
 presence and current/last/next task state without granting cross-agent control.
+
+Runtime SQLite uses the same correctness-first policy in coordination and patch
+queue code: rollback journal `DELETE`, `synchronous=FULL` and a bounded busy
+timeout. This is the portable default for a bundle copied onto an unknown
+filesystem. `AGENT_SQLITE_JOURNAL_MODE=WAL` is an operator opt-in after
+filesystem and crash-recovery qualification, never a host-model decision.
 
 `TENOR_INIT_SAME_PROJECT` must never purge active coordination.
 

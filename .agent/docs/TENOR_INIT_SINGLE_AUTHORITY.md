@@ -157,6 +157,13 @@ Each terminal then receives an independent session. Agents share runtime, SCRIBE
 
 Manifest finalization is an in-process transaction around write plus gate inspection; the TENOR file lock remains the inter-process authority.
 
+All agents open the shared coordination database through one policy authority.
+The raw-copy-safe default is SQLite rollback journal `DELETE` with
+`synchronous=FULL` and a bounded 30-second busy timeout. WAL is permitted only
+through the operator-controlled `AGENT_SQLITE_JOURNAL_MODE=WAL` opt-in after the
+actual filesystem has passed concurrency and crash-recovery qualification. A
+small host model must never switch journal modes as a task-recovery tactic.
+
 ## Atomic file writes
 
 Portable atomic writes must use exclusively created temporary files in the destination directory, `fsync`, then `os.replace`.
@@ -235,7 +242,15 @@ Before any significant task, retrieve targeted causal context. Results must infl
 - decision/invariant — current constraint;
 - debt — accepted active risk.
 
-Executing a query and ignoring it is not memory use. A runtime `scribe_record` receipt is not automatically canonical memory.
+Executing a query and ignoring it is not memory use. `tenor_task_start` binds
+the targeted SCRIBE and Graphify evidence, canonical-memory hash, Graphify
+manifest hash and exact resources into a decision capsule. A write cannot use
+the capsule after those authorities drift; the identical start call refreshes
+it inside the same task id.
+
+A runtime `scribe_record` receipt is not automatically canonical memory. Every
+completed task is classified as `promote`, `runtime_only` with an auditable
+reason, `ask_user` or `conflict`. There is no silent memory drop.
 
 The Graphify/SCRIBE bridge refuses structural drift analysis on missing, stub, stale or wrong-root graphs.
 
@@ -246,10 +261,11 @@ A mutation requires:
 ```text
 tenor_task_start(objective, intent, resources, scope)
   -> internal targeted SCRIBE and Graphify
+  -> hash-bound decision capsule
 tenor_apply_changeset(task_id, changes[], validators[])
   -> preflight all paths, hashes and locks before any write
   -> commit every file or rollback every file
-  -> runtime SCRIBE evidence and terminal closure
+  -> mandatory validation + memory admission + terminal closure
 ```
 
 Native host shell/edit/write/apply-patch paths are not accepted as equivalent.
@@ -259,10 +275,18 @@ description libre reste dans l'objectif. L'identité est liée au processus MCP
 après le bridge et n'est plus fournie par le LLM. Une identité ne possède
 qu'une tâche active et ne peut ni retirer ni contrôler un autre agent.
 
-Une tâche multi-fichier reste une seule transaction. Elle exige un hash frais
-par fichier, refuse traversal/symlinks/scope escape, acquiert des locks ordonnés
-et exécute des validateurs argv bornés sans shell. Toute erreur restaure tous
-les fichiers. Un record runtime n'est émis qu'après commit et validation.
+Une tâche multi-fichier reste une seule transaction. `edit` applique plusieurs
+remplacements structurés à ancres exactes dans un même fichier. `replace`
+signifie le fichier complet : une réduction destructive exige une confirmation
+liée au chemin et aux hashes avant/après. `create` déduit le sentinel nouveau
+fichier en interne. La transaction refuse traversal/symlinks/scope escape,
+acquiert des locks ordonnés et exige au moins un validateur argv borné sans
+shell. Toute erreur restaure tous les fichiers. Un record runtime n'est émis
+qu'après commit et validation, puis il est filtré/promu avant la clôture.
+
+Un payload invalide ou une ancre ambiguë se corrige dans la même tâche. Une
+tâche non commitée peut être annulée directement, sans changeset factice. Aucun
+fallback ne demande à l'utilisateur d'appliquer un patch manuel.
 
 Les anciens outils fins restent internes pour compatibilité ; ils ne sont pas
 annoncés au host et ne doivent pas être orchestrés manuellement.

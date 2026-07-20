@@ -44,10 +44,12 @@ TENOR_INIT_READY
 - SCRIBE results must change the plan or be explicitly challenged; retrieval is not a checkbox.
 - Use Graphify before architecture or broad code changes; prefer targeted structure/blast-radius queries over mass file reads.
 - The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
-- `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side. The host model must not replay the legacy internal choreography.
-- Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with fresh hashes and bounded validator argv arrays; TENOR owns locks, rollback, SCRIBE recording and closure.
+- `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side and returns a hash-bound decision capsule. The host model must not replay the legacy internal choreography.
+- Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with exact structured edits, fresh hashes and mandatory bounded validator argv arrays; TENOR owns locks, rollback, SCRIBE admission and closure.
+- `replace` means complete file content. Destructive shrink requires path/base/new-hash confirmation; fragments and manual-patch fallback are forbidden.
+- Every completed task has an explicit memory-admission verdict. Durable validated source knowledge is promoted; non-causal noise is retained runtime-only with a reason.
 - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.
-- A prose-only “done” without a terminal machine verdict and validator evidence is not completion.
+- A prose-only “done” without a terminal machine verdict, decision capsule, validator evidence and memory admission is not completion.
 - Each terminal uses its own process-bound identity and server-side one-time proof. Task calls never accept caller-supplied `agent_id` or context tokens.
 - `TENOR_INIT_SAME_PROJECT` never repairs the bundle; only the verified project-local MCP entry and binding receipt may be managed automatically.
 - A complete raw copy of `.agent/` is a mandatory supported installation path on Linux, macOS and Windows; relocation is classified from the current root and manifest.

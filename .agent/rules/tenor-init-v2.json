@@ -85,7 +85,13 @@
     "legacy_fine_grained_tools_advertised_to_host": false,
     "legacy_fine_grained_tools_internal_compatibility_only": true,
     "scribe_and_graphify_run_inside_task_start": true,
+    "scribe_graphify_decision_capsule_required_before_mutation": true,
+    "stale_capsule_refreshes_inside_same_task_id": true,
     "locks_hash_preflight_apply_validation_rollback_record_and_finish_run_inside_changeset": true,
+    "structured_edit_is_preferred_for_existing_text_files": true,
+    "fragment_as_full_replace_forbidden": true,
+    "validators_required_for_every_mutating_changeset": true,
+    "canonical_memory_admission_verdict_required_before_task_closure": true,
     "caller_supplied_agent_id_or_context_token_forbidden": true
   },
   "same_project_session_invariant": {
@@ -208,28 +214,38 @@
     "dead_process_expiry_fail_closed": true,
     "multi_file_changeset_atomic": true,
     "all_hashes_and_locks_preflight_before_first_write": true,
+    "create_derives_new_file_hash_internally": true,
+    "structured_edits_require_exact_occurrence_counts": true,
+    "destructive_full_replace_requires_path_base_and_new_hash_confirmation": true,
+    "zero_validator_mutation_forbidden": true,
+    "no_op_changeset_cannot_close_a_task": true,
+    "failed_uncommitted_task_can_cancel_without_changeset": true,
     "validator_failure_rolls_back_all_files": true,
     "request_id_retry_is_idempotent": true
   },
   "loops": {
     "read_or_research": [
       "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
+      "tenor_task_start_returns_a_hash_bound_decision_capsule",
       "host_synthesis",
-      "tenor_task_control_finish_records_and_closes"
+      "tenor_task_control_finish_records_memory_admission_and_closes"
     ],
     "write": [
       "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
-      "host_prepares_one_multi_file_changeset_and_validator_argv",
+      "tenor_task_start_returns_a_hash_bound_decision_capsule",
+      "host_prepares_one_multi_file_changeset_with_structured_edits_and_validator_argv",
       "tenor_apply_changeset_preflights_locks_hashes_and_scope",
       "tenor_apply_changeset_commits_all_or_rolls_back_all",
-      "tenor_apply_changeset_records_and_closes"
+      "tenor_apply_changeset_filters_and_promotes_durable_scribe_memory",
+      "tenor_apply_changeset_closes_only_after_explicit_memory_admission"
     ],
     "delete": [
       "tenor_task_start_runs_targeted_scribe_and_graphify_internally",
+      "tenor_task_start_returns_a_hash_bound_decision_capsule",
       "exact_delete_paths_must_be_confirmed_in_changeset",
       "tenor_apply_changeset_preflights_locks_hashes_and_scope",
       "tenor_apply_changeset_commits_all_or_rolls_back_all",
-      "tenor_apply_changeset_records_and_closes"
+      "tenor_apply_changeset_records_memory_admission_and_closes"
     ]
   },
   "multi_agent_rules": [
@@ -241,6 +257,7 @@
     "reads are concurrent",
     "task tools derive identity from the successful bridge and reject caller supplied identity",
     "writes use ordered locks and one atomic multi-file changeset",
+    "unrelated canonical memory updates refresh a stale decision capsule inside the same task id",
     "one agent cannot control retire replace or mutate another agent task",
     "one agent owns at most one active task",
     "daemon heartbeat and rolling ttl preserve live work",
@@ -262,6 +279,17 @@
     },
     "scribe_record": {
       "runtime_receipt_is_not_canonical_memory": true,
+      "every_completed_task_requires_an_explicit_admission_decision": true,
+      "admission_decisions": [
+        "promote",
+        "runtime_only_with_reason",
+        "ask_user",
+        "conflict"
+      ],
+      "validated_durable_source_fixes_are_promoted_automatically": true,
+      "read_only_and_non_causal_noise_is_runtime_only_with_reason": true,
+      "unresolved_architecture_choices_require_user_decision": true,
+      "silent_memory_drop_forbidden": true,
       "record_only_when_causal_value_exists": true,
       "record_when": [
         "write_applied",
@@ -347,6 +375,9 @@
   "direct_tool_neutralization": {
     "direct_shell_write_edit_forbidden": true,
     "native_host_write_edit_must_be_disabled_permission_gated_or_detected": true,
+    "direct_write_tripwire_supports_git_and_non_git_projects": true,
+    "validator_target_hash_is_reverified_after_validation": true,
+    "validator_unscoped_mutation_blocks_closure": true,
     "opencode_autonomous_edit_permission": "deny",
     "opencode_autonomous_bash_permission": "deny",
     "defense_layers": [
@@ -354,10 +385,12 @@
       "project-local instructions",
         "resource locks and claims",
         "atomic multi-file changeset",
+        "SCRIBE/Graphify decision capsule",
+        "structured edit and destructive replacement guards",
         "hash preflight and validator rollback",
       "direct filesystem tripwire",
       "workspace audit",
-      "canonical memory finish gate"
+      "canonical memory admission and finish gate"
     ],
     "bypass_verdict": "DIRECT_WRITE_BYPASS_DETECTED"
   },

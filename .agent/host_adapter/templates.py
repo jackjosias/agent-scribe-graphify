@@ -41,15 +41,18 @@ Session entry contract:
 Before any code write/fix/refactor/delete/test:
 1. Call `tenor_task_start` once with the objective, canonical intent, project-relative resources and their common scope.
 2. TENOR runs targeted SCRIBE and Graphify retrieval internally; never reproduce the legacy lock/claim/patch choreography manually.
-3. For a write/delete task, call `tenor_apply_changeset` once with every file operation, fresh base hashes and bounded validator argv arrays.
-4. The changeset is all-or-nothing: every path/hash/lock is preflighted, validators run without a shell, and any failure rolls back every file.
-5. For a read task, finish with `tenor_task_control(action="finish")`; use it also for explicit pause/resume/cancel.
-6. Use `tenor_activity` for consolidated agent/task/current/last/next state. Never retire or replace another active agent.
-7. Task tools derive agent identity from the successful MCP bridge; never invent agent_id, task_id or context_token.
-8. Direct file edit fallback and direct `graphify update .` are forbidden.
-9. Completion requires a terminal machine verdict and validator evidence; a prose-only `done` is not completion.
-10. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
-11. Native Edit and Bash are denied in autonomous OpenCode sessions; do not replace the identity to escape a fail-closed verdict.
+3. The returned SCRIBE/Graphify decision capsule is a write authorization snapshot; if it becomes stale, repeat the identical `tenor_task_start` to refresh it inside the same task id.
+4. For a write/delete task, call `tenor_apply_changeset` once with every file operation and mandatory bounded validator argv arrays. Prefer structured `edit` operations with unique exact anchors; `create` derives its new-file hash internally.
+5. `replace` always means the complete file. A destructive shrink requires path/base/new-hash confirmation. Never pass a fragment as a full replacement.
+6. The changeset is all-or-nothing: every path/hash/lock is preflighted, validators run without a shell, and any failure rolls back every file.
+7. For a read task, finish with `tenor_task_control(action="finish")`; use it also for explicit pause/resume/cancel. Cancel a failed uncommitted task directly; never fabricate a no-op changeset or replacement task.
+8. Use `tenor_activity` for consolidated agent/task/current/last/next state. Never retire or replace another active agent.
+9. Task tools derive agent identity from the successful MCP bridge; never invent agent_id, task_id or context_token.
+10. Direct file edit fallback and direct `graphify update .` are forbidden. Never ask the user to apply a manual patch.
+11. Completion requires a terminal machine verdict, validator evidence, the decision capsule hash and an explicit memory-admission verdict; a prose-only `done` is not completion.
+12. If memory admission asks for a user decision, use only `tenor_task_control(action="memory_promote"|"memory_skip")`; never silently discard the record.
+13. If the host tools are not visible, report HOST_MCP_UNBOUND and do not invent configuration.
+14. Native Edit and Bash are denied in autonomous OpenCode sessions; do not replace the identity to escape a fail-closed verdict.
 """
     return (
         "<!-- agent-scribe-graphify:auto-guard:start -->\n"

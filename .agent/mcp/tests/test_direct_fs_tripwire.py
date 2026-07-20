@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ if str(MCP_DIR) not in sys.path:
 from runtime.state_paths import prepare_state_dirs
 
 import server_ext as mcp
-from runtime import direct_fs_tripwire
+from runtime import direct_fs_tripwire, graphify_readiness
 
 
 def call_tool(name: str, **args: Any) -> dict[str, Any]:
@@ -52,8 +53,10 @@ class DirectFsTripwireTest(unittest.TestCase):
         os.chdir(self.root)
         graphify_out = prepare_state_dirs(self.root)["graphify_out"]
         graphify_out.mkdir(parents=True, exist_ok=True)
-        for name, content in (("graph.json", "{\"nodes\":[],\"edges\":[]}"), ("GRAPH_REPORT.md", "# Tripwire Test Graph Report\n"), ("graph.html", "<html><body></body></html>\n")):
+        for name, content in (("graph.json", "{\"nodes\":[{\"id\":\"tracked\"}],\"edges\":[]}"), ("GRAPH_REPORT.md", "# Tripwire Test Graph Report\nNodes: 1\nEdges: 0\n"), ("graph.html", "<html><body></body></html>\n")):
             (graphify_out / name).write_text(content, encoding="utf-8")
+        manifest = graphify_readiness.write_graphify_manifest(self.root)
+        self.assertTrue(manifest["ok"], manifest)
         mcp.server.ROOT = self.root.resolve()
         mcp.server.AGENT_DIR = self.root / ".agent"
         self.agent = call_tool("bootstrap", host_tool="tripwire-test", model_name="test", run_legacy_bootstrap=False)["agent"]["agent_id"]
@@ -257,6 +260,31 @@ class DirectFsTripwireTest(unittest.TestCase):
         result = self.audit(ctx)
         self.assertEqual(result["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", result)
         self.assertTrue(any(item["path"] == direct_fs_tripwire.MEMOIRE_FILE for item in result.get("suspects", [])), result)
+
+    def test_23_other_task_receipt_cannot_authorize_current_direct_write(self) -> None:
+        current = self.before(resource="tracked.txt")
+        spoofed = b"spoofed by another task\n"
+        direct_fs_tripwire.record_authorized_mutation(
+            "task-prior",
+            self.agent,
+            "tracked.txt",
+            "tenor_apply_changeset",
+            after_hash=hashlib.sha256(spoofed).hexdigest(),
+            project_root=self.root,
+        )
+        (self.root / "tracked.txt").write_bytes(spoofed)
+        result = self.audit(current)
+        self.assertEqual(result["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", result)
+        self.assertEqual(result["authorized_mutations"], [], result)
+
+    def test_24_direct_delete_is_detected_without_git(self) -> None:
+        shutil.rmtree(self.root / ".git")
+        current = self.before(resource="tracked.txt")
+        (self.root / "tracked.txt").unlink()
+        result = self.audit(current)
+        self.assertEqual(result["verdict"], "DIRECT_WRITE_BYPASS_DETECTED", result)
+        self.assertEqual(result["suspects"][0]["path"], "tracked.txt", result)
+        self.assertEqual(result["suspects"][0]["status"], "ABSENT", result)
 
 
 if __name__ == "__main__":

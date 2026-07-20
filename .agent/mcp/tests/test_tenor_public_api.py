@@ -124,6 +124,8 @@ class TenorPublicApiTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_TASK_READY")
         self.assertEqual(result["scribe"]["verdict"], "SCRIBE_QUERY_DONE")
         self.assertEqual(result["graphify"]["verdict"], "GRAPHIFY_QUERY_DONE")
+        self.assertEqual(result["decision_capsule"]["verdict"], "TENOR_DECISION_CAPSULE_READY")
+        self.assertEqual(len(result["decision_capsule"]["capsule_hash"]), 64)
         task = task_context.task_status(result["task_id"])
         self.assertTrue(task["scribe_done"])
         self.assertTrue(task["graphify_done"])
@@ -200,6 +202,172 @@ class TenorPublicApiTest(unittest.TestCase):
         self.assertEqual(task_context.task_status(started["task_id"])["status"], "finished")
         record = self.root / result["scribe_record"]["record_path"]
         self.assertTrue(record.is_file())
+        self.assertEqual(result["memory_admission"]["decision"], "runtime_only")
+        self.assertEqual(result["decision_capsule"]["verdict"], "TENOR_DECISION_CAPSULE_RESOLVED")
+
+    def test_capsule_drift_blocks_write_and_preserves_file(self) -> None:
+        started = self.call(
+            "tenor_task_start",
+            objective="fix feature safely",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        memory = self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
+        memory.write_text("changed concurrently\n", encoding="utf-8")
+        result = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "before", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                "timeout_seconds": 20,
+            }],
+        )
+        self.assertEqual(result["verdict"], "TENOR_DECISION_CAPSULE_STALE")
+        self.assertEqual((self.root / "src" / "feature.txt").read_text(encoding="utf-8"), "before\n")
+        refreshed = self.call(
+            "tenor_task_start",
+            objective="fix feature safely",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        self.assertTrue(refreshed["ok"], refreshed)
+        self.assertEqual(refreshed["verdict"], "TENOR_TASK_RESUMED")
+        self.assertEqual(refreshed["task_id"], started["task_id"])
+        self.assertEqual(refreshed["decision_capsule"]["verdict"], "TENOR_DECISION_CAPSULE_REFRESHED")
+        committed = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "before", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "from pathlib import Path; assert Path('src/feature.txt').read_text() == 'after\\n'"],
+                "timeout_seconds": 20,
+            }],
+        )
+        self.assertTrue(committed["ok"], committed)
+
+    def test_failed_write_task_can_be_cancelled_without_noop_changeset(self) -> None:
+        started = self.call(
+            "tenor_task_start",
+            objective="fix feature safely",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        failed = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "missing", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                "timeout_seconds": 20,
+            }],
+        )
+        self.assertEqual(failed["verdict"], "TENOR_CHANGESET_EDIT_ANCHOR_MISMATCH")
+        cancelled = self.call("tenor_task_control", task_id=started["task_id"], action="cancel")
+        self.assertTrue(cancelled["ok"], cancelled)
+        self.assertEqual(cancelled["verdict"], "TENOR_TASK_CANCELLED")
+        replacement = self.call(
+            "tenor_task_start",
+            objective="new clean task",
+            intent="read",
+            resources=["src/feature.txt"],
+        )
+        self.assertTrue(replacement["ok"], replacement)
+
+    def test_ambiguous_memory_admission_blocks_reapply_until_user_resolves_it(self) -> None:
+        objective = "choose between two incompatible persistence architectures"
+        started = self.call(
+            "tenor_task_start",
+            objective=objective,
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        committed = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "before", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                "timeout_seconds": 20,
+            }],
+            summary="decision pending user approval",
+        )
+        self.assertEqual(committed["verdict"], "TENOR_CHANGESET_COMMITTED_MEMORY_DECISION_REQUIRED")
+        self.assertFalse(committed["terminal"])
+        repeated_start = self.call(
+            "tenor_task_start",
+            objective=objective,
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        self.assertEqual(repeated_start["verdict"], "TENOR_MEMORY_ADMISSION_USER_DECISION_REQUIRED")
+        resolved = self.call(
+            "tenor_task_control",
+            task_id=started["task_id"],
+            action="memory_skip",
+            summary="User explicitly keeps this experimental choice out of canonical project memory.",
+        )
+        self.assertTrue(resolved["ok"], resolved)
+        self.assertTrue(resolved["terminal"])
+
+    def test_changeset_schema_forces_safe_shape_for_small_models(self) -> None:
+        schema = tenor_public_api.tool_schema("tenor_apply_changeset")
+        self.assertIn("validators", schema["required"])
+        self.assertEqual(schema["properties"]["validators"]["minItems"], 1)
+        change = schema["properties"]["changes"]["items"]
+        self.assertIn("edit", change["properties"]["operation"]["enum"])
+        self.assertIn("edits", change["properties"])
+        self.assertNotIn("base_hash", change["required"])
+        self.assertIn("confirm_full_replacements", schema["properties"])
+
+    def test_validator_cannot_silently_mutate_an_unscoped_file_and_finish(self) -> None:
+        started = self.call(
+            "tenor_task_start",
+            objective="fix feature safely",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        result = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "before", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; Path('src/outside.txt').write_text('bypass')",
+                ],
+                "timeout_seconds": 20,
+            }],
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_COMMITTED_UNAUTHORIZED_MUTATION_DETECTED")
+        self.assertFalse(result["terminal"])
 
     def test_other_bound_agent_cannot_control_or_apply_first_agents_task(self) -> None:
         started = self.call(

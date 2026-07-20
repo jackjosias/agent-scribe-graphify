@@ -45,6 +45,10 @@ def contains_sections(prompt: str) -> bool:
         "Aucune ecriture directe",
         "SCRIBE et Graphify en interne",
         "base_hash",
+        "operation edit",
+        "capsule decisionnelle",
+        "admission memoire",
+        "tenor_task_control(action=\"cancel\")",
         "rollback",
         "HOST_MCP_UNBOUND",
     ]
@@ -139,6 +143,9 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertIn("Aucun Edit/Bash natif", result["prompt"])
         self.assertIn("TENOR INIT reconstruit Graphify lui-meme", result["prompt"])
         self.assertNotIn("appelle graphify_project_build", result["prompt"])
+        self.assertIn("N utilise jamais operation replace avec un fragment", result["prompt"])
+        self.assertIn("ne demande jamais a l utilisateur d appliquer un patch manuel", result["prompt"])
+        self.assertIn("validateurs obligatoires", result["prompt"])
 
     def test_large_model_tier_default(self) -> None:
         result = ttp.generate_task_prompt(task="fix auth", model_tier="large")
