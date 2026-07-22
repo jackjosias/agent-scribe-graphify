@@ -25,7 +25,8 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp  # type: ignore
-from runtime import db, direct_fs_tripwire, discipline, patch_queue, task_context  # type: ignore
+from runtime import db, direct_fs_tripwire, discipline, graphify_readiness, patch_queue, task_context  # type: ignore
+from _workspace_fixture import prepare_graphify_fixture
 
 
 RESOURCE = "tracked.txt"
@@ -54,21 +55,20 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="host-discipline-e2e-"))
         self.old_cwd = Path.cwd()
+        self.old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self.old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         os.chdir(self.root)
         os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(self.root)
         (self.root / ".agent" / "state").mkdir(parents=True, exist_ok=True)
         (self.root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
-        graphify_dir = self.root / "graphify-out"
-        graphify_dir.mkdir(parents=True, exist_ok=True)
-        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
-        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / RESOURCE).write_text("line1\n", encoding="utf-8")
         git(self.root, "init")
         git(self.root, "config", "user.email", "test@example.invalid")
         git(self.root, "config", "user.name", "Host Discipline Test")
         git(self.root, "add", RESOURCE)
         git(self.root, "commit", "-m", "initial")
+        fixture_env = prepare_graphify_fixture(self.root)
+        os.environ[graphify_readiness.FIXTURE_ENV] = fixture_env[graphify_readiness.FIXTURE_ENV]
         mcp.server.ROOT = self.root.resolve()
         mcp.server.AGENT_DIR = mcp.server.ROOT / ".agent"
         importlib.reload(db)
@@ -87,6 +87,14 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
 
     def tearDown(self) -> None:
         os.chdir(self.old_cwd)
+        if self.old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self.old_root_env
+        if self.old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         shutil.rmtree(self.root, ignore_errors=True)
 
     def register(self, agent_id: str = AGENT) -> dict[str, Any]:
@@ -151,7 +159,7 @@ class HostDisciplineGuardE2ETest(unittest.TestCase):
         payload = call_tool("scribe_query", agent_id=AGENT, task_id=ctx["task_id"], context_token=ctx["context_token"], query="host discipline", limit=3)
         self.assertIn(payload["verdict"], {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}, payload)
         payload = call_tool("pre_action_guard", agent_id=AGENT, request="fix file", intent="write", resource=RESOURCE, planned_action="claim_resource", **ctx)
-        self.assertEqual(payload["verdict"], "NEXT_ACTION_REQUIRED", payload)
+        self.assertEqual(payload["verdict"], "TASK_DISCOVERY_GRAPHIFY_REQUIRED", payload)
         self.assertEqual(payload["state"], "GRAPHIFY_CONTEXT_REQUIRED", payload)
         self.assertEqual(payload["must_call"]["tool"], "graphify_query", payload)
 

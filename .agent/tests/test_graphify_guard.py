@@ -1,15 +1,4 @@
-"""test_graphify_guard.py — Tests for runtime/graphify_guard.py.
-
-Coverage: 25 tests.
-   1-18: existing (binary detection, installation, outputs, check, guide, atomic, platform, subprocess)
-  19. validate_graphify_outputs() returns GRAPHIFY_GRAPH_JSON_INVALID when graph.json is not valid JSON
-  20. validate_graphify_outputs() returns GRAPHIFY_GRAPH_JSON_INVALID when graph.json has no 'nodes' key
-  21. validate_graphify_outputs() returns GRAPHIFY_OUTPUTS_READY when graph.json is valid with nodes
-  22. validate_graphify_installation() returns GRAPHIFY_BINARY_CHECK_FAILED when binary unresponsive
-  23. _graphify_binary_responsive() with --help fallback returning True, version=None
-  24. get_graphify_version() returns version string when --version and --help work
-  25. check_graphify_required() returns GRAPHIFY_BINARY_CHECK_FAILED with blocking=True
-"""
+"""Contract tests for the project-bound V2.16 Graphify guard."""
 from __future__ import annotations
 
 import json
@@ -29,6 +18,7 @@ if _MCP_DIR not in sys.path:
     sys.path.insert(0, _MCP_DIR)
 
 from runtime import graphify_guard as gg  # noqa: E402
+from runtime import graphify_readiness as readiness  # noqa: E402
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,12 +34,19 @@ def _fake_graphify_binary(ws: Path) -> Path:
 
 
 def _make_graphify_out(ws: Path) -> None:
-    """Create a valid graphify-out/ with all required files."""
-    out = ws / "graphify-out"
-    out.mkdir(exist_ok=True)
-    (out / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
+    """Create a real, current graph bound to ``ws`` by its manifest."""
+    (ws / "app.py").write_text("print('ready')\n", encoding="utf-8")
+    out = readiness.canonical_output_dir(ws)
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "graph.json").write_text(
+        '{"nodes":[{"id":"app.py"}],"edges":[]}',
+        encoding="utf-8",
+    )
     (out / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
     (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
+    manifest = readiness.write_graphify_manifest(ws, kind="real", purpose="unit_test")
+    if not manifest.get("ok"):
+        raise AssertionError(manifest)
 
 
 def _push_path(bindir: Path) -> str:
@@ -163,7 +160,7 @@ class TestGuardValidateOutputs(unittest.TestCase):
     # ------------------------------------------------------------------
     def test_06_output_dir_missing(self) -> None:
         result = gg.validate_graphify_outputs(self._root)
-        self.assertEqual(result.get("verdict"), gg.VERDICT_OUTPUTS_MISSING)
+        self.assertEqual(result.get("verdict"), readiness.GRAPHIFY_MISSING)
         self.assertFalse(result.get("ok"))
 
     # ------------------------------------------------------------------
@@ -179,8 +176,8 @@ class TestGuardValidateOutputs(unittest.TestCase):
     # 8. Empty file → GRAPHIFY_OUTPUTS_MISSING
     # ------------------------------------------------------------------
     def test_08_outputs_empty_file(self) -> None:
-        out = self._root / "graphify-out"
-        out.mkdir()
+        out = readiness.canonical_output_dir(self._root)
+        out.mkdir(parents=True, exist_ok=True)
         (out / "graph.json").write_text("", encoding="utf-8")
         (out / "GRAPH_REPORT.md").write_text("non-empty\n", encoding="utf-8")
         (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
@@ -214,7 +211,8 @@ class TestGuardCheckRequired(unittest.TestCase):
         self.assertFalse(result.get("ok"))
         self.assertTrue(result.get("blocking"))
         self.assertFalse(result.get("write_allowed"))
-        self.assertEqual(result.get("verdict"), gg.VERDICT_BINARY_MISSING)
+        self.assertEqual(result.get("verdict"), readiness.GRAPHIFY_MISSING)
+        self.assertEqual(result.get("binary", {}).get("verdict"), gg.VERDICT_BINARY_MISSING)
 
     # ------------------------------------------------------------------
     # 10. Binary present, outputs missing → blocking=True
@@ -231,7 +229,7 @@ class TestGuardCheckRequired(unittest.TestCase):
         self.assertFalse(result.get("ok"))
         self.assertTrue(result.get("blocking"))
         self.assertFalse(result.get("write_allowed"))
-        self.assertEqual(result.get("verdict"), gg.VERDICT_OUTPUTS_MISSING)
+        self.assertEqual(result.get("verdict"), readiness.GRAPHIFY_MISSING)
 
     # ------------------------------------------------------------------
     # 11. Everything ready → GRAPHIFY_READY, write_allowed=True
@@ -251,6 +249,22 @@ class TestGuardCheckRequired(unittest.TestCase):
         self.assertTrue(result.get("write_allowed"))
         self.assertEqual(result.get("verdict"), gg.VERDICT_READY)
 
+    def test_11b_current_outputs_without_binary_block_the_first_source_write(self) -> None:
+        _make_graphify_out(self._root)
+        old = os.environ.get("PATH", "")
+        os.environ["PATH"] = "/dev/null"
+        try:
+            result = gg.check_graphify_required(
+                self._root, host_type="opencode", auto_write_guide=False,
+            )
+        finally:
+            os.environ["PATH"] = old
+        self.assertFalse(result.get("ok"), result)
+        self.assertTrue(result.get("blocking"), result)
+        self.assertFalse(result.get("write_allowed"), result)
+        self.assertEqual(result.get("verdict"), gg.VERDICT_BINARY_MISSING)
+        self.assertEqual(result.get("outputs", {}).get("verdict"), "GRAPHIFY_READY")
+
 
 class TestGuardInstallGuide(unittest.TestCase):
     """Tests for render_graphify_install_guide()."""
@@ -263,9 +277,26 @@ class TestGuardInstallGuide(unittest.TestCase):
         self.assertIn("graphifyy", guide)
         self.assertIn("graphify", guide)
 
-    def test_12b_guide_mentions_opencode_flag(self) -> None:
+    def test_12b_guide_uses_current_host_contract(self) -> None:
         guide = gg.render_graphify_install_guide(host_type="opencode")
-        self.assertIn("--platform opencode", guide)
+        self.assertIn("tenor-init --type cli --host <host-id>", guide)
+        self.assertNotIn("--platform opencode", guide)
+        self.assertIn("reserved", guide)
+
+    def test_12c_runtime_check_never_rewrites_existing_bundle_guide(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="test_guard_existing_guide_") as tmp:
+            root = Path(tmp)
+            guide = root / gg.INSTALL_GUIDE_REL_PATH
+            guide.parent.mkdir(parents=True)
+            guide.write_text("tracked bundle guide\n", encoding="utf-8")
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = "/dev/null"
+            try:
+                result = gg.check_graphify_required(root, auto_write_guide=True)
+            finally:
+                os.environ["PATH"] = old_path
+            self.assertFalse(result.get("ok"), result)
+            self.assertEqual(guide.read_text(encoding="utf-8"), "tracked bundle guide\n")
 
 
 class TestGuardAtomicWrite(unittest.TestCase):
@@ -301,10 +332,13 @@ class TestGuardPlatformDetection(unittest.TestCase):
         os_name = gg._detect_os()
         self.assertIn(os_name, {"linux", "darwin", "windows", "unknown"})
 
-    def test_16_is_ubuntu_or_debian_returns_bool(self) -> None:
-        # Should not crash on any system.
-        result = gg._is_ubuntu_or_debian()
-        self.assertIsInstance(result, bool)
+    def test_16_canonical_output_is_project_local_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="test_guard_output_") as tmp:
+            root = Path(tmp).resolve()
+            self.assertEqual(
+                readiness.canonical_output_dir(root),
+                root / ".agent" / "state" / "outputs" / "graphify-out",
+            )
 
 
 class TestGuardSafeSubprocess(unittest.TestCase):
@@ -327,8 +361,9 @@ class TestGuardGraphJsonValidation(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp(prefix="test_guard_graphjson_")
         self._root = Path(self._tmp)
-        out = self._root / "graphify-out"
-        out.mkdir()
+        (self._root / "app.py").write_text("print('graph')\n", encoding="utf-8")
+        out = readiness.canonical_output_dir(self._root)
+        out.mkdir(parents=True, exist_ok=True)
         (out / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
         (out / "graph.html").write_text("<html></html>\n", encoding="utf-8")
 
@@ -339,40 +374,44 @@ class TestGuardGraphJsonValidation(unittest.TestCase):
     # 19. graph.json exists but contains invalid JSON → GRAPHIFY_GRAPH_JSON_INVALID
     # ------------------------------------------------------------------
     def test_19_graph_json_invalid_content(self) -> None:
-        out = self._root / "graphify-out"
+        out = readiness.canonical_output_dir(self._root)
         (out / "graph.json").write_text("NOT_VALID_JSON{{{", encoding="utf-8")
         result = gg.validate_graphify_outputs(self._root)
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("verdict"), gg.VERDICT_GRAPH_INVALID_JSON)
-        self.assertIsNotNone(result.get("files", {}).get("graph.json", {}).get("parse_error"))
+        self.assertTrue(result.get("reason"))
 
     # ------------------------------------------------------------------
     # 20. graph.json is valid JSON but missing 'nodes' key →
     #     GRAPHIFY_GRAPH_JSON_INVALID
     # ------------------------------------------------------------------
     def test_20_graph_json_missing_nodes_key(self) -> None:
-        out = self._root / "graphify-out"
+        out = readiness.canonical_output_dir(self._root)
         (out / "graph.json").write_text('{"edges": []}', encoding="utf-8")
         result = gg.validate_graphify_outputs(self._root)
         self.assertFalse(result.get("ok"))
         self.assertEqual(result.get("verdict"), gg.VERDICT_GRAPH_INVALID_JSON)
-        self.assertFalse(result["files"]["graph.json"]["has_nodes_key"])
+        self.assertIn("nodes", result.get("reason", ""))
 
     # ------------------------------------------------------------------
     # 21. graph.json is valid JSON with nodes key → outputs ready
     # ------------------------------------------------------------------
     def test_21_graph_json_valid_with_nodes(self) -> None:
-        out = self._root / "graphify-out"
-        (out / "graph.json").write_text('{"nodes": [], "edges": []}', encoding="utf-8")
+        out = readiness.canonical_output_dir(self._root)
+        (out / "graph.json").write_text(
+            '{"nodes": [{"id": "app.py"}], "edges": []}',
+            encoding="utf-8",
+        )
+        manifest = readiness.write_graphify_manifest(self._root, kind="real", purpose="unit_test")
+        self.assertTrue(manifest.get("ok"), manifest)
         result = gg.validate_graphify_outputs(self._root)
         self.assertTrue(result.get("ok"))
         self.assertEqual(result.get("verdict"), "GRAPHIFY_OUTPUTS_READY")
-        self.assertTrue(result["files"]["graph.json"]["valid_json"])
-        self.assertTrue(result["files"]["graph.json"]["has_nodes_key"])
+        self.assertEqual(result.get("node_count"), 1)
 
 
 class TestGuardBinaryResponsiveness(unittest.TestCase):
-    """Tests for _graphify_binary_responsive() and --help fallback."""
+    """Tests for the public installation probe and its help fallback."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.mkdtemp(prefix="test_guard_responsive_")
@@ -409,8 +448,7 @@ class TestGuardBinaryResponsiveness(unittest.TestCase):
         self.assertIsNotNone(install_result.get("reason"))
 
     # ------------------------------------------------------------------
-    # 23. Binary exists, --version fails but --help works →
-    #     VERDICT_BINARY_FOUND with version=None
+    # 23. Binary exists, --version fails but --help works → found.
     # ------------------------------------------------------------------
     def test_23_binary_help_fallback(self) -> None:
         # Create a binary that fails --version but succeeds --help.
@@ -441,10 +479,11 @@ class TestGuardBinaryResponsiveness(unittest.TestCase):
         script.write_text(content, encoding="utf-8")
         script.chmod(0o755)
 
-        responsive = gg._graphify_binary_responsive()
-        self.assertTrue(responsive)
-        version = gg.get_graphify_version()
-        self.assertIsNone(version)
+        install_result = gg.validate_graphify_installation()
+        self.assertTrue(install_result.get("ok"), install_result)
+        self.assertEqual(install_result.get("verdict"), gg.VERDICT_BINARY_FOUND)
+        self.assertIn("Graphify CLI Help", install_result.get("version") or "")
+        self.assertIn("Graphify CLI Help", gg.get_graphify_version() or "")
 
     # ------------------------------------------------------------------
     # 24. Binary exists with both --version and --help OK →
@@ -461,6 +500,7 @@ class TestGuardBinaryResponsiveness(unittest.TestCase):
     #     binary exists but is unresponsive
     # ------------------------------------------------------------------
     def test_25_check_required_binary_failed(self) -> None:
+        _make_graphify_out(self._root)
         self._fake_binary("graphify", "boom", exit_code=1)
         result = gg.check_graphify_required(
             self._root, host_type="opencode", auto_write_guide=False,

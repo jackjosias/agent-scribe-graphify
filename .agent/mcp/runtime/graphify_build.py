@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from . import db, graphify_readiness, tenor_init_orchestrator
+from . import bounded_process, db, graphify_readiness, tenor_init_orchestrator
 
 
 MIN_TIMEOUT_SECONDS = 1
@@ -27,15 +27,16 @@ def _run_graphify(
     cwd: Path,
     timeout: int,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    completed = bounded_process.run_bounded(
         command,
         cwd=str(cwd),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=timeout,
-        check=False,
+        timeout_seconds=timeout,
+        output_limit_bytes=OUTPUT_LIMIT,
+        merge_stderr=True,
     )
+    if completed.timed_out:
+        raise subprocess.TimeoutExpired(command, timeout, output=completed.stdout)
+    return subprocess.CompletedProcess(command, completed.returncode, stdout=completed.stdout)
 
 
 def _build_under_lock(

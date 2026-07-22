@@ -30,7 +30,8 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import db, direct_fs_tripwire, discipline, patch_queue, task_context
+from runtime import db, direct_fs_tripwire, discipline, graphify_readiness, patch_queue, task_context
+from _workspace_fixture import prepare_graphify_fixture
 
 R = "workfile.txt"
 A1 = "func-agent-one"
@@ -56,18 +57,16 @@ def g(root: Path, *a: str) -> subprocess.CompletedProcess[str]:
 
 def make_workspace(root: Path, *, graphify: bool = True) -> None:
     (root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
-    if graphify:
-        gd = root / "graphify-out"
-        gd.mkdir(parents=True)
-        (gd / "graph.json").write_text('{"nodes":[],"edges":[]}')
-        (gd / "GRAPH_REPORT.md").write_text("# R")
-        (gd / "graph.html").write_text("<h></h>")
     (root / R).write_text("line1\nline2\nline3\n")
     g(root, "init")
     g(root, "config", "user.email", "f@t")
     g(root, "config", "user.name", "FT")
     g(root, "add", R)
     g(root, "commit", "-m", "init")
+    if graphify:
+        fixture_env = prepare_graphify_fixture(root)
+        os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = fixture_env["AGENT_SCRIBE_GRAPHIFY_ROOT"]
+        os.environ[graphify_readiness.FIXTURE_ENV] = fixture_env[graphify_readiness.FIXTURE_ENV]
 
 
 def bootstrap(root: Path) -> None:
@@ -84,6 +83,7 @@ def bootstrap(root: Path) -> None:
     mcp.patch_queue = patch_queue
     mcp.task_context = task_context
     mcp.discipline = discipline
+    mcp._GRAPHIFY_GUARD_CACHE.clear()
     db.init_db(root)
     discipline.ensure_schema()
 
@@ -200,12 +200,22 @@ class FunctionalAcceptanceTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.old = Path.cwd()
+        self.old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self.old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         self.root = Path(tempfile.mkdtemp(prefix="func-"))
         _CLAIM_IDS.clear()
         bootstrap(self.root)
 
     def tearDown(self) -> None:
         os.chdir(self.old)
+        if self.old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self.old_root_env
+        if self.old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         shutil.rmtree(self.root, ignore_errors=True)
 
     # ── BR1: Agent registration ────────────────────────────────────────────
@@ -490,8 +500,7 @@ class FunctionalAcceptanceTest(unittest.TestCase):
     # when tools/list is called, it must include all core tools.
 
     def test_b18_all_required_tools_available(self) -> None:
-        tools = list_tools()
-        names = {t["name"] for t in tools}
+        names = set(mcp.server.TOOLS)
         required = {"register_agent", "before_task", "scribe_query", "graphify_query",
                      "claim_resource", "propose_patch", "apply_patch", "finish_task",
                      "pre_action_guard", "workspace_audit", "list_agents", "list_tasks",
@@ -508,7 +517,9 @@ class FunctionalAcceptanceTest(unittest.TestCase):
 
     def test_b19_tools_list_count(self) -> None:
         tools = list_tools()
-        self.assertGreaterEqual(len(tools), 40)
+        names = {tool["name"] for tool in tools}
+        self.assertEqual(names, set(mcp.server.PUBLIC_TOOL_NAMES))
+        self.assertEqual(len(tools), 9)
 
     # ── BR20: Workspace audit OK on clean workspace ────────────────────────
     # Given a clean workspace with a registered agent and no modifications,
@@ -523,11 +534,14 @@ class FunctionalAcceptanceTest(unittest.TestCase):
     # Given an agent registered long ago,
     # when list_agents is called, the agent is idle.
 
-    def test_b21_stale_agent_marked_idle(self) -> None:
+    def test_b21_stale_dead_agent_marked_idle(self) -> None:
         register(A1)
         now = int(time.time())
         with db.connect(self.root) as con:
-            con.execute("UPDATE agents SET last_seen=? WHERE agent_id=?", (now - 7200, A1))
+            con.execute(
+                "UPDATE agents SET pid=?,started_at=?,last_seen=? WHERE agent_id=?",
+                (2_000_000_000, now - 7200, now - 7200, A1),
+            )
         agents = ct("list_agents")
         match = [a for a in agents["agents"] if a["agent_id"] == A1]
         self.assertEqual(len(match), 1)

@@ -50,6 +50,9 @@ def contains_sections(prompt: str) -> bool:
         "admission memoire",
         "tenor_task_control(action=\"cancel\")",
         "rollback",
+        "TENOR_CHANGESET_ACCEPTED",
+        "poll_after_ms",
+        "TENOR_TASK_CONTROL_JOB_ACTIVE",
         "HOST_MCP_UNBOUND",
     ]
     return all(indicator in prompt for indicator in indicators)
@@ -66,7 +69,7 @@ class TestTenorTaskPromptCore(unittest.TestCase):
         self.assertIn("a determiner via Graphify/SCRIBE", result["prompt"])
         self.assertTrue(contains_sections(result["prompt"]))
         self.assertEqual(result["required_first_actions"], ["tenor_task_start"])
-        self.assertEqual(result["required_finish_actions"], ["tenor_apply_changeset", "tenor_task_control"])
+        self.assertEqual(result["required_finish_actions"], ["tenor_apply_changeset", "tenor_activity", "tenor_task_control"])
         self.assertIn("legacy_manual_choreography", result["forbidden"])
 
     def test_empty_task(self) -> None:

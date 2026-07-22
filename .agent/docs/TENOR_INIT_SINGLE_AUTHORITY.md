@@ -370,7 +370,11 @@ exact host id, so OpenCode must never try `--host auto` before the allowed
 
 Exit code `78` is a deterministic safety verdict, not a transient network error. Policy, import, JSON and argument failures surface immediately. Exponential retries are reserved for explicitly transient conditions and remain bounded.
 
-If the Graphify binary is missing but a valid, current, bound graph exists, structural reads may continue while rebuild remains unavailable. If the graph becomes stale, writes are blocked.
+If the Graphify binary is missing but a valid, current, bound graph exists,
+structural reads may continue. The first source mutation is nevertheless blocked
+until a real Graphify CLI answers its probe, because that mutation would make the
+graph stale and could otherwise strand the next session. A stale graph always
+blocks writes until a real project build succeeds.
 
 ## Portability
 

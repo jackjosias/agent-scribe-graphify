@@ -46,6 +46,8 @@ TENOR_INIT_READY
 - The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
 - `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side and returns a hash-bound decision capsule. The host model must not replay the legacy internal choreography.
 - Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with exact structured edits, fresh hashes and mandatory bounded validator argv arrays; TENOR owns locks, rollback, SCRIBE admission and closure.
+- `TENOR_CHANGESET_ACCEPTED` and `GRAPHIFY_BUILD_ACCEPTED` are durable non-terminal acknowledgements. Poll `tenor_activity` or `graphify_required_check`; only the terminal job result proves commit, rollback or build completion.
+- Long validators and Graphify builds run in bounded isolated workers so the MCP stdio loop remains available. Never resubmit an active job or control its task concurrently.
 - `replace` means complete file content. Destructive shrink requires path/base/new-hash confirmation; fragments and manual-patch fallback are forbidden.
 - Every completed task has an explicit memory-admission verdict. Durable validated source knowledge is promoted; non-causal noise is retained runtime-only with a reason.
 - Native shell/edit/write/apply-patch paths outside MCP are forbidden for project mutation.

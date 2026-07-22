@@ -257,9 +257,29 @@ def _receipt_is_committed(con: Any, item: dict[str, str]) -> bool:
         return (
             row["task_id"] == task_id
             and row["agent_id"] == agent_id
-            and row["status"] == "committed"
+            and row["status"] in {"guarding", "committed"}
             and _normalize_hash_value(str(row["new_hash"] or ""))
             == _normalize_hash_value(str(item.get("after_hash") or ""))
+        )
+    if tool == "scribe_promote_record":
+        # Canonical promotion is a first-class MCP mutation. Accept its receipt
+        # only after the task context confirms that this exact canonical entry
+        # was promoted for the same task and agent. This prevents callers from
+        # laundering an arbitrary direct write by merely naming the tool.
+        row = con.execute(
+            """
+            SELECT task_id,agent_id,scribe_record_promoted,scribe_record_entry_id
+            FROM task_context_v2
+            WHERE task_id=? AND agent_id=?
+            """,
+            (task_id, agent_id),
+        ).fetchone()
+        return bool(
+            row
+            and patch_id
+            and item.get("after_hash")
+            and row["scribe_record_promoted"]
+            and row["scribe_record_entry_id"] == patch_id
         )
     return False
 

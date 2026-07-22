@@ -207,7 +207,7 @@ def resolve(
         else:
             final_record = _validate_record(proposed)
         written = record_writer(final_record)
-        record_path = str(written.get("record") or "")
+        record_path = str(written.get("record_path") or written.get("record") or "")
         status = COMMITTED
     now = int(time.time())
     with connect() as con:

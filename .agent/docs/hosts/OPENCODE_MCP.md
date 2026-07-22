@@ -120,8 +120,12 @@ structurelle requise par INIT est exécutée par TENOR lui-même, sous son verro
 partagé et dans la même commande autorisée. OpenCode ne doit donc ni demander
 la commande Graphify à l'utilisateur, ni appeler `graphify_project_build`, ni
 réessayer avec un timeout différent pendant INIT. Hors INIT, la maintenance
-structurelle explicite peut passer par le tool idempotent `graphify_project_build`. Les validateurs sont fournis
-comme argv bornés au changeset et exécutés sans shell par TENOR.
+structurelle explicite peut passer par le tool idempotent
+`graphify_project_build`. Un rebuild requis retourne
+`GRAPHIFY_BUILD_ACCEPTED`, qui est non terminal : OpenCode attend
+`poll_after_ms` puis appelle `graphify_required_check` jusqu'au résultat
+terminal. Les validateurs sont fournis comme argv bornés au changeset et
+exécutés sans shell par TENOR.
 
 ## Reconnect requirement
 
@@ -216,8 +220,15 @@ Use two harmless test files in a dedicated validation workspace:
 ```text
 tenor_task_start(objective, intent="write", resources=[file_a, file_b], scope=".")
 tenor_apply_changeset(task_id, changes=[file_a, file_b], validators=[...])
-  -> TENOR_CHANGESET_COMMITTED_TASK_FINISHED
+  -> TENOR_CHANGESET_ACCEPTED (non terminal)
+tenor_activity()
+  -> job.result.verdict=TENOR_CHANGESET_COMMITTED_TASK_FINISHED
 ```
+
+Pendant `queued`, `launching` ou `running`, OpenCode ne resoumet pas le
+changeset. `file_hash`, `tenor_activity`, `portability_check` et les autres
+outils bornés doivent rester disponibles ; `tenor_task_control` refuse une
+clôture concurrente avec `TENOR_TASK_CONTROL_JOB_ACTIVE`.
 
 The proof must also execute one validator failure and confirm both files are
 restored byte-for-byte, reject a 2051-to-5-line unconfirmed replacement, and

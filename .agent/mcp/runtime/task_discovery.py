@@ -318,7 +318,14 @@ def _validate_evidence(resource: str, summary: str, evidence: str) -> None:
     if len(clean_evidence) < 80:
         raise TaskDiscoveryError("TASK_DISCOVERY_EVIDENCE_TOO_SHORT")
     text = f"{clean_summary}\n{clean_evidence}".lower()
-    if not any(token in text for token in _resource_tokens(resource)):
+    tokens = _resource_tokens(resource)
+    normalized_resource = resource.replace("\\", "/").lower()
+    resource_is_bound = (
+        any(token in text for token in tokens)
+        if tokens
+        else normalized_resource in text
+    )
+    if not resource_is_bound:
         raise TaskDiscoveryError(
             "TASK_DISCOVERY_RESOURCE_EVIDENCE_REQUIRED",
             {"resource": resource},

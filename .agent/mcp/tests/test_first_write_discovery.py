@@ -101,6 +101,22 @@ class FirstWriteDiscoveryTest(unittest.TestCase):
             },
         })
 
+    def test_generic_filename_requires_exact_path_in_discovery_evidence(self) -> None:
+        summary = "Inspected the generic target before requesting write ownership."
+        evidence = (
+            "code.py is the exact target; its callers, dependencies, current hash, "
+            "and relevant regression tests were inspected before any mutation."
+        )
+        task_discovery._validate_evidence("code.py", summary, evidence)
+        with self.assertRaises(task_discovery.TaskDiscoveryError) as refused:
+            task_discovery._validate_evidence(
+                "code.py",
+                summary,
+                "The generic code target and its callers, dependencies, current hash, "
+                "and relevant regression tests were inspected before any mutation.",
+            )
+        self.assertEqual(refused.exception.code, "TASK_DISCOVERY_RESOURCE_EVIDENCE_REQUIRED")
+
     def test_first_write_miss_requires_bound_discovery_before_lock(self) -> None:
         task_id, token = self.new_task()
         with mock.patch.object(

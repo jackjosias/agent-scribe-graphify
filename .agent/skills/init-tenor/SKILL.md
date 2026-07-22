@@ -306,9 +306,16 @@ tenor_task_start(objective, intent, resources, scope)
   -> capsule décisionnelle liée aux hashes SCRIBE/Graphify et aux ressources
 tenor_apply_changeset(task_id, changes[], validators[])
   -> preflight de tous les chemins/hashes/locks avant la première écriture
-  -> commit de tous les fichiers ou rollback de tous les fichiers
+  -> TENOR_CHANGESET_ACCEPTED, accusé durable non terminal
+tenor_activity() après poll_after_ms
+  -> job succeeded ou failed avec commit/rollback de tous les fichiers
   -> validation obligatoire, filtrage/promotion SCRIBE et clôture terminale
 ```
+
+Tant que le job est `queued`, `launching` ou `running`, l'agent ne resoumet pas
+le changeset et n'appelle pas `tenor_task_control`. Les validateurs s'exécutent
+dans un worker borné afin que `file_hash`, `tenor_activity` et les diagnostics
+restent disponibles. Seul `job.result` terminal constitue une preuve de fin.
 
 Le changeset accepte jusqu'à 64 fichiers, refuse traversal et symlinks et
 acquiert les locks dans un ordre stable. Pour un fichier texte existant,
@@ -339,7 +346,9 @@ d'appliquer un patch manuel et ne bascule jamais vers Edit/Bash.
 
 Hors TENOR INIT, un opérateur ou un contrôle de maintenance peut appeler
 `graphify_project_build(timeout_seconds=180)`. Ce tool est idempotent,
-single-flight et refuse les propriétaires produit actifs. Le modèle ne doit
+single-flight et refuse les propriétaires produit actifs. Un rebuild retourne
+`GRAPHIFY_BUILD_ACCEPTED`; l'agent attend `poll_after_ms` puis interroge
+`graphify_required_check`. Le modèle ne doit
 jamais l'utiliser comme chorégraphie de reprise d'INIT, exécuter
 `graphify update .` ni créer `graphify-out/` à la racine.
 

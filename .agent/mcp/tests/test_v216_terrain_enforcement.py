@@ -25,7 +25,7 @@ for path in (MCP_DIR, AGENT_DIR):
         sys.path.insert(0, str(path))
 
 from host_adapter import host_config
-from runtime import db, graphify_build, graphify_readiness, installation_state
+from runtime import db, graphify_build, graphify_readiness, installation_state, tenor_jobs
 from _strict_cleanup import remove_tree_strict
 from unittest.mock import patch
 
@@ -156,6 +156,41 @@ class V216TerrainEnforcementTest(unittest.TestCase):
         result = self.call("graphify_project_build", timeout_seconds=1)
         self.assertEqual(result["verdict"], "GRAPHIFY_BUILD_ACTIVE_OWNERSHIP", result)
         self.assertGreaterEqual(result["ownership"]["active_resource_locks"], 1, result)
+
+    def test_graphify_build_is_accepted_without_holding_the_mcp_request_open(self) -> None:
+        shutil.rmtree(graphify_readiness.canonical_output_dir(self.root))
+        started = time.monotonic()
+        result = self.call("graphify_project_build", timeout_seconds=30)
+        duration = time.monotonic() - started
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["verdict"], "GRAPHIFY_BUILD_ACCEPTED", result)
+        self.assertFalse(result["terminal"], result)
+        self.assertLess(duration, 5.0, result)
+        job_id = result["job"]["job_id"]
+        deadline = time.monotonic() + 10
+        job: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            job = tenor_jobs.job_snapshot(self.root, job_id=job_id, limit=1)["jobs"][0]
+            if job["status"] in tenor_jobs.TERMINAL_STATUSES:
+                break
+            time.sleep(0.05)
+        self.assertIn(job.get("status"), tenor_jobs.TERMINAL_STATUSES, job)
+        self.assertEqual(job.get("status"), "failed", job)
+        retried = self.call("graphify_project_build", timeout_seconds=30)
+        self.assertEqual(retried["verdict"], "GRAPHIFY_BUILD_ACCEPTED", retried)
+        self.assertNotEqual(retried["job"]["job_id"], job_id, retried)
+        retry_deadline = time.monotonic() + 10
+        retried_job: dict[str, Any] = {}
+        while time.monotonic() < retry_deadline:
+            retried_job = tenor_jobs.job_snapshot(
+                self.root,
+                job_id=retried["job"]["job_id"],
+                limit=1,
+            )["jobs"][0]
+            if retried_job["status"] in tenor_jobs.TERMINAL_STATUSES:
+                break
+            time.sleep(0.05)
+        self.assertIn(retried_job.get("status"), tenor_jobs.TERMINAL_STATUSES, retried_job)
 
     def test_public_graphify_build_reuses_current_graph(self) -> None:
         result = self.call("graphify_project_build", timeout_seconds=180)

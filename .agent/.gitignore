@@ -4,6 +4,8 @@ state/runtime/coordination.sqlite-wal
 state/runtime/coordination.sqlite-shm
 state/runtime/coordination.backup-*.sqlite
 state/runtime/backups/
+state/runtime/tenor-jobs/
+state/smoke/
 state/runtime/events.log
 state/runtime/events.log.*
 state/install/

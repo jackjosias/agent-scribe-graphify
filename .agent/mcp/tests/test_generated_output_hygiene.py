@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -102,11 +103,11 @@ class GeneratedOutputHygieneTest(unittest.TestCase):
         self.assertTrue((self.root / "scribe-out").is_symlink())
         self.assertTrue(outside.exists())
 
-    def test_13_relocation_purge_removes_outputs(self) -> None:
+    def test_13_relocation_purge_preserves_outputs(self) -> None:
         paths = prepare_state_dirs(self.root)
         (paths["outputs"] / "sentinel.txt").write_text("remove\n", encoding="utf-8")
         installation_state.purge_project_bound_state(self.root)
-        self.assertFalse((self.root / ".agent" / "state" / "outputs").exists())
+        self.assertTrue((self.root / ".agent" / "state" / "outputs" / "sentinel.txt").exists())
 
     def test_14_relocation_purge_preserves_mcp(self) -> None:
         prepare_state_dirs(self.root)
@@ -137,6 +138,34 @@ class GeneratedOutputHygieneTest(unittest.TestCase):
         prepare_state_dirs(self.root)
         self.assertFalse(legacy_runtime.exists())
         self.assertTrue((self.root / ".agent" / "state" / "runtime" / "legacy.txt").exists())
+
+    def test_19_durable_job_logs_are_ignored_by_git(self) -> None:
+        ignore_source = Path(__file__).resolve().parents[2] / ".gitignore"
+        shutil.copy2(ignore_source, self.root / ".agent" / ".gitignore")
+        log = self.root / ".agent" / "state" / "runtime" / "tenor-jobs" / "job-test.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("worker output\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=str(self.root), check=True, capture_output=True)
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", ".agent/state/runtime/tenor-jobs/job-test.log"],
+            cwd=str(self.root),
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
+    def test_20_smoke_workspaces_are_ignored_by_git(self) -> None:
+        ignore_source = Path(__file__).resolve().parents[2] / ".gitignore"
+        shutil.copy2(ignore_source, self.root / ".agent" / ".gitignore")
+        artifact = self.root / ".agent" / "state" / "smoke" / "auth" / "file.txt"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("smoke output\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=str(self.root), check=True, capture_output=True)
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", ".agent/state/smoke/auth/file.txt"],
+            cwd=str(self.root),
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
 
 
 if __name__ == "__main__":

@@ -87,6 +87,13 @@ After inspecting/designing the fix, call `tenor_apply_changeset` once with:
 - at least one bounded validator `argv` array and timeout;
 - a stable `request_id` for retry safety.
 
+The immediate success response is `TENOR_CHANGESET_ACCEPTED`. It means the
+payload is durably queued, not that files were committed. Wait the returned
+`poll_after_ms`, then call `tenor_activity` until that job is `succeeded` or
+`failed`. Do not call `tenor_apply_changeset` again and do not pause, cancel or
+finish the task while the job is active. The terminal job `result` is the only
+completion evidence.
+
 Every path and hash is preflighted before the first write. Validation failure
 or a mid-commit failure restores all files. The exact 2051-line-to-5-line
 truncation class is rejected before any write unless an exact three-field
@@ -110,8 +117,10 @@ The same owner-only tool supports `pause`, `resume` and `cancel`. A failed,
 uncommitted write task is cancelled directly without a no-op changeset. Never
 start a replacement task to escape an error.
 
-Use `tenor_activity` to observe every registered agent and its process
-presence, current task, last task, current action, last action and next action.
+Use `tenor_activity` to observe every registered agent, its process presence,
+task actions and redacted durable jobs. Polling also recovers dead workers and
+releases queued capacity. A job failure leaves the task recoverable for a new,
+corrected payload; retry exhaustion is reported explicitly.
 
 ## 5. Safety expectations
 

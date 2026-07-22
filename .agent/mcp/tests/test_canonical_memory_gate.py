@@ -20,8 +20,10 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import canonical_memory_gate, db, discipline, patch_queue, direct_fs_tripwire, scribe_commit_gate, task_context
+from runtime import canonical_memory_gate, db, discipline, graphify_readiness, patch_queue, direct_fs_tripwire, scribe_commit_gate, task_context
+from _workspace_fixture import prepare_graphify_fixture
 import scribe_store as _scribe_store
+import scribe_doctor_checks as _scribe_doctor_checks
 import scribe_doctor_model as _scribe_doctor_model
 
 RESOURCE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
@@ -44,17 +46,17 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.root.mkdir()
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True)
         (self.root / ".agent" / "state" / "outputs").mkdir(parents=True)
-        graphify_dir = self.root / "graphify-out"
-        graphify_dir.mkdir(parents=True)
-        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (graphify_dir / "GRAPH_REPORT.md").write_text("# Canonical Memory Gate Test Graph\n", encoding="utf-8")
-        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         shutil.copy2(ROOT / "AGENT-MEMOIRE_PROJECT_STATUS.scribe", self.root / RESOURCE)
         (self.root / "README.md").write_text("readme\n", encoding="utf-8")
         (self.root / "tracked.txt").write_text("base\n", encoding="utf-8")
         git(self.root, "init")
         git(self.root, "-c", "user.email=test@example.invalid", "-c", "user.name=Test", "add", "AGENT-MEMOIRE_PROJECT_STATUS.scribe", "README.md", "tracked.txt")
         git(self.root, "-c", "user.email=test@example.invalid", "-c", "user.name=Test", "commit", "-m", "init")
+        self.old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self.old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
+        fixture_env = prepare_graphify_fixture(self.root)
+        os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = fixture_env["AGENT_SCRIBE_GRAPHIFY_ROOT"]
+        os.environ[graphify_readiness.FIXTURE_ENV] = fixture_env[graphify_readiness.FIXTURE_ENV]
         self.old_cwd = Path.cwd()
         self.old_root = mcp.server.ROOT
         self.old_agent = mcp.server.AGENT_DIR
@@ -78,6 +80,7 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         mcp.direct_fs_tripwire = direct_fs_tripwire
         mcp.canonical_memory_gate = canonical_memory_gate
         mcp.scribe_commit_gate = scribe_commit_gate
+        mcp._GRAPHIFY_GUARD_CACHE.clear()
         db.init_db(self.root)
         discipline.ensure_schema()
         scribe_commit_gate.ensure_schema()
@@ -88,6 +91,14 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         os.chdir(self.old_cwd)
         mcp.server.ROOT = self.old_root
         mcp.server.AGENT_DIR = self.old_agent
+        if self.old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self.old_root_env
+        if self.old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         self.tmp.cleanup()
 
     def register(self, agent_id: str = AGENT_A) -> None:
@@ -144,86 +155,28 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertIn(marker, original)
         memo_file.write_text(original.replace(marker, f"{entry}{marker}", 1), encoding="utf-8")
 
-    def apply_authorized_scribe_patch(self, ctx: dict[str, str], token: str) -> None:
-        claim_id = self.claim(ctx)
-        lock = call_tool("resource_lock_claim", agent_id=AGENT_A, resource=RESOURCE, ttl_seconds=600, **ctx)
-        self.assertEqual(lock.get("verdict"), "RESOURCE_LOCK_ACQUIRED", lock)
-        original = (self.root / RESOURCE).read_text(encoding="utf-8")
-        marker = "\nmetrics:\n"
-        entry = f"""
-  - id: "JOURNAL-TEST-{token}"
-    date: "2026-06-30"
-    mode: "STANDARD"
-    agent_type: "cli"
-    surface: "canonical-memory"
-    hot_entries_consulted: ["INV-F002", "PAT-GIT-001"]
-    l0_abstract: "CANONICAL_PROMOTION_{token}"
-    pourquoi: "Canonical memory gate test entry for {token}."
-    scribe_delta: "JOURNAL-TEST-{token}"
-"""
-        self.assertIn(marker, original)
-        updated = original.replace(marker, f"{entry}{marker}", 1)
-        diff_text = "".join(
-            subprocess.run(
-                [sys.executable, "-c", "from difflib import unified_diff; import sys; old=open(sys.argv[1],encoding='utf-8').read().splitlines(True); new=open(sys.argv[2],encoding='utf-8').read().splitlines(True); sys.stdout.write(''.join(unified_diff(old,new,fromfile=sys.argv[1],tofile=sys.argv[2])))", str(self.root / RESOURCE), str(self.root / RESOURCE)],
-                cwd=str(self.root),
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout
-        )
-        # The previous subprocess only shells a diff helper; replace the temporary file contents explicitly.
-        scratch = self.root / ".agent" / "state" / "runtime" / f"scribe-{token}.tmp"
-        scratch.write_text(updated, encoding="utf-8")
-        diff_text = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                "from difflib import unified_diff; import sys; old=open(sys.argv[1],encoding='utf-8').read().splitlines(True); new=open(sys.argv[2],encoding='utf-8').read().splitlines(True); sys.stdout.write(''.join(unified_diff(old,new,fromfile=sys.argv[1],tofile=sys.argv[2])))",
-                str(self.root / RESOURCE),
-                str(scratch),
-            ],
-            cwd=str(self.root),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        base_hash = call_tool("file_hash", resource=RESOURCE)["hash"]
-        proposed = call_tool(
-            "propose_patch",
+    def apply_authorized_scribe_patch(self, ctx: dict[str, str], token: str) -> dict[str, Any]:
+        record = call_tool(
+            "scribe_record",
             agent_id=AGENT_A,
-            target=RESOURCE,
-            base_hash=base_hash,
-            diff_text=diff_text,
-            action_lease_id=self.lease(ctx, "propose_patch"),
-            **ctx,
+            request=f"canonical promotion {token}",
+            summary=f"CANONICAL_PROMOTION_{token}",
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
         )
-        self.assertEqual(proposed.get("status"), "PATCH_PROPOSED", proposed)
-        applied = call_tool(
-            "apply_patch",
+        self.assertEqual(record.get("verdict"), "SCRIBE_RECORD_STAGED_ONLY", record)
+        promoted = call_tool(
+            "scribe_promote_record",
             agent_id=AGENT_A,
-            patch_id=proposed["patch_id"],
-            action_lease_id=self.lease(ctx, "apply_patch"),
-            **ctx,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
         )
-        self.assertEqual(applied.get("verdict"), "PATCH_APPLIED", applied)
-        self.release_claim(claim_id)
-        scratch.unlink(missing_ok=True)
-        patch_id = proposed["patch_id"]
-        memo_file = self.root / RESOURCE
-        memo_content = memo_file.read_text(encoding="utf-8")
-        memo_file.write_text(memo_content + f"\n# applied-patch-ref:{patch_id}\n", encoding="utf-8")
-        import hashlib
-        memo_hash = "sha256:" + hashlib.sha256(memo_file.read_bytes()).hexdigest()
-        direct_fs_tripwire.record_authorized_mutation(
-            task_id=ctx.get("task_id", ""), agent_id=AGENT_A,
-            resource=RESOURCE, tool="scribe_patch_proof",
-            project_root=self.root,
-            after_hash=memo_hash,
-        )
-        sq = call_tool("scribe_query", agent_id=AGENT_A, **ctx,
-                       query=f"patch proof {token}", limit=3)
-        self.assertIn(sq.get("verdict"), {"SCRIBE_QUERY_DONE", "SCRIBE_UNAVAILABLE"}, sq)
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        return promoted
 
     def finish(self, ctx: dict[str, str], intent: str = "write", summary: str = "finish", skip_reason: str = "") -> dict[str, Any]:
         lease_id = self.lease(ctx, "finish_task", intent=intent)
@@ -297,16 +250,21 @@ class CanonicalMemoryGateTest(unittest.TestCase):
     def test_10_scribe_rag_context_finds_canonical_entry(self) -> None:
         ctx = self.ready_context()
         token = "CONTEXT_20260630"
-        self.apply_authorized_scribe_patch(ctx, token)
+        promoted = self.apply_authorized_scribe_patch(ctx, token)
 
         store = _scribe_store.load_scribe(self.root / RESOURCE)
-        entry = store.by_id(f"JOURNAL-TEST-{token}")
+        entry = store.by_id(promoted["entry_id"])
         self.assertIsNotNone(entry)
-        self.assertEqual(entry.value.get("l0_abstract"), f"CANONICAL_PROMOTION_{token}")
-        self.assertIn(f"JOURNAL-TEST-{token}", store.search(f"CANONICAL_PROMOTION_{token}", limit=5)[0][1].entity.id if store.search(f"CANONICAL_PROMOTION_{token}", limit=5) else "")
-        proc = subprocess.run([str(SCRIBE_RAG), "context", "--module", "JOURNAL"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        self.assertIn(f"CANONICAL_PROMOTION_{token}", str(entry.value))
+        proc = subprocess.run(
+            [str(SCRIBE_RAG), "query", f"CANONICAL_PROMOTION_{token}"],
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("JOURNAL-003", proc.stdout)
+        self.assertIn(f"CANONICAL_PROMOTION_{token}", proc.stdout)
         result = self.finish(ctx, summary="retrieval proof finish")
         self.assertEqual(result.get("verdict"), "CANONICAL_MEMORY_PROMOTED", result)
         self.assertEqual(result.get("retrieval_ok"), True, result)
@@ -483,11 +441,11 @@ class CanonicalMemoryGateTest(unittest.TestCase):
     def test_19_canonical_delta_present_when_memory_changes(self) -> None:
         ctx = self.ready_context()
         token = "DELTA_20260630"
-        self.apply_authorized_scribe_patch(ctx, token)
+        promoted = self.apply_authorized_scribe_patch(ctx, token)
         result = self.finish(ctx, summary="delta proof")
         self.assertEqual(result.get("verdict"), "CANONICAL_MEMORY_PROMOTED", result)
         self.assertNotEqual(result.get("scribe_delta"), "Aucun", result)
-        self.assertIn(f"JOURNAL-TEST-{token}", str(result.get("scribe_delta") or ""))
+        self.assertIn(promoted["entry_id"], str(result.get("scribe_delta") or ""))
         self.assertEqual(result.get("terminal"), True)
 
     def test_22_yaml_valid_after_canonical_promotion(self) -> None:
@@ -603,6 +561,41 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertEqual(bc.returncode, 0, f"scribe-rag context failed: {bc.stderr}")
         self.assertNotIn("entities: 0", bc.stdout)
         self.assertIn("entities:", bc.stdout)
+
+    def test_26_promoted_entry_passes_the_same_doctor_contract_as_next_init(self) -> None:
+        ctx = self.ready_context(intent="read")
+        record = call_tool(
+            "scribe_record",
+            agent_id=AGENT_A,
+            request="doctor-safe canonical promotion",
+            summary='Doctor-safe summary with "quotes" and # markers',
+            touched_resources=[RESOURCE],
+            verdict="PASS",
+            record_type="validation",
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+        )
+        promoted = call_tool(
+            "scribe_promote_record",
+            agent_id=AGENT_A,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
+            record_path=record["record_path"],
+        )
+        self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
+        self.assertEqual(promoted.get("doctor_validation"), "PASS", promoted)
+
+        raw = (self.root / RESOURCE).read_text(encoding="utf-8")
+        data, findings = _scribe_doctor_model.parse_yaml(raw, self.root / RESOURCE)
+        self.assertIsNotNone(data, findings)
+        entities = _scribe_doctor_model.collect_entities(data)
+        registry = _scribe_doctor_model.collect_registry(data)
+        findings.extend(_scribe_doctor_checks.check_all(data, raw, entities, registry, None))
+        errors = [item for item in findings if item.severity == "ERROR"]
+        self.assertEqual(errors, [])
+        entry = next(item for item in data["canonical"] if item["id"] == promoted["entry_id"])
+        self.assertTrue(entry.get("schema_patch_date"))
+        self.assertTrue(entry.get("status_log"))
 
 
 if __name__ == "__main__":

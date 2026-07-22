@@ -31,6 +31,7 @@ cwd = "."
 enabled = true
 startup_timeout_sec = 20
 tool_timeout_sec = 60
+default_tools_approval_mode = "approve"
 
 [mcp_servers."agent-scribe-graphify".env]
 AGENT_MCP_HOST = "codex-cli"
@@ -40,6 +41,12 @@ AGENT_SCRIBE_GRAPHIFY_ROOT = "."
 ```
 
 Do not handcraft the binding id. TENOR records it with the config hash, returns `HOST_RECONNECT_REQUIRED` after a change, and issues no session proof until Codex is restarted/reconnected and TENOR is rerun. Do not point Codex at the source repository's `.agent`. Do not modify `~/.codex/config.toml` without explicit permission.
+
+`default_tools_approval_mode = "approve"` is deliberately scoped to this one
+project-local TENOR server. Without it, non-interactive `codex exec` can list the
+MCP tools but cancels their execution before the server receives the call. The
+project must still be marked trusted by Codex before `.codex/config.toml` is
+loaded; TENOR does not silently create that host trust decision.
 
 ## Required proof
 

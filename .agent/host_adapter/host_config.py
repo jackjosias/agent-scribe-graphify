@@ -466,6 +466,7 @@ def _codex_block(binding_id: str) -> str:
             "enabled = true",
             "startup_timeout_sec = 20",
             "tool_timeout_sec = 60",
+            'default_tools_approval_mode = "approve"',
             f'[mcp_servers."{SERVER_NAME}".env]',
             *[f"{key} = {_toml_string(value)}" for key, value in sorted(environment.items())],
             _MANAGED_TOML_END,

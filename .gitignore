@@ -15,6 +15,7 @@ graphify-out/
 .agent/state/install/
 .agent/state/outputs/
 .agent/state/redteam/
+.agent/state/smoke/
 .agent/state/**/*.sqlite
 .agent/state/**/*.sqlite-wal
 .agent/state/**/*.sqlite-shm

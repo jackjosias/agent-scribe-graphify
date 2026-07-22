@@ -208,6 +208,7 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         self.assertIn('model = "gpt-5"', content)
         self.assertEqual(content.count("agent-scribe-graphify:host-config:start"), 1)
         self.assertEqual(content.count("agent-scribe-graphify:host-config:end"), 1)
+        self.assertIn('default_tools_approval_mode = "approve"', content)
         binding = json.loads(
             (target / host_config.BINDING_RELATIVE).read_text(encoding="utf-8")
         )

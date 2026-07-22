@@ -18,6 +18,7 @@ if str(MCP_DIR) not in sys.path:
 
 import server_ext as mcp
 from runtime import direct_fs_tripwire
+from _workspace_fixture import prepare_installed_workspace
 
 TIMEOUT_MS = 25_000
 FILE_CONTENT = "line1\nline2\nline3\n"
@@ -50,17 +51,13 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         shutil.copytree(ROOT / ".agent" / "mcp", self.root / ".agent" / "mcp")
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True, exist_ok=True)
         (self.root / ".agent" / "state" / "outputs").mkdir(parents=True, exist_ok=True)
-        graphify_dir = self.root / "graphify-out"
-        graphify_dir.mkdir(parents=True)
-        (graphify_dir / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (graphify_dir / "GRAPH_REPORT.md").write_text("# Graphify Report\n\nEmpty.\n", encoding="utf-8")
-        (graphify_dir / "graph.html").write_text("<html><body></body></html>\n", encoding="utf-8")
         (self.root / "README.md").write_text("test project\n", encoding="utf-8")
         self.entry = self.root / ".agent" / "mcp" / "server_entry.py"
         self._env = {**os.environ, "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.root)}
         subprocess.run(["git", "init"], cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "config", "user.name", "T"], cwd=str(self.root), capture_output=True, env=self._env)
+        self._env = prepare_installed_workspace(self.root)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -82,6 +79,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
 
     def register_and_before(self, intent: str = "read", resource: str = "README.md") -> dict[str, str]:
         reg = self.call("register_agent", host_tool="test", model_name="test")
+        self.assertIn("agent", reg, reg)
         agent_id: str = reg["agent"]["agent_id"]
         bf = self.call("before_task", agent_id=agent_id, request=f"test {intent}", intent=intent, resource=resource)
         self.assertEqual(bf["verdict"], "BEFORE_TASK_OK", bf)
@@ -129,13 +127,17 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         self.assertEqual(res.get("returncode"), 1, sq)
         self.assertIn("stderr", res, sq)
 
-    def _init_memo(self) -> Path:
+    def _init_memo(self, content: str = "baseline memory\n") -> Path:
         memo = self.root / "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
-        memo.write_text("baseline memory\n", encoding="utf-8")
+        memo.write_text(content, encoding="utf-8")
         subprocess.run(["git", "add", "AGENT-MEMOIRE_PROJECT_STATUS.scribe"],
                        cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "commit", "-m", "init memo"],
                        cwd=str(self.root), capture_output=True, env=self._env)
+        # The commit changes the project identity fingerprint. Refresh the
+        # project-local installation exactly as a real TENOR INIT would before
+        # invoking another guarded tool.
+        self._env = prepare_installed_workspace(self.root)
         return memo
 
     def test_scribe_query_success_returns_memory_hash(self) -> None:
@@ -172,6 +174,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
                        cwd=str(self.root), capture_output=True, env=self._env)
         subprocess.run(["git", "commit", "-m", "init memo"],
                        cwd=str(self.root), capture_output=True, env=self._env)
+        self._env = prepare_installed_workspace(self.root)
         ctx = self.register_and_before(intent="write")
         sq = self.call("scribe_query", **ctx, query="README.md context test", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
@@ -306,16 +309,8 @@ class ScribeQueryHonestyTest(unittest.TestCase):
     def test_finish_task_blocks_when_memory_missing_patch_id(self) -> None:
         MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
         _make_scribe_rag(self.root, returncode=0, stdout="memory context for AGENT-MEMOIRE_PROJECT_STATUS.scribe write task")
-        memo = self._init_memo()
-        memo.write_text(FILE_CONTENT, encoding="utf-8")
-        import hashlib
-        memo_after_hash = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
+        self._init_memo(FILE_CONTENT)
         ctx = self.register_and_before(intent="write", resource=MEMOIRE)
-        direct_fs_tripwire.record_authorized_mutation(
-            task_id=ctx["task_id"], agent_id=ctx["agent_id"],
-            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
-            after_hash=memo_after_hash,
-        )
         sq = self.call("scribe_query", **ctx, query="AGENT-MEMOIRE_PROJECT_STATUS.scribe context", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
@@ -339,16 +334,9 @@ class ScribeQueryHonestyTest(unittest.TestCase):
     def test_finish_task_accepts_when_patch_id_in_memory(self) -> None:
         MEMOIRE = "AGENT-MEMOIRE_PROJECT_STATUS.scribe"
         _make_scribe_rag(self.root, returncode=0, stdout="memory context for AGENT-MEMOIRE_PROJECT_STATUS.scribe write task")
-        memo = self._init_memo()
-        memo.write_text(FILE_CONTENT, encoding="utf-8")
+        memo = self._init_memo(FILE_CONTENT)
         import hashlib
-        memo_after_hash = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
         ctx = self.register_and_before(intent="write", resource=MEMOIRE)
-        direct_fs_tripwire.record_authorized_mutation(
-            task_id=ctx["task_id"], agent_id=ctx["agent_id"],
-            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
-            after_hash=memo_after_hash,
-        )
         sq = self.call("scribe_query", **ctx, query="AGENT-MEMOIRE_PROJECT_STATUS.scribe context", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
         self._graphify_query(ctx, ctx["agent_id"])
@@ -360,14 +348,31 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         pid = self._propose(ctx, lease_propose, base, aid, resource=MEMOIRE)
         lease_apply = self._lease(ctx, "apply_patch", aid, resource=MEMOIRE)
         self._apply(ctx, lease_apply, pid, aid, resource=MEMOIRE)
-        self._release_claim(cid, aid)
-        memo.write_text(f"memory referencing patch {pid}\n", encoding="utf-8")
-        memo_after_hash2 = "sha256:" + hashlib.sha256(memo.read_bytes()).hexdigest()
-        direct_fs_tripwire.record_authorized_mutation(
-            task_id=ctx["task_id"], agent_id=aid,
-            resource=MEMOIRE, tool="scribe_record", project_root=self.root,
-            after_hash=memo_after_hash2,
+        # Record the first patch reference through a second real MCP patch.
+        # A direct write plus a fabricated receipt would invalidate the very
+        # tripwire this test is intended to exercise.
+        base2 = self._file_hash(resource=MEMOIRE)
+        lease_propose2 = self._lease(ctx, "propose_patch", aid, resource=MEMOIRE)
+        proposed2 = self._call(
+            "propose_patch",
+            agent_id=aid,
+            target=MEMOIRE,
+            base_hash=base2,
+            diff_text=(
+                "@@ -1,3 +1,4 @@\n"
+                " line2\n"
+                " line2\n"
+                " line3\n"
+                f"+memory referencing patch {pid}\n"
+            ),
+            action_lease_id=lease_propose2,
+            task_id=ctx["task_id"],
+            context_token=ctx["context_token"],
         )
+        self.assertEqual(proposed2.get("status"), "PATCH_PROPOSED", proposed2)
+        lease_apply2 = self._lease(ctx, "apply_patch", aid, resource=MEMOIRE)
+        self._apply(ctx, lease_apply2, proposed2["patch_id"], aid, resource=MEMOIRE)
+        self._release_claim(cid, aid)
         sq2 = self.call("scribe_query", **ctx, query="test", limit=3)
         self.assertIs(sq2.get("ok"), True, sq2)
         from runtime import canonical_memory_gate as _cmg
@@ -410,8 +415,10 @@ class ScribeQueryHonestyTest(unittest.TestCase):
 
         # scribe_query with off-topic content and query that doesn't reference target
         sq = self.call("scribe_query", **ctx, query="edit database pool config", limit=3)
-        self.assertIs(sq.get("ok"), False, sq)
-        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)
+        self.assertIs(sq.get("ok"), True, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_MISS_FOR_WRITE", sq)
+        self.assertEqual(sq.get("state"), "FIRST_WRITE_DISCOVERY_REQUIRED", sq)
+        self.assertEqual(sq.get("must_call", {}).get("tool"), "graphify_query", sq)
         self.assertNotIn("task_context", sq, sq)
 
         # graphify_query should still be callable
@@ -424,7 +431,11 @@ class ScribeQueryHonestyTest(unittest.TestCase):
         claim = self.call("claim_resource", agent_id=aid, resource="README.md",
                           mode="patch_queue", ttl_seconds=600,
                           task_id=ctx["task_id"], context_token=ctx["context_token"])
-        self.assertIn(claim.get("verdict", ""), {"CLAIM_CONTEXT_NOT_READY", "TASK_CONTEXT_NOT_READY"}, claim)
+        self.assertIn(
+            claim.get("verdict", ""),
+            {"CLAIM_CONTEXT_NOT_READY", "TASK_CONTEXT_NOT_READY", "TASK_DISCOVERY_BASE_HASH_REQUIRED"},
+            claim,
+        )
 
         # propose_patch should fail — context not ready (scribe not done)
         base = self.call("file_hash", resource="README.md")["hash"]
@@ -434,7 +445,7 @@ class ScribeQueryHonestyTest(unittest.TestCase):
                           task_id=ctx["task_id"], context_token=ctx["context_token"])
         self.assertIs(prop.get("ok"), False, prop)
         error = prop.get("error", "") or prop.get("verdict", "")
-        self.assertIn("TASK_CONTEXT_NOT_READY", error, prop)
+        self.assertIn(error, {"TASK_CONTEXT_NOT_READY", "TASK_DISCOVERY_BASE_HASH_REQUIRED"}, prop)
 
         # apply_patch should not succeed (scribe not done, so write path blocked)
         ap = self.call("apply_patch", agent_id=aid, patch_id="nonexistent",
@@ -447,25 +458,26 @@ class ScribeQueryHonestyTest(unittest.TestCase):
 
     # ── B2.1: scope gate bypass tests ────────────────────────────────────────
 
-    def test_global_scope_without_reason_blocked(self) -> None:
+    def test_global_scope_without_reason_requires_discovery(self) -> None:
         _make_scribe_rag(self.root, returncode=0, stdout="unrelated database content")
         ctx = self.register_and_before(intent="write", resource="README.md")
         sq = self.call("scribe_query", **ctx, query="project-wide context", limit=3)
-        self.assertIs(sq.get("ok"), False, sq)
-        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)
+        self.assertIs(sq.get("ok"), True, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_MISS_FOR_WRITE", sq)
+        self.assertEqual(sq.get("must_call", {}).get("tool"), "graphify_query", sq)
 
-    def test_global_scope_with_reason_passes(self) -> None:
+    def test_global_scope_reason_cannot_bypass_discovery(self) -> None:
         _make_scribe_rag(self.root, returncode=0, stdout="project unrelated content")
         ctx = self.register_and_before(intent="write", resource="README.md")
         sq = self.call("scribe_query", **ctx, query="project-wide refactor because:global change", limit=3)
         self.assertIs(sq.get("ok"), True, sq)
-        self.assertEqual(sq.get("verdict"), "SCRIBE_QUERY_DONE", sq)
-        self.assertIn("task_context", sq, sq)
-        self.assertIs(sq["task_context"].get("scribe_done"), True, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_MISS_FOR_WRITE", sq)
+        self.assertEqual(sq.get("must_call", {}).get("tool"), "graphify_query", sq)
 
-    def test_generic_token_in_resource_does_not_validate_scope(self) -> None:
+    def test_generic_token_in_resource_requires_discovery(self) -> None:
         _make_scribe_rag(self.root, returncode=0, stdout="unrelated database pool content")
         ctx = self.register_and_before(intent="write", resource="src/utils/helper.py")
         sq = self.call("scribe_query", **ctx, query="edit utility code", limit=3)
-        self.assertIs(sq.get("ok"), False, sq)
-        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_IRRELEVANT_FOR_WRITE", sq)
+        self.assertIs(sq.get("ok"), True, sq)
+        self.assertEqual(sq.get("verdict"), "SCRIBE_CONTEXT_MISS_FOR_WRITE", sq)
+        self.assertEqual(sq.get("must_call", {}).get("tool"), "graphify_query", sq)

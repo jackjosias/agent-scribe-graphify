@@ -24,8 +24,18 @@ try:
     if str(_SCRIBE_SCRIPTS) not in sys.path:
         sys.path.insert(0, str(_SCRIBE_SCRIPTS))
     from scribe_store import load_scribe  # type: ignore
+    from scribe_doctor_checks import check_all as _doctor_check_all  # type: ignore
+    from scribe_doctor_model import (  # type: ignore
+        collect_entities as _doctor_collect_entities,
+        collect_registry as _doctor_collect_registry,
+        parse_yaml as _doctor_parse_yaml,
+    )
 except Exception:
     load_scribe = None  # type: ignore
+    _doctor_check_all = None  # type: ignore
+    _doctor_collect_entities = None  # type: ignore
+    _doctor_collect_registry = None  # type: ignore
+    _doctor_parse_yaml = None  # type: ignore
 
 CANONICAL_MEMORY_REQUIRED = "CANONICAL_MEMORY_REQUIRED"
 CANONICAL_MEMORY_PROMOTED = "CANONICAL_MEMORY_PROMOTED"
@@ -588,31 +598,74 @@ def _canonical_entry_block(
     record_type = str(record.get("record_type") or record.get("type") or "journal").strip().lower() or "journal"
     status = _canonical_status(record_type, memory_policy, str(record.get("verdict") or ""))
     summary = _canonical_summary(record)
-    evidence = source_record_path.replace('"', '\"')
-    source_name = Path(source_record_path).name.replace('"', '\"')
-    digest = source_record_digest.replace('"', '\"')
-    scope_value = scope.replace('"', '\"') or "project"
+    summary_value = json.dumps(summary, ensure_ascii=False)
+    evidence = json.dumps(source_record_path, ensure_ascii=False)
+    source_name = json.dumps(Path(source_record_path).name, ensure_ascii=False)
+    digest = json.dumps(source_record_digest, ensure_ascii=False)
+    scope_value = json.dumps(scope or "project", ensure_ascii=False)
     policy_value = normalize_memory_policy(memory_policy) or "local_only"
     date_value = time.strftime("%Y-%m-%d", time.gmtime(int(record.get("timestamp") or _now())))
+    promoted_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     entry = [
         f'  - id: "{entry_id}"',
         f'    date: "{date_value}"',
+        f'    schema_patch_date: "{date_value}"',
         f'    type: "{record_type}"',
-        f'    scope: "{scope_value}"',
+        f"    scope: {scope_value}",
         f'    status: "{status}"',
-        "    summary: >",
-        f'      {summary}',
+        "    status_log:",
+        f'      - at: "{promoted_at}"',
+        f'        status: "{status}"',
+        f"        source: {evidence}",
+        f"    summary: {summary_value}",
         "    evidence:",
-        f'      - "{evidence}"',
+        f"      - {evidence}",
         "    result:",
         "      canonical_memory_promoted: true",
-        f'      source_record: "{source_name}"',
-        f'      source_record_path: "{evidence}"',
-        f'      source_record_digest: "{digest}"',
+        f"      source_record: {source_name}",
+        f"      source_record_path: {evidence}",
+        f"      source_record_digest: {digest}",
         f'      memory_policy: "{policy_value}"',
-        f'      promoted_at: "{time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}"',
+        f'      promoted_at: "{promoted_at}"',
     ]
     return "\n".join(entry) + "\n"
+
+
+def _validate_canonical_candidate(raw: str, scribe_path: Path) -> dict[str, Any]:
+    if any(
+        helper is None
+        for helper in (
+            _doctor_parse_yaml,
+            _doctor_collect_entities,
+            _doctor_collect_registry,
+            _doctor_check_all,
+        )
+    ):
+        return {
+            "ok": False,
+            "errors": [
+                {
+                    "code": "SCRIBE_DOCTOR_UNAVAILABLE",
+                    "location": str(scribe_path),
+                    "message": "Canonical promotion cannot be validated before replacement.",
+                }
+            ],
+        }
+    data, findings = _doctor_parse_yaml(raw, scribe_path)
+    if data is not None:
+        entities = _doctor_collect_entities(data)
+        registry = _doctor_collect_registry(data)
+        findings.extend(_doctor_check_all(data, raw, entities, registry, None))
+    errors = [
+        {
+            "code": item.code,
+            "location": item.location,
+            "message": item.message,
+        }
+        for item in findings
+        if item.severity == "ERROR"
+    ]
+    return {"ok": not errors, "errors": errors}
 
 
 def _append_canonical_entry_text(existing: str, entry_block: str) -> str:
@@ -685,6 +738,19 @@ def promote_record(
         source_record_digest,
     )
     new_content = _append_canonical_entry_text(existing, entry_block)
+    doctor = _validate_canonical_candidate(new_content, scribe_path)
+    if not doctor.get("ok"):
+        return {
+            "ok": False,
+            "verdict": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "state": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "reason": "The candidate SCRIBE entry failed doctor validation before replacement.",
+            "canonical_memory_file": str(scribe_path.relative_to(root)),
+            "record_path": record_path,
+            "entry_id": entry_id,
+            "doctor_errors": doctor.get("errors", []),
+            "canonical_memory_updated": False,
+        }
     tmp = tempfile.NamedTemporaryFile(
         "w",
         encoding="utf-8",
@@ -714,6 +780,7 @@ def promote_record(
             agent_id=agent_id,
             resource=scribe_path_str,
             tool="scribe_promote_record",
+            patch_id=entry_id,
             before_hash=before_hash,
             after_hash=after_hash,
             project_root=root,
@@ -728,4 +795,5 @@ def promote_record(
         "already_promoted": False,
         "canonical_memory_updated": True,
         "source_record_digest": source_record_digest,
+        "doctor_validation": "PASS",
     }

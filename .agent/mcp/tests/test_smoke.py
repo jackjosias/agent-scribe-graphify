@@ -23,7 +23,7 @@ SERVER_ENTRY = str(MCP_DIR / "server_entry.py")
 
 PROJECT_ROOT = Path(os.environ.get(
     "AGENT_SCRIBE_GRAPHIFY_ROOT",
-    Path(__file__).resolve().parents[4],
+    Path(__file__).resolve().parents[3],
 )).resolve()
 
 INTERNAL_TOOL_SUBSET = {
@@ -202,12 +202,19 @@ class SmokeTestServer(unittest.TestCase):
 
     def tearDown(self) -> None:
         if self.proc:
+            if self.proc.stdin:
+                self.proc.stdin.close()
             self.proc.terminate()
             try:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait()
+            if self.proc.stdout:
+                self.proc.stdout.close()
+            if self.proc.stderr:
+                self.proc.stderr.close()
+            self.proc = None
 
     # ── tests ──────────────────────────────────────────────────────────────
 

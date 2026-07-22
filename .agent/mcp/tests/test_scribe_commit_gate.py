@@ -16,7 +16,8 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import db, discipline, patch_queue, scribe_commit_gate, task_context
+from runtime import db, discipline, graphify_readiness, patch_queue, scribe_commit_gate, task_context
+from _workspace_fixture import prepare_graphify_fixture
 
 RESOURCE = "tracked.txt"
 AGENT_A = "gate-agent-a"
@@ -39,31 +40,29 @@ def call_tool(name: str, **args: Any) -> dict[str, Any]:
 
 
 def list_tool_names() -> set[str]:
-    result = mcp.handle({"jsonrpc": "2.0", "id": "tools", "method": "tools/list", "params": {}})
-    return {tool["name"] for tool in result["result"]["tools"]}
+    return set(mcp.server.TOOLS)
 
 
 def tool_schema(name: str) -> dict[str, Any]:
-    for tool in mcp.list_tools():
-        if tool["name"] == name:
-            return tool["inputSchema"]
-    raise AssertionError(f"tool missing: {name}")
+    if name not in mcp.server.TOOLS:
+        raise AssertionError(f"tool missing: {name}")
+    return mcp.tool_schema(name)
 
 
 class ScribeCommitGateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.old_cwd = Path.cwd()
+        self.old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self.old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         self.root = Path(tempfile.mkdtemp(prefix="scribe-gate-"))
         os.chdir(self.root)
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True, exist_ok=True)
         (self.root / ".agent" / "state" / "patch_queue").mkdir(parents=True, exist_ok=True)
         (self.root / "scribe-out" / "records").mkdir(parents=True, exist_ok=True)
-        graph = self.root / "graphify-out"
-        graph.mkdir(parents=True, exist_ok=True)
-        (graph / "graph.json").write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-        (graph / "GRAPH_REPORT.md").write_text("# Report\n", encoding="utf-8")
-        (graph / "graph.html").write_text("<html></html>\n", encoding="utf-8")
         (self.root / RESOURCE).write_text("line1\n", encoding="utf-8")
+        fixture_env = prepare_graphify_fixture(self.root)
+        os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = fixture_env["AGENT_SCRIBE_GRAPHIFY_ROOT"]
+        os.environ[graphify_readiness.FIXTURE_ENV] = fixture_env[graphify_readiness.FIXTURE_ENV]
         mcp.server.ROOT = self.root.resolve()
         mcp.server.AGENT_DIR = mcp.server.ROOT / ".agent"
         importlib.reload(db)
@@ -76,12 +75,21 @@ class ScribeCommitGateTest(unittest.TestCase):
         mcp.task_context = task_context
         mcp.discipline = discipline
         mcp.scribe_commit_gate = scribe_commit_gate
+        mcp._GRAPHIFY_GUARD_CACHE.clear()
         db.init_db(self.root)
         discipline.ensure_schema()
         scribe_commit_gate.ensure_schema()
 
     def tearDown(self) -> None:
         os.chdir(self.old_cwd)
+        if self.old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self.old_root_env
+        if self.old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         shutil.rmtree(self.root, ignore_errors=True)
 
     def register(self, agent_id: str = AGENT_A) -> None:

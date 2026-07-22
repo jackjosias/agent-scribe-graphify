@@ -16,10 +16,9 @@ MCP_DIR = HERE.parent
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime.state_paths import prepare_state_dirs
-
 import server_ext as mcp
 from runtime import direct_fs_tripwire, graphify_readiness
+from _workspace_fixture import prepare_graphify_fixture
 
 
 def call_tool(name: str, **args: Any) -> dict[str, Any]:
@@ -50,13 +49,12 @@ class DirectFsTripwireTest(unittest.TestCase):
         self.old_cwd = Path.cwd()
         self.old_root = mcp.server.ROOT
         self.old_agent = mcp.server.AGENT_DIR
+        self.old_root_env = os.environ.get("AGENT_SCRIBE_GRAPHIFY_ROOT")
+        self.old_fixture_env = os.environ.get(graphify_readiness.FIXTURE_ENV)
         os.chdir(self.root)
-        graphify_out = prepare_state_dirs(self.root)["graphify_out"]
-        graphify_out.mkdir(parents=True, exist_ok=True)
-        for name, content in (("graph.json", "{\"nodes\":[{\"id\":\"tracked\"}],\"edges\":[]}"), ("GRAPH_REPORT.md", "# Tripwire Test Graph Report\nNodes: 1\nEdges: 0\n"), ("graph.html", "<html><body></body></html>\n")):
-            (graphify_out / name).write_text(content, encoding="utf-8")
-        manifest = graphify_readiness.write_graphify_manifest(self.root)
-        self.assertTrue(manifest["ok"], manifest)
+        fixture_env = prepare_graphify_fixture(self.root)
+        os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = fixture_env["AGENT_SCRIBE_GRAPHIFY_ROOT"]
+        os.environ[graphify_readiness.FIXTURE_ENV] = fixture_env[graphify_readiness.FIXTURE_ENV]
         mcp.server.ROOT = self.root.resolve()
         mcp.server.AGENT_DIR = self.root / ".agent"
         self.agent = call_tool("bootstrap", host_tool="tripwire-test", model_name="test", run_legacy_bootstrap=False)["agent"]["agent_id"]
@@ -65,6 +63,14 @@ class DirectFsTripwireTest(unittest.TestCase):
         os.chdir(self.old_cwd)
         mcp.server.ROOT = self.old_root
         mcp.server.AGENT_DIR = self.old_agent
+        if self.old_root_env is None:
+            os.environ.pop("AGENT_SCRIBE_GRAPHIFY_ROOT", None)
+        else:
+            os.environ["AGENT_SCRIBE_GRAPHIFY_ROOT"] = self.old_root_env
+        if self.old_fixture_env is None:
+            os.environ.pop(graphify_readiness.FIXTURE_ENV, None)
+        else:
+            os.environ[graphify_readiness.FIXTURE_ENV] = self.old_fixture_env
         self.tmp.cleanup()
 
     def before(self, intent: str = "write", resource: str = "tracked.txt") -> dict[str, str]:

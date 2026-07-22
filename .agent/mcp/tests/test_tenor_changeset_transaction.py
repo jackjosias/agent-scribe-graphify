@@ -207,6 +207,57 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
         self.assertEqual((self.root / "src" / "b.txt").read_text(encoding="utf-8"), "beta\n")
 
+    def test_validator_output_is_streamed_into_bounded_tail_buffers(self) -> None:
+        results = tenor_changeset._run_validators([{
+            "argv": [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.write('A' * 1000000); sys.stderr.write('B' * 1000000)",
+            ],
+            "cwd": self.root,
+            "cwd_display": ".",
+            "timeout_seconds": 20,
+        }])
+        self.assertTrue(results[0]["ok"], results)
+        self.assertEqual(len(results[0]["stdout"].encode("utf-8")), tenor_changeset.MAX_VALIDATOR_OUTPUT_BYTES)
+        self.assertEqual(len(results[0]["stderr"].encode("utf-8")), tenor_changeset.MAX_VALIDATOR_OUTPUT_BYTES)
+        self.assertEqual(set(results[0]["stdout"]), {"A"})
+        self.assertEqual(set(results[0]["stderr"]), {"B"})
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group liveness assertion")
+    def test_validator_timeout_kills_descendant_process_group(self) -> None:
+        child_pid_path = self.root / "child.pid"
+        script = (
+            "import pathlib,subprocess,sys,time; "
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+            "pathlib.Path('child.pid').write_text(str(child.pid)); time.sleep(30)"
+        )
+        started = time.monotonic()
+        results = tenor_changeset._run_validators([{
+            "argv": [sys.executable, "-c", script],
+            "cwd": self.root,
+            "cwd_display": ".",
+            "timeout_seconds": 1,
+        }])
+        duration = time.monotonic() - started
+        self.assertTrue(results[0]["timed_out"], results)
+        self.assertEqual(results[0]["returncode"], 124)
+        self.assertLess(duration, 8.0, results)
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        deadline = time.monotonic() + 3
+        alive = True
+        while time.monotonic() < deadline:
+            stat = Path(f"/proc/{child_pid}/stat")
+            if not stat.exists():
+                alive = False
+                break
+            fields = stat.read_text(encoding="utf-8").split()
+            if len(fields) > 2 and fields[2] == "Z":
+                alive = False
+                break
+            time.sleep(0.05)
+        self.assertFalse(alive, f"validator descendant {child_pid} survived timeout")
+
     def test_validator_target_mutation_is_detected_and_rolled_back(self) -> None:
         result = self.apply(
             [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
@@ -236,6 +287,56 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK")
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
         self.assertEqual((self.root / "src" / "b.txt").read_text(encoding="utf-8"), "beta\n")
+
+    def test_precommit_guard_failure_rolls_back_declared_files_before_commit(self) -> None:
+        observed: list[str] = []
+
+        def guard(provisional: dict[str, object]) -> dict[str, object]:
+            observed.append((self.root / "src" / "a.txt").read_text(encoding="utf-8"))
+            return {
+                "ok": False,
+                "verdict": "DIRECT_WRITE_BYPASS_DETECTED",
+                "workspace_audit": {"suspects": [{"path": "README.md"}]},
+            }
+
+        result = self.apply(
+            [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
+            precommit_guard=guard,
+            request_id="precommit-guard-reject",
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_PRECOMMIT_GUARD_FAILED_ROLLED_BACK")
+        self.assertEqual(observed, ["alpha-2\n"])
+        self.assertEqual(result["restored"], ["src/a.txt"])
+        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+        with db.connect(self.root) as con:
+            row = con.execute(
+                f"SELECT status FROM {tenor_changeset.TRANSACTION_TABLE} WHERE changeset_id=?",
+                (result["changeset_id"],),
+            ).fetchone()
+        self.assertEqual(row["status"], "rolled_back")
+
+    def test_precommit_guard_runs_before_committed_receipt_is_published(self) -> None:
+        statuses: list[str] = []
+
+        def guard(provisional: dict[str, object]) -> dict[str, object]:
+            with db.connect(self.root) as con:
+                row = con.execute(
+                    f"SELECT status FROM {tenor_changeset.TRANSACTION_TABLE} WHERE changeset_id=?",
+                    (provisional["changeset_id"],),
+                ).fetchone()
+            statuses.append(str(row["status"]))
+            return {"ok": True, "verdict": "PRECOMMIT_GUARD_CLEAN"}
+
+        result = self.apply(
+            [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
+            precommit_guard=guard,
+            request_id="precommit-guard-pass",
+        )
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(statuses, ["guarding"])
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_COMMITTED")
+        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha-2\n")
 
     def test_idempotent_retry_returns_original_receipt(self) -> None:
         changes = [self.change("src/a.txt", "alpha\n", "alpha-2\n")]

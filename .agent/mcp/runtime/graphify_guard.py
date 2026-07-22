@@ -20,8 +20,8 @@ GRAPHIFY_CLI_NAME = "graphify"
 GRAPHIFY_OUT_DIR = "graphify-out"
 GRAPHIFY_REQUIRED_FILES = list(graphify_readiness.REQUIRED_FILES)
 INSTALL_GUIDE_REL_PATH = ".agent/docs/GRAPHIFY_INSTALL_REQUIRED.md"
-_SUBCMD_TIMEOUT = 15
-_SUBCMD_RETRY_COUNT = 2
+_SUBCMD_TIMEOUT = 5
+_SUBCMD_RETRY_COUNT = 1
 _SUBCMD_RETRY_DELAY = 1.0
 _MIN_PYTHON = (3, 10)
 
@@ -112,11 +112,14 @@ def validate_graphify_installation() -> dict[str, Any]:
     if binary is None:
         return {"ok": False, "verdict": VERDICT_BINARY_MISSING, "version": None, **base}
     probe = _safe_subprocess([str(binary), "--version"])
+    successful_probe = probe
     if not probe["ok"]:
         help_probe = _safe_subprocess([str(binary), "--help"])
         if not help_probe["ok"]:
             return {"ok": False, "verdict": VERDICT_BINARY_FAILED, "version": None, "reason": probe.get("error") or probe.get("stderr") or "binary did not respond", **base}
-    return {"ok": True, "verdict": VERDICT_BINARY_FOUND, "version": get_graphify_version(), **base}
+        successful_probe = help_probe
+    version = (successful_probe.get("stdout") or successful_probe.get("stderr") or "").strip() or None
+    return {"ok": True, "verdict": VERDICT_BINARY_FOUND, "version": version, **base}
 
 
 def validate_graphify_outputs(workspace_root: Path | str | None = None) -> dict[str, Any]:
@@ -195,12 +198,16 @@ current for the workspace.
 {install}
 ```
 
-Then, from the project root:
+Then, from the project root, rerun canonical TENOR INIT. It owns the bounded
+Graphify rebuild and continues without a second user turn:
 
 ```text
-.agent/workflow/scribe/scribe graph --project-build --timeout 180
 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>
 ```
+
+The explicit `scribe graph --project-build --timeout 180` command is reserved
+for a human or CI maintenance operation outside host-driven TENOR INIT. A host
+model must not request it or retry it with a different bound.
 
 The generated files must live in `.agent/state/outputs/graphify-out/` and include
 `graph.json`, `GRAPH_REPORT.md`, `graph.html`, and the project-bound
@@ -215,9 +222,50 @@ def write_graphify_install_guide(workspace_root: Path | str | None = None, host_
 
 def check_graphify_required(workspace_root: Path | str | None = None, host_type: str = "unknown", auto_write_guide: bool = True) -> dict[str, Any]:
     root = Path(workspace_root or Path.cwd()).resolve()
-    installation = validate_graphify_installation()
     readiness = graphify_readiness.inspect_graphify_readiness(root)
     if readiness.ok:
+        fixture_authorized = (
+            readiness.manifest_kind == "smoke_fixture"
+            and os.environ.get(graphify_readiness.FIXTURE_ENV, "").strip() == "1"
+        )
+        if fixture_authorized:
+            return {
+                "ok": True,
+                "verdict": VERDICT_READY,
+                "blocking": False,
+                "write_allowed": True,
+                "binary": {
+                    "ok": True,
+                    "verdict": "GRAPHIFY_TEST_FIXTURE_BINARY_BYPASS",
+                    "test_only": True,
+                },
+                "outputs": readiness.to_dict(),
+            }
+        installation = validate_graphify_installation()
+        if not installation.get("ok"):
+            guide = str(root / INSTALL_GUIDE_REL_PATH)
+            if auto_write_guide and not Path(guide).is_file():
+                write_result = write_graphify_install_guide(root, host_type)
+                guide = write_result.get("path", guide)
+            return {
+                "ok": False,
+                "verdict": installation.get("verdict", VERDICT_BINARY_MISSING),
+                "blocking": True,
+                "write_allowed": False,
+                "reason": (
+                    "The current graph can still serve read-only retrieval, but a real Graphify "
+                    "CLI is required before the first source mutation so the next session can "
+                    "rebuild a stale graph."
+                ),
+                "binary": installation,
+                "outputs": readiness.to_dict(),
+                "guide": guide,
+                "next_actions": [
+                    "install_graphify",
+                    graphify_readiness.PROJECT_BUILD_ACTION,
+                    "rerun_tenor_init",
+                ],
+            }
         return {
             "ok": True,
             "verdict": VERDICT_READY,
@@ -227,8 +275,10 @@ def check_graphify_required(workspace_root: Path | str | None = None, host_type:
             "outputs": readiness.to_dict(),
         }
 
+    installation = validate_graphify_installation()
+
     guide = str(root / INSTALL_GUIDE_REL_PATH)
-    if auto_write_guide:
+    if auto_write_guide and not Path(guide).is_file():
         write_result = write_graphify_install_guide(root, host_type)
         if write_result.get("ok"):
             guide = str(write_result["path"])

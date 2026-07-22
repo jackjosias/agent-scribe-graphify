@@ -45,8 +45,7 @@ class RootHygieneTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_01_tool_schema_exists(self) -> None:
-        names = {tool["name"] for tool in mcp.list_tools()}
-        self.assertIn("root_hygiene_status", names)
+        self.assertIn("root_hygiene_status", mcp.server.TOOLS)
         schema = mcp.tool_schema("root_hygiene_status")
         self.assertIn("strict", schema.get("properties", {}))
 

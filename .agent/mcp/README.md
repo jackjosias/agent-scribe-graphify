@@ -25,13 +25,16 @@ Normal task tools:
    retrieved evidence, canonical-memory hash, Graphify-manifest hash and exact
    resources.
 2. The host inspects the relevant code and prepares all intended file changes.
-3. `tenor_apply_changeset(task_id, changes, validators, request_id)` performs
-   path/scope/hash/lock preflight for every file before the first write,
-   applies the complete set, runs validator argv arrays without a shell, then
-   commits all files or rolls all files back. At least one validator is
-   mandatory. It records the runtime SCRIBE receipt, evaluates memory admission
-   and closes only after `promote`, justified `runtime_only`, or an explicit
-   user resolution.
+3. `tenor_apply_changeset(task_id, changes, validators, request_id)` verifies
+   ownership, task context and the decision capsule, persists an idempotent job,
+   launches an isolated worker and returns `TENOR_CHANGESET_ACCEPTED` without
+   holding the MCP stdio loop. This verdict is explicitly non-terminal.
+4. After `poll_after_ms`, call `tenor_activity`. The worker preflights every
+   path/scope/hash/lock before the first write, applies the complete set, runs
+   bounded validator argv arrays without a shell, then commits all files or
+   rolls all files back. Its terminal job result carries validator evidence,
+   SCRIBE admission, capsule resolution and task closure. Never resubmit or
+   call task control while the job is queued, launching or running.
 
 The changeset supports structured `edit`, unified `patch`, full-file `replace`,
 `create` and confirmed `delete` operations. `edit` applies multiple unique
@@ -44,9 +47,15 @@ stable `request_id` makes retry safe and detects conflicting reuse.
 ## Read and control flow
 
 Use `tenor_task_control(action="finish")` to close a read task. The same tool
-supports owner-only pause, resume and cancel. `tenor_activity` returns a
-consolidated snapshot containing agents, presence, tasks, current action, last
-action and next action.
+supports owner-only pause, resume and cancel, but returns
+`TENOR_TASK_CONTROL_JOB_ACTIVE` while a changeset worker is active.
+`tenor_activity` recovers dead workers, launches queued work and returns tasks,
+presence and redacted durable job states/results.
+
+`graphify_project_build` follows the same acceptance model when a rebuild is
+required: `GRAPHIFY_BUILD_ACCEPTED` is non-terminal and
+`graphify_required_check` is the polling endpoint. A current graph still
+returns `GRAPHIFY_ALREADY_READY` synchronously.
 
 A failed uncommitted task is cancelled without a no-op changeset. If concurrent
 canonical memory or Graphify publication makes the decision capsule stale, the

@@ -10,9 +10,9 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from runtime import db, patch_queue
+from runtime import bounded_process, db, patch_queue
 
 
 NEW_FILE_HASH = patch_queue.NEW_FILE_HASH
@@ -28,6 +28,7 @@ STALE_TRANSACTION_SECONDS = LOCK_TTL_SECONDS + MAX_VALIDATOR_TIMEOUT_SECONDS
 LOCK_TABLE = "resource_exclusive_locks"
 TRANSACTION_TABLE = "tenor_changesets_v1"
 FILE_TABLE = "tenor_changeset_files_v1"
+PrecommitGuard = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 class ChangesetError(RuntimeError):
@@ -573,7 +574,7 @@ def recover_incomplete(project_root: Path) -> dict[str, Any]:
     recovered: list[str] = []
     with db.connect(project_root) as con:
         rows = con.execute(
-            f"SELECT changeset_id,owner_pid,updated_at FROM {TRANSACTION_TABLE} WHERE status IN ('staging','applying','validating','rollback_required') ORDER BY created_at",
+            f"SELECT changeset_id,owner_pid,updated_at FROM {TRANSACTION_TABLE} WHERE status IN ('staging','applying','validating','guarding','rollback_required') ORDER BY created_at",
         ).fetchall()
     for row in rows:
         age_seconds = max(0, _now() - int(row["updated_at"] or 0))
@@ -601,26 +602,16 @@ def _run_validators(validators: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for validator in validators:
         started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = bounded_process.run_bounded(
                 validator["argv"],
-                cwd=str(validator["cwd"]),
-                shell=False,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                capture_output=True,
-                timeout=validator["timeout_seconds"],
-                check=False,
+                cwd=validator["cwd"],
+                timeout_seconds=validator["timeout_seconds"],
+                output_limit_bytes=MAX_VALIDATOR_OUTPUT_BYTES,
             )
             returncode = completed.returncode
-            stdout = completed.stdout[-MAX_VALIDATOR_OUTPUT_BYTES:]
-            stderr = completed.stderr[-MAX_VALIDATOR_OUTPUT_BYTES:]
-            timed_out = False
-        except subprocess.TimeoutExpired as exc:
-            returncode = 124
-            stdout = str(exc.stdout or "")[-MAX_VALIDATOR_OUTPUT_BYTES:]
-            stderr = str(exc.stderr or "")[-MAX_VALIDATOR_OUTPUT_BYTES:]
-            timed_out = True
+            stdout = completed.stdout
+            stderr = completed.stderr
+            timed_out = completed.timed_out
         except (FileNotFoundError, OSError) as exc:
             returncode = 127
             stdout = ""
@@ -673,6 +664,7 @@ def apply_changeset(
     confirm_deletions: list[str] | None = None,
     confirm_full_replacements: list[dict[str, Any]] | None = None,
     request_id: str = "",
+    precommit_guard: PrecommitGuard | None = None,
     _test_fail_after_replaces: int | None = None,
 ) -> dict[str, Any]:
     root = project_root.resolve()
@@ -857,15 +849,43 @@ def apply_changeset(
         ]
         result = {
             "ok": True,
-            "verdict": "TENOR_CHANGESET_COMMITTED",
+            "verdict": "TENOR_CHANGESET_GUARDING" if precommit_guard is not None else "TENOR_CHANGESET_COMMITTED",
             "changeset_id": changeset_id,
             "request_id": request_id,
             "task_id": task_id,
             "agent_id": agent_id,
             "files": files,
             "validators": validation_results,
-            "committed_at": _now(),
         }
+        if precommit_guard is not None:
+            _update_transaction(root, changeset_id, "guarding", result=result)
+            try:
+                guard = precommit_guard(dict(result))
+            except Exception as exc:
+                guard = {
+                    "ok": False,
+                    "verdict": "TENOR_CHANGESET_PRECOMMIT_GUARD_EXCEPTION",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            if not isinstance(guard, dict) or not guard.get("ok"):
+                restored = _rollback(root, changeset_id)
+                error = {
+                    "verdict": "TENOR_CHANGESET_PRECOMMIT_GUARD_FAILED_ROLLED_BACK",
+                    "guard": guard if isinstance(guard, dict) else {"value": repr(guard)},
+                    "restored": restored,
+                    "validators": validation_results,
+                }
+                _update_transaction(root, changeset_id, "rolled_back", error=error)
+                return {
+                    "ok": False,
+                    "verdict": error["verdict"],
+                    "changeset_id": changeset_id,
+                    "guard": error["guard"],
+                    "restored": restored,
+                    "validators": validation_results,
+                }
+        result["verdict"] = "TENOR_CHANGESET_COMMITTED"
+        result["committed_at"] = _now()
         _update_transaction(root, changeset_id, "committed", result=result)
         return result
     except ChangesetError as exc:
