@@ -1,0 +1,76 @@
+name: Temporary stabilized ChatGPT transcript export 6a612e4c
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install extraction dependencies
+        run: python -m pip install --disable-pip-version-check curl-cffi beautifulsoup4
+
+      - name: Extract and stabilize complete visible conversation
+        env:
+          SHARE_URL: https://chatgpt.com/share/6a612e4c-3a64-83ea-aa27-a89b7d314509
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p tmp_chat_export_6a612e4c/result
+          python tmp_chat_export_6a612e4c/export.py 2>&1 | tee tmp_chat_export_6a612e4c/result/run.log
+
+      - name: Verify integrity and proven end
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="tmp_chat_export_6a612e4c/result"
+          DIAG="$ROOT/diagnostics.txt"
+          COMPARE="$ROOT/double-fetch-comparison.txt"
+          TXT="$ROOT/conversation-chatgpt-public-6a612e4c-3a64-83ea-aa27-a89b7d314509-INTEGRALE.txt"
+          test -s "$DIAG"
+          test -s "$COMPARE"
+          test -s "$TXT"
+          grep -q '^share_url=https://chatgpt.com/share/6a612e4c-3a64-83ea-aa27-a89b7d314509$' "$DIAG"
+          grep -q '^DOUBLE_FETCH_STABILIZATION=PASS$' "$COMPARE"
+          grep -q '^FIN_REELLE_DU_PARTAGE_VERIFIEE=OUI$' "$DIAG"
+          grep -q '^AUCUN_MESSAGE_VISIBLE_MANQUANT_SELON_DOUBLE_RECUPERATION=OUI$' "$DIAG"
+          grep -q '^EXTRACTION_INTEGRALE_VALIDEE=OUI$' "$DIAG"
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          diag = Path('tmp_chat_export_6a612e4c/result/diagnostics.txt').read_text(encoding='utf-8')
+          required = {
+              'visible_entries': 2,
+              'visible_user_messages': 1,
+              'visible_assistant_messages': 1,
+          }
+          for key, minimum in required.items():
+              match = re.search(rf'^{key}=(\d+)$', diag, re.M)
+              if not match or int(match.group(1)) < minimum:
+                  raise SystemExit(f'Integrity failure: {key} < {minimum}')
+          print(diag)
+          PY
+
+      - name: Upload transcript and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-public-6a612e4c-integrale
+          path: tmp_chat_export_6a612e4c/result/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
