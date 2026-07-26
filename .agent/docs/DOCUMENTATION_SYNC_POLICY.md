@@ -96,6 +96,8 @@ Examples of forbidden drift:
 - copying global host paths into a workspace-local guide;
 - keeping a dated test count or baseline as a current architectural truth;
 - documenting a fallback that bypasses an explicit safety verdict;
+- requiring a manual/global Graphify install after TENOR became responsible for the pinned project-local runtime;
+- claiming Graphify zero-setup without wheel-hash, runtime-integrity, fresh-copy and second-INIT proofs;
 - updating a checked-in doc but leaving the generator on the old paradigm.
 
 ## Proof vocabulary

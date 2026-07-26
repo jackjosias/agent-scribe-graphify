@@ -37,6 +37,14 @@ Invariant terrain V2.16.1 : sur `TENOR_INIT_SAME_PROJECT`, l'init ne répare jam
 
 Invariant terrain V2.16.2 : une purge requise réinitialise le runtime projet-lié mais préserve `.agent/state/outputs/` byte-for-byte. La destination canonique gagne lors d'un conflit avec un output legacy, qui est déplacé sous `_legacy_migrated/`. Un Graphify préservé doit encore réussir les contrôles root/fingerprint avant toute readiness.
 
+Invariant zéro-setup Graphify : aucune installation globale de Graphify n'est
+requise. Si le runtime manque, TENOR INIT télécharge le wheel officiel épinglé
+`graphifyy==0.9.26`, vérifie son SHA-256, installe ses dépendances contraintes
+dans `.agent/state/runtime/toolchains/graphify/`, vérifie le manifeste
+d'intégrité, puis construit le graphe dans la même invocation. Une erreur de
+politique, téléchargement, hash, dépendance, probe ou intégrité échoue
+explicitement sans publier de runtime partiel.
+
 ## Ordre de vérité V2.16
 
 ```text
@@ -47,6 +55,7 @@ PRESERVE_CANONICAL_OUTPUTS
 MIGRATE_AND_QUARANTINE_LEGACY_CONFLICTS
 ADOPT_PROJECT
 ADOPT_MEMORY
+PROVISION_AND_VERIFY_LOCAL_GRAPHIFY_RUNTIME_IF_REQUIRED
 VERIFY_GRAPH
 FINALIZE_INSTALLATION
 DETECT_AND_CONFIGURE_VERIFIED_HOST
@@ -64,7 +73,7 @@ La copie brute et complète de `.agent/` dans un autre projet est un chemin d'in
 
 ## État actuel
 
-La branche V2.16 a prouvé :
+`main` contient la correction V2.16 fusionnée. La phase zéro-setup ajoute :
 
 - nouvelle installation, même projet et relocation sûre ;
 - préservation exacte de la mémoire SCRIBE cible ;
@@ -75,8 +84,15 @@ La branche V2.16 a prouvé :
 - concurrence et atomicité sur Linux, macOS et Windows ;
 - validation profonde et red-team ;
 - adoption terrain sur une copie isolée d'une codebase de plus de 1 000 fichiers.
+- provisioning Graphify project-local, versionné, vérifié et single-flight ;
+- replay local depuis une copie brute sans commande `graphify` globale ;
+- premier INIT avec graphe réel, second INIT idempotent et bridge
+  `TENOR_INIT_READY`.
 
-Le gate encore volontairement ouvert avant fusion est la preuve dans un **host LLM réel** : tools visibles, root binding, `tenor_init_bridge`, micro-write complet et test de contournement direct.
+La preuve CI zéro-setup Ubuntu/macOS/Windows est un gate obligatoire de la
+branche qui introduit ce mécanisme. Après sa fusion, le gate suivant reste le
+replay de **six véritables hôtes LLM simultanés** ; six processus MCP ne
+constituent pas cette preuve.
 
 ## Documents canoniques
 
@@ -85,6 +101,7 @@ Le gate encore volontairement ouvert avant fusion est la preuve dans un **host L
 - Skill de démarrage : `.agent/skills/init-tenor/SKILL.md`
 - Règles machine : `.agent/rules/tenor-init-v2.json`
 - Résultats terrain : `.agent/docs/V2.16_TERRAIN_FINDINGS.md`
+- Runtime Graphify zéro-setup : `.agent/docs/GRAPHIFY_ZERO_SETUP.md`
 - Synchronisation documentaire : `.agent/docs/DOCUMENTATION_SYNC_POLICY.md`
 - Guides hosts : `.agent/docs/hosts/README.md`
 

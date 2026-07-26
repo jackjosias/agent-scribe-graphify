@@ -25,6 +25,7 @@ STEPS = (
     ("v216_cross_platform", [sys.executable, ".agent/mcp/tests/test_v216_cross_platform.py"]),
     ("graphify_readiness", [sys.executable, ".agent/mcp/tests/test_graphify_readiness.py"]),
     ("graphify_guard", [sys.executable, ".agent/tests/test_graphify_guard.py"]),
+    ("graphify_local_runtime", [sys.executable, ".agent/mcp/tests/test_graphify_local_runtime.py"]),
     ("graphify_scribe_bridge", [sys.executable, ".agent/tests/test_graphify_scribe_bridge.py"]),
     ("scribe_bootstrap", [sys.executable, ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"]),
     ("generated_surface_parity", [sys.executable, ".agent/workflow/scribe/sel/tests/test_generated_surface_parity.py"]),

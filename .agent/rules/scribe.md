@@ -36,7 +36,7 @@ TENOR INIT doit :
 2. classifier l'installation avant SCRIBE ;
 3. purger uniquement l'état copié lié à un ancien root quand la relocation est prouvée ;
 4. adopter ou créer la mémoire SCRIBE de destination ;
-5. vérifier ou demander le build Graphify borné ;
+5. provisionner si nécessaire le runtime Graphify project-local épinglé et vérifié, puis exécuter le build borné ;
 6. finaliser le manifest local ;
 7. détecter et configurer uniquement le host project-local vérifié ;
 8. exiger une reconnexion puis une nouvelle init si la configuration change ;
@@ -59,6 +59,7 @@ LOCAL_INIT_READY_HOST_MCP_UNBOUND
 - Graphify = structure : quoi, où, comment, dépendances, centralité, communautés, blast radius.
 - SCRIBE = causalité : pourquoi, douleur, décision, régression, SCAR, GHOST, dette, `ne_pas_reproposer`.
 - Les outputs Graphify canoniques vivent sous `.agent/state/outputs/graphify-out/`.
+- L'absence d'une commande `graphify` globale n'est pas un prérequis utilisateur : TENOR installe atomiquement `graphifyy==0.9.26` sous `.agent/state/runtime/toolchains/`, après vérification SHA-256, puis contrôle son intégrité.
 - Le graphe réel peut exposer `nodes + links` ; le format historique supporté est `nodes + edges`.
 - Un graphe manquant, vide à tort, stub, wrong-root, stale ou contradictoire bloque les writes.
 - Les agents lisent la mémoire via `.agent/workflow/scribe/scribe-rag` ou MCP `scribe_query`, jamais en parcourant directement le fichier `.scribe`.

@@ -192,6 +192,8 @@ class HostAdapterAutoGuardTest(unittest.TestCase):
         self.assertIn("do not summarize, ask the user, wait, or stop", instructions)
         self.assertIn("Only `TENOR_INIT_READY`", instructions)
         self.assertIn("TENOR INIT owns the bounded single-flight Graphify rebuild", instructions)
+        self.assertIn("graphifyy==0.9.26", instructions)
+        self.assertIn("Never require a global Graphify install", instructions)
         self.assertIn("Never ask the user to run the Graphify build", instructions)
 
     def test_install_instructions_is_atomic_and_idempotent(self) -> None:

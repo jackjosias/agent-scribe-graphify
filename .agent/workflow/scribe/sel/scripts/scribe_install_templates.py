@@ -84,7 +84,7 @@ def render_scribe_rule() -> str:
         2. classifier l'installation avant SCRIBE ;
         3. purger uniquement l'état copié lié à un ancien root quand la relocation est prouvée ;
         4. adopter ou créer la mémoire SCRIBE de destination ;
-        5. vérifier ou demander le build Graphify borné ;
+        5. provisionner si nécessaire le runtime Graphify project-local épinglé et vérifié, puis exécuter le build borné ;
         6. finaliser le manifest local ;
         7. détecter et configurer uniquement le host project-local vérifié ;
         8. exiger une reconnexion puis une nouvelle init si la configuration change ;
@@ -107,6 +107,7 @@ def render_scribe_rule() -> str:
         - Graphify = structure : quoi, où, comment, dépendances, centralité, communautés, blast radius.
         - SCRIBE = causalité : pourquoi, douleur, décision, régression, SCAR, GHOST, dette, `ne_pas_reproposer`.
         - Les outputs Graphify canoniques vivent sous `.agent/state/outputs/graphify-out/`.
+        - L'absence d'une commande `graphify` globale n'est pas un prérequis utilisateur : TENOR installe atomiquement `graphifyy==0.9.26` sous `.agent/state/runtime/toolchains/`, après vérification SHA-256, puis contrôle son intégrité.
         - Le graphe réel peut exposer `nodes + links` ; le format historique supporté est `nodes + edges`.
         - Un graphe manquant, vide à tort, stub, wrong-root, stale ou contradictoire bloque les writes.
         - Les agents lisent la mémoire via `{RAG_COMMAND}` ou MCP `scribe_query`, jamais en parcourant directement le fichier `.scribe`.
@@ -368,7 +369,8 @@ def render_agents_block() -> str:
         purge only old project-bound runtime when relocation is proven
         preserve canonical outputs and quarantine legacy conflicts
         adopt/create target SCRIBE
-        verify/build and bind Graphify
+        provision/verify the pinned project-local Graphify runtime when required
+        build and bind Graphify
         finalize local installation
         detect/configure the verified project-local host
         reconnect and rerun if host configuration changed
@@ -386,6 +388,7 @@ def render_agents_block() -> str:
         - Never read `AGENT-MEMOIRE_PROJECT_STATUS.scribe` directly for normal agent retrieval; use `{RAG_COMMAND}` or MCP `scribe_query`.
         - SCRIBE results must change the plan or be explicitly challenged; retrieval is not a checkbox.
         - Use Graphify before architecture or broad code changes; prefer targeted structure/blast-radius queries over mass file reads.
+        - A missing global `graphify` command is not a user prerequisite. TENOR provisions the pinned and SHA-256-verified project-local `graphifyy==0.9.26` runtime under `.agent/state/runtime/toolchains/`, then verifies its integrity before every cold-process use.
         - The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
         - `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side and returns a hash-bound decision capsule. The host model must not replay the legacy internal choreography.
         - Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with exact structured edits, fresh hashes and mandatory bounded validator argv arrays; TENOR owns locks, conditional non-destructive rollback, SCRIBE admission and closure.
@@ -405,6 +408,7 @@ def render_agents_block() -> str:
         - Runtime purge preserves `.agent/state/outputs/`; canonical output wins and conflicting legacy output is quarantined under `_legacy_migrated/`.
         - Preserved Graphify output is never trusted automatically; root/fingerprint readiness must pass again.
         - Graphify supports explicit `nodes + links` and historical `nodes + edges`; missing, stale, wrong-root, stub or contradictory graphs are rejected.
+        - Graphify runtime installation is atomic, platform-scoped and single-flight. A policy, wheel-hash, dependency, probe or integrity mismatch fails closed and never publishes a partial runtime.
         - Default commit/push scope is the host product source; `.agent/` changes require intentional tooling maintenance.
         - Always keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits by default.
         - Documentation and generators move together under `{DOC_SYNC_PATH}`.
