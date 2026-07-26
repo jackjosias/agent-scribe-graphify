@@ -239,13 +239,36 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         _project_markers(target, memory="memory\n")
         _copy_complete_agent(self.source, target)
         agents = [f"terminal-{index}" for index in range(6)]
+        store_path = (
+            target
+            / ".agent"
+            / "state"
+            / "outputs"
+            / "scribe-out"
+            / "proof_store.json"
+        )
+        preexisting_store = (
+            json.loads(store_path.read_text(encoding="utf-8"))
+            if store_path.is_file()
+            else {}
+        )
 
         with ThreadPoolExecutor(max_workers=6) as executor:
             tokens = list(executor.map(lambda agent: issue_proof(target, agent), agents))
         self.assertEqual(len(set(tokens)), 6)
-        store_path = target / ".agent" / "state" / "outputs" / "scribe-out" / "proof_store.json"
         store = json.loads(store_path.read_text(encoding="utf-8"))
-        self.assertEqual({entry["agent_id"] for entry in store.values()}, set(agents))
+        issued_nonces = {token.split(".", 2)[1] for token in tokens}
+        self.assertEqual(
+            set(store),
+            set(preexisting_store) | issued_nonces,
+        )
+        self.assertEqual(
+            {entry["agent_id"] for entry in store.values()},
+            {
+                *(entry["agent_id"] for entry in preexisting_store.values()),
+                *agents,
+            },
+        )
 
         with ThreadPoolExecutor(max_workers=6) as executor:
             consumed = list(executor.map(lambda agent: consume_agent_proof(target, agent), agents))

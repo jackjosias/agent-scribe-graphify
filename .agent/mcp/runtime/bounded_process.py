@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Any, BinaryIO, Sequence
 
 
+_ACTIVE_PROCESSES: set[subprocess.Popen[bytes]] = set()
+_ACTIVE_PROCESSES_LOCK = threading.RLock()
+
+
 @dataclass(frozen=True)
 class BoundedProcessResult:
     argv: tuple[str, ...]
@@ -88,6 +92,13 @@ def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=5)
 
 
+def terminate_all_bounded_processes() -> None:
+    with _ACTIVE_PROCESSES_LOCK:
+        processes = tuple(_ACTIVE_PROCESSES)
+    for process in processes:
+        terminate_process_tree(process)
+
+
 def run_bounded(
     argv: Sequence[str],
     *,
@@ -122,6 +133,8 @@ def run_bounded(
 
     started = time.monotonic()
     process = subprocess.Popen(command, **process_kwargs)
+    with _ACTIVE_PROCESSES_LOCK:
+        _ACTIVE_PROCESSES.add(process)
     readers: list[threading.Thread] = []
     assert process.stdout is not None
     readers.append(threading.Thread(target=_drain, args=(process.stdout, stdout_tail), daemon=True))
@@ -144,6 +157,8 @@ def run_bounded(
             terminate_process_tree(process)
         for reader in readers:
             reader.join(timeout=5)
+        with _ACTIVE_PROCESSES_LOCK:
+            _ACTIVE_PROCESSES.discard(process)
         if any(reader.is_alive() for reader in readers):
             raise RuntimeError("bounded process output reader did not terminate")
 

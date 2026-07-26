@@ -49,9 +49,11 @@ jobs:
         run: >-
           python -m py_compile
           .agent/mcp/runtime/installation_state.py
+          .agent/mcp/runtime/bounded_process.py
           .agent/mcp/runtime/owned_file_lock.py
           .agent/mcp/runtime/tenor_init_orchestrator.py
           .agent/mcp/runtime/graphify_readiness.py
+          .agent/mcp/runtime/graphify_build.py
           .agent/mcp/runtime/graphify_guard.py
           .agent/mcp/runtime/graphify_scribe_bridge.py
           .agent/mcp/runtime/_task_context_first_write_impl.py
@@ -59,7 +61,11 @@ jobs:
           .agent/mcp/runtime/db.py
           .agent/mcp/runtime/presence.py
           .agent/mcp/runtime/tenor_changeset.py
+          .agent/mcp/runtime/tenor_jobs.py
+          .agent/mcp/runtime/tenor_job_worker.py
           .agent/mcp/runtime/tenor_public_api.py
+          .agent/mcp/runtime/direct_fs_tripwire.py
+          .agent/mcp/runtime/canonical_memory_gate.py
           .agent/mcp/_server_ext_impl.py
           .agent/mcp/server_entry.py
           .agent/host_adapter/policy.py
@@ -101,6 +107,9 @@ jobs:
               ("stable_agent_identity", ".agent/mcp/tests/test_stable_agent_identity.py"),
               ("tenor_agent_activity", ".agent/mcp/tests/test_tenor_agent_activity.py"),
               ("tenor_changeset_transaction", ".agent/mcp/tests/test_tenor_changeset_transaction.py"),
+              ("tenor_jobs", ".agent/mcp/tests/test_tenor_jobs.py"),
+              ("direct_fs_tripwire", ".agent/mcp/tests/test_direct_fs_tripwire.py"),
+              ("canonical_memory_gate", ".agent/mcp/tests/test_canonical_memory_gate.py"),
               ("tenor_public_api", ".agent/mcp/tests/test_tenor_public_api.py"),
               ("multi_agent_resource_lock", ".agent/mcp/tests/test_multi_agent_resource_lock.py"),
               ("terrain_enforcement", ".agent/mcp/tests/test_v216_terrain_enforcement.py"),

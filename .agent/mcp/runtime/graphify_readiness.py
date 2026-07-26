@@ -4,9 +4,11 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tempfile
 import time
-from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,7 +39,12 @@ GRAPHIFY_STALE_WORKSPACE = "GRAPHIFY_STALE_WORKSPACE"
 GRAPHIFY_FIXTURE_FORBIDDEN = "GRAPHIFY_FIXTURE_FORBIDDEN"
 GRAPHIFY_MANIFEST_INVALID = "GRAPHIFY_MANIFEST_INVALID"
 GRAPHIFY_WORKSPACE_TOO_LARGE = "GRAPHIFY_WORKSPACE_TOO_LARGE"
+GRAPHIFY_WORKSPACE_MUTATING = "GRAPHIFY_WORKSPACE_MUTATING"
 PROJECT_BUILD_ACTION = ".agent/workflow/scribe/scribe graph --project-build --timeout 180"
+FINGERPRINT_ALGORITHM = "relative-path-size-content-sha256-v2"
+DEFAULT_FINGERPRINT_WORKERS = 8
+DEFAULT_MAX_FINGERPRINT_BYTES = 32 * 1024 * 1024 * 1024
+HASH_CHUNK_BYTES = 1024 * 1024
 
 _STUB_MARKERS = (
     "smoke stub",
@@ -75,6 +82,9 @@ class Readiness:
     workspace_fingerprint: str = ""
     manifest_fingerprint: str = ""
     source_file_count: int = 0
+    source_total_bytes: int = 0
+    graph_epoch: int = 0
+    fingerprint_algorithm: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -86,6 +96,19 @@ class GraphArtifacts:
     nodes: list[Any]
     edges: list[Any]
     edge_field: str
+
+
+@dataclass(frozen=True)
+class SourceSnapshot:
+    relative: str
+    size: int
+    mtime_ns: int
+    device: int
+    inode: int
+
+
+class WorkspaceFingerprintError(RuntimeError):
+    """Raised when a content snapshot cannot be proven stable and bounded."""
 
 
 def _utc_now() -> str:
@@ -122,8 +145,26 @@ def _atomic_replace(src: str, dst: Path) -> None:
         raise last_exc
 
 
-def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+def _write_json_atomic_unlocked(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _atomic_replace(temporary, path)
+    finally:
+        with suppress(OSError):
+            os.unlink(temporary)
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     lock_path = path.with_name(f".{path.name}.publish.lock")
     with owned_file_lock(
         lock_path,
@@ -131,35 +172,48 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
         timeout_seconds=30.0,
         stale_after_seconds=120.0,
     ):
-        fd, temporary = tempfile.mkstemp(
-            dir=str(path.parent),
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-        )
+        _write_json_atomic_unlocked(path, payload)
+
+
+def _publish_manifest(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    lock_path = path.with_name(f".{path.name}.publish.lock")
+    with owned_file_lock(
+        lock_path,
+        purpose=f"graphify-json-publish:{path.name}",
+        timeout_seconds=30.0,
+        stale_after_seconds=120.0,
+    ):
+        previous_epoch = 0
         try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            _atomic_replace(temporary, path)
-        finally:
-            try:
-                if os.path.exists(temporary):
-                    os.unlink(temporary)
-            except OSError:
-                pass
+            previous = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(previous, dict):
+                previous_epoch = max(0, int(previous.get("graph_epoch") or 0))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            previous_epoch = 0
+        published = {
+            **payload,
+            "graph_epoch": max(time.time_ns(), previous_epoch + 1),
+        }
+        _write_json_atomic_unlocked(path, published)
+        return published
 
 
-def _iter_source_files(root: Path, max_files: int) -> tuple[list[tuple[str, int, int]], bool]:
-    rows: list[tuple[str, int, int]] = []
+def _iter_source_files(
+    root: Path,
+    max_files: int,
+    max_bytes: int,
+) -> tuple[list[SourceSnapshot], bool, int]:
+    rows: list[SourceSnapshot] = []
+    total_bytes = 0
     stack = [root]
     while stack:
         current = stack.pop()
         try:
             entries = list(os.scandir(current))
-        except OSError:
-            continue
+        except OSError as exc:
+            raise WorkspaceFingerprintError(
+                f"cannot scan source directory {current}: {exc}"
+            ) from exc
         for entry in entries:
             if entry.name in _IGNORED_DIRS:
                 continue
@@ -173,32 +227,150 @@ def _iter_source_files(root: Path, max_files: int) -> tuple[list[tuple[str, int,
                 relative = path.relative_to(root).as_posix()
                 if path.name not in _MARKER_FILES and path.suffix.lower() not in _SOURCE_SUFFIXES:
                     continue
-                stat = entry.stat(follow_symlinks=False)
-                rows.append((relative, int(stat.st_size), int(stat.st_mtime_ns)))
-                if len(rows) > max_files:
-                    return rows, True
-            except (OSError, ValueError):
-                continue
-    rows.sort(key=lambda item: item[0].casefold())
-    return rows, False
+                # DirEntry.stat() can expose zero-valued st_ino/st_dev fields
+                # on Windows while os.stat() and fstat() expose the real file
+                # index. Snapshot through the path so every later identity
+                # comparison uses the same stat family on every platform.
+                source_stat = os.stat(path, follow_symlinks=False)
+                size = int(source_stat.st_size)
+                total_bytes += size
+                rows.append(
+                    SourceSnapshot(
+                        relative=relative,
+                        size=size,
+                        mtime_ns=int(source_stat.st_mtime_ns),
+                        device=int(source_stat.st_dev),
+                        inode=int(source_stat.st_ino),
+                    )
+                )
+                if len(rows) > max_files or total_bytes > max_bytes:
+                    return rows, True, total_bytes
+            except ValueError as exc:
+                raise WorkspaceFingerprintError(
+                    f"source path escaped workspace: {path}"
+                ) from exc
+            except OSError as exc:
+                raise WorkspaceFingerprintError(
+                    f"cannot inspect source file {path}: {exc}"
+                ) from exc
+    rows.sort(key=lambda item: item.relative)
+    return rows, False, total_bytes
 
 
-def workspace_fingerprint(project_root: Path | str, *, max_files: int = 200_000) -> dict[str, Any]:
-    root = Path(project_root).resolve()
-    rows, truncated = _iter_source_files(root, max_files)
+def _stable_content_digest(
+    root: Path,
+    snapshot: SourceSnapshot,
+) -> tuple[str, int, str]:
+    path = root / snapshot.relative
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    try:
+        descriptor = os.open(str(path), flags)
+    except OSError as exc:
+        raise WorkspaceFingerprintError(
+            f"source changed before hashing: {snapshot.relative}: {exc}"
+        ) from exc
     digest = hashlib.sha256()
-    digest.update(str(root).encode("utf-8", errors="surrogatepass"))
-    digest.update(b"\0")
-    for relative, size, mtime_ns in rows:
-        digest.update(relative.encode("utf-8", errors="surrogatepass"))
-        digest.update(b"\0")
-        digest.update(str(size).encode("ascii"))
-        digest.update(b"\0")
-        digest.update(str(mtime_ns).encode("ascii"))
-        digest.update(b"\n")
+    bytes_read = 0
+    try:
+        before = os.fstat(descriptor)
+        identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_size),
+            int(before.st_mtime_ns),
+        )
+        expected = (
+            snapshot.device,
+            snapshot.inode,
+            snapshot.size,
+            snapshot.mtime_ns,
+        )
+        if not stat.S_ISREG(before.st_mode) or identity != expected:
+            raise WorkspaceFingerprintError(
+                f"source changed before hashing: {snapshot.relative}"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            while True:
+                chunk = handle.read(HASH_CHUNK_BYTES)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                bytes_read += len(chunk)
+        after = os.fstat(descriptor)
+        try:
+            path_after = path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise WorkspaceFingerprintError(
+                f"source changed during hashing: {snapshot.relative}: {exc}"
+            ) from exc
+        after_identity = (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_size),
+            int(after.st_mtime_ns),
+        )
+        path_identity = (
+            int(path_after.st_dev),
+            int(path_after.st_ino),
+            int(path_after.st_size),
+            int(path_after.st_mtime_ns),
+        )
+        if (
+            after_identity != identity
+            or path_identity != identity
+            or bytes_read != snapshot.size
+        ):
+            raise WorkspaceFingerprintError(
+                f"source changed during hashing: {snapshot.relative}"
+            )
+    finally:
+        os.close(descriptor)
+    return snapshot.relative, snapshot.size, digest.hexdigest()
+
+
+def workspace_fingerprint(
+    project_root: Path | str,
+    *,
+    max_files: int = 200_000,
+    max_bytes: int = DEFAULT_MAX_FINGERPRINT_BYTES,
+    max_workers: int = DEFAULT_FINGERPRINT_WORKERS,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    rows, truncated, total_bytes = _iter_source_files(
+        root,
+        max(1, int(max_files)),
+        max(1, int(max_bytes)),
+    )
+    worker_count = max(1, min(int(max_workers), 32))
+    digest = hashlib.sha256()
+    digest.update(FINGERPRINT_ALGORITHM.encode("ascii"))
+    digest.update(b"\n")
+    if not truncated:
+        batch_size = worker_count * 4
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="graphify-fingerprint",
+        ) as executor:
+            for offset in range(0, len(rows), batch_size):
+                batch = rows[offset:offset + batch_size]
+                for relative, size, content_digest in executor.map(
+                    lambda item: _stable_content_digest(root, item),
+                    batch,
+                ):
+                    digest.update(relative.encode("utf-8", errors="surrogatepass"))
+                    digest.update(b"\0")
+                    digest.update(str(size).encode("ascii"))
+                    digest.update(b"\0")
+                    digest.update(content_digest.encode("ascii"))
+                    digest.update(b"\n")
     return {
         "fingerprint": f"sha256:{digest.hexdigest()}",
         "source_file_count": len(rows),
+        "source_total_bytes": total_bytes,
+        "algorithm": FINGERPRINT_ALGORITHM,
         "truncated": truncated,
     }
 
@@ -295,24 +467,140 @@ def inspect_graphify_readiness(
     if marker and kind not in {"smoke_fixture", "empty_project"}:
         return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), f"stub marker detected: {marker}", PROJECT_BUILD_ACTION, node_count, edge_count, kind)
 
-    current = workspace_fingerprint(root)
+    try:
+        current = workspace_fingerprint(root)
+    except WorkspaceFingerprintError as exc:
+        return Readiness(
+            False,
+            GRAPHIFY_WORKSPACE_MUTATING,
+            str(root),
+            str(out),
+            str(exc),
+            PROJECT_BUILD_ACTION,
+            node_count,
+            edge_count,
+            kind,
+        )
     if current["truncated"]:
-        return Readiness(False, GRAPHIFY_WORKSPACE_TOO_LARGE, str(root), str(out), "workspace fingerprint exceeded safety limit", "configure Graphify ignore rules and rebuild", node_count, edge_count, kind, current["fingerprint"], str(manifest.get("workspace_fingerprint") or ""), current["source_file_count"])
+        return Readiness(
+            False,
+            GRAPHIFY_WORKSPACE_TOO_LARGE,
+            str(root),
+            str(out),
+            "workspace fingerprint exceeded safety limit",
+            "configure Graphify ignore rules and rebuild",
+            node_count,
+            edge_count,
+            kind,
+            current["fingerprint"],
+            str(manifest.get("workspace_fingerprint") or ""),
+            current["source_file_count"],
+            current["source_total_bytes"],
+            int(manifest.get("graph_epoch") or 0),
+            str(manifest.get("fingerprint_algorithm") or ""),
+        )
     recorded = str(manifest.get("workspace_fingerprint") or "")
+    recorded_algorithm = str(manifest.get("fingerprint_algorithm") or "")
+    try:
+        graph_epoch = int(manifest.get("graph_epoch") or 0)
+    except (TypeError, ValueError):
+        graph_epoch = 0
+    if recorded_algorithm != FINGERPRINT_ALGORITHM or graph_epoch <= 0:
+        return Readiness(
+            False,
+            GRAPHIFY_MANIFEST_INVALID,
+            str(root),
+            str(out),
+            "readiness manifest lacks the causal content fingerprint or graph epoch",
+            PROJECT_BUILD_ACTION,
+            node_count,
+            edge_count,
+            kind,
+            current["fingerprint"],
+            recorded,
+            current["source_file_count"],
+            current["source_total_bytes"],
+            graph_epoch,
+            recorded_algorithm,
+        )
     if require_workspace_match and recorded != current["fingerprint"]:
-        return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "project sources changed since the graph was bound", PROJECT_BUILD_ACTION, node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
+        return Readiness(
+            False,
+            GRAPHIFY_STALE_WORKSPACE,
+            str(root),
+            str(out),
+            "project sources changed since the graph was bound",
+            PROJECT_BUILD_ACTION,
+            node_count,
+            edge_count,
+            kind,
+            current["fingerprint"],
+            recorded,
+            current["source_file_count"],
+            current["source_total_bytes"],
+            graph_epoch,
+            recorded_algorithm,
+        )
 
     if kind == "empty_project":
         if current["source_file_count"] != 0 or graph.nodes or graph.edges:
             return Readiness(False, GRAPHIFY_STALE_WORKSPACE, str(root), str(out), "empty-project placeholder no longer matches workspace", PROJECT_BUILD_ACTION, node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
-        return Readiness(True, GRAPHIFY_EMPTY_PROJECT_READY, str(root), str(out), "empty project placeholder is bound and current", "", 0, 0, kind, current["fingerprint"], recorded, 0)
+        return Readiness(
+            True,
+            GRAPHIFY_EMPTY_PROJECT_READY,
+            str(root),
+            str(out),
+            "empty project placeholder is bound and current",
+            "",
+            0,
+            0,
+            kind,
+            current["fingerprint"],
+            recorded,
+            0,
+            0,
+            graph_epoch,
+            recorded_algorithm,
+        )
     if kind == "smoke_fixture":
-        return Readiness(True, GRAPHIFY_TEST_FIXTURE_READY, str(root), str(out), "authorized test fixture", "", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
+        return Readiness(
+            True,
+            GRAPHIFY_TEST_FIXTURE_READY,
+            str(root),
+            str(out),
+            "authorized test fixture",
+            "",
+            node_count,
+            edge_count,
+            kind,
+            current["fingerprint"],
+            recorded,
+            current["source_file_count"],
+            current["source_total_bytes"],
+            graph_epoch,
+            recorded_algorithm,
+        )
     if kind != "real":
         return Readiness(False, GRAPHIFY_MANIFEST_INVALID, str(root), str(out), f"unsupported manifest kind: {kind}", PROJECT_BUILD_ACTION, node_count, edge_count, kind)
     if not graph.nodes:
         return Readiness(False, GRAPHIFY_STUB_INVALID, str(root), str(out), "real graph contains zero nodes", PROJECT_BUILD_ACTION, 0, edge_count, kind)
-    return Readiness(True, GRAPHIFY_READY, str(root), str(out), "project-bound graph is valid and current", "", node_count, edge_count, kind, current["fingerprint"], recorded, current["source_file_count"])
+    return Readiness(
+        True,
+        GRAPHIFY_READY,
+        str(root),
+        str(out),
+        "project-bound graph is valid and current",
+        "",
+        node_count,
+        edge_count,
+        kind,
+        current["fingerprint"],
+        recorded,
+        current["source_file_count"],
+        current["source_total_bytes"],
+        graph_epoch,
+        recorded_algorithm,
+    )
 
 
 def write_graphify_manifest(project_root: Path | str, *, kind: str = "real", purpose: str = "terrain") -> dict[str, Any]:
@@ -327,7 +615,14 @@ def write_graphify_manifest(project_root: Path | str, *, kind: str = "real", pur
             "verdict": GRAPHIFY_OUTPUTS_INCOMPLETE if missing else GRAPHIFY_CORRUPT,
             "reason": f"missing or empty: {', '.join(missing)}" if missing else artifact_error,
         }
-    current = workspace_fingerprint(root)
+    try:
+        current = workspace_fingerprint(root)
+    except WorkspaceFingerprintError as exc:
+        return {
+            "ok": False,
+            "verdict": GRAPHIFY_WORKSPACE_MUTATING,
+            "reason": str(exc),
+        }
     if current["truncated"]:
         return {"ok": False, "verdict": GRAPHIFY_WORKSPACE_TOO_LARGE, "reason": "workspace fingerprint exceeded safety limit"}
     payload = {
@@ -336,14 +631,21 @@ def write_graphify_manifest(project_root: Path | str, *, kind: str = "real", pur
         "purpose": purpose,
         "project_root": str(root),
         "workspace_fingerprint": current["fingerprint"],
+        "fingerprint_algorithm": current["algorithm"],
         "source_file_count": current["source_file_count"],
+        "source_total_bytes": current["source_total_bytes"],
         "node_count": len(graph.nodes),
         "edge_count": len(graph.edges),
         "edge_field": graph.edge_field,
         "created_at": _utc_now(),
     }
-    _atomic_json(out / MANIFEST_FILENAME, payload)
-    return {"ok": True, "verdict": "GRAPHIFY_MANIFEST_WRITTEN", "manifest": payload, "path": str(out / MANIFEST_FILENAME)}
+    published = _publish_manifest(out / MANIFEST_FILENAME, payload)
+    return {
+        "ok": True,
+        "verdict": "GRAPHIFY_MANIFEST_WRITTEN",
+        "manifest": published,
+        "path": str(out / MANIFEST_FILENAME),
+    }
 
 
 def write_smoke_fixture(project_root: Path | str) -> dict[str, Any]:

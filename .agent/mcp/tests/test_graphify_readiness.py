@@ -142,6 +142,79 @@ class GraphifyReadinessTest(unittest.TestCase):
         result = readiness.inspect_graphify_readiness(self.root)
         self.assertEqual(result.verdict, readiness.GRAPHIFY_STALE_WORKSPACE)
 
+    def test_touch_does_not_change_content_fingerprint_or_readiness(self) -> None:
+        self.write_real()
+        written = readiness.write_graphify_manifest(self.root)
+        self.assertTrue(written["ok"], written)
+        before = readiness.workspace_fingerprint(self.root)
+        source = self.root / "app.py"
+        current = source.stat().st_mtime_ns
+        os.utime(source, ns=(current + 1_000_000, current + 1_000_000))
+        after = readiness.workspace_fingerprint(self.root)
+        self.assertEqual(after["fingerprint"], before["fingerprint"])
+        self.assertTrue(readiness.inspect_graphify_readiness(self.root).ok)
+
+    def test_byte_identical_restore_keeps_same_fingerprint(self) -> None:
+        self.write_real()
+        original = (self.root / "app.py").read_bytes()
+        before = readiness.workspace_fingerprint(self.root)
+        (self.root / "app.py").write_bytes(b"print('temporary')\n")
+        (self.root / "app.py").write_bytes(original)
+        after = readiness.workspace_fingerprint(self.root)
+        self.assertEqual(after["fingerprint"], before["fingerprint"])
+
+    def test_same_size_content_change_is_detected(self) -> None:
+        self.write_real()
+        source = self.root / "app.py"
+        before = readiness.workspace_fingerprint(self.root)
+        original = source.read_bytes()
+        changed = original.replace(b"ok", b"NO")
+        self.assertEqual(len(changed), len(original))
+        source.write_bytes(changed)
+        after = readiness.workspace_fingerprint(self.root)
+        self.assertNotEqual(after["fingerprint"], before["fingerprint"])
+
+    def test_source_mutation_between_scan_and_hash_is_refused(self) -> None:
+        self.write_real()
+        original = readiness._stable_content_digest
+        mutated = False
+
+        def mutate_then_hash(
+            root: Path,
+            snapshot: readiness.SourceSnapshot,
+        ) -> tuple[str, int, str]:
+            nonlocal mutated
+            if not mutated:
+                mutated = True
+                (root / snapshot.relative).write_text(
+                    "print('mutated during fingerprint')\n",
+                    encoding="utf-8",
+                )
+            return original(root, snapshot)
+
+        with mock.patch.object(
+            readiness,
+            "_stable_content_digest",
+            side_effect=mutate_then_hash,
+        ):
+            with self.assertRaises(readiness.WorkspaceFingerprintError):
+                readiness.workspace_fingerprint(self.root)
+
+    def test_graph_epoch_is_monotone(self) -> None:
+        self.write_real()
+        first = readiness.write_graphify_manifest(self.root)
+        second = readiness.write_graphify_manifest(self.root)
+        self.assertTrue(first["ok"], first)
+        self.assertTrue(second["ok"], second)
+        self.assertGreater(
+            second["manifest"]["graph_epoch"],
+            first["manifest"]["graph_epoch"],
+        )
+        self.assertEqual(
+            second["manifest"]["fingerprint_algorithm"],
+            readiness.FINGERPRINT_ALGORITHM,
+        )
+
     def test_manifest_from_another_root_is_rejected(self) -> None:
         self.write_real()
         readiness.write_graphify_manifest(self.root)
@@ -225,9 +298,7 @@ class AtomicWriterHardeningTest(unittest.TestCase):
             captured["dir"] = kwargs.get("dir")
             captured["prefix"] = kwargs.get("prefix")
             captured["suffix"] = kwargs.get("suffix")
-            fd, name = real_mkstemp(*args, **kwargs)
-            captured["tmp_name"] = name
-            return fd, name
+            return real_mkstemp(*args, **kwargs)
 
         return fake_mkstemp
 
@@ -238,7 +309,7 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         with mock.patch.object(tempfile, "mkstemp", self._capture_mkstemp(captured)):
             readiness._atomic_json(target, payload)
         self.assertEqual(captured["dir"], str(target.parent))
-        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["prefix"], f".{target.name}.")
         self.assertEqual(captured["suffix"], ".tmp")
         self.assertEqual(json.loads(target.read_text(encoding="utf-8")), payload)
 

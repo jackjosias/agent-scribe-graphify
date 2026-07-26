@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +29,10 @@ STALE_TRANSACTION_SECONDS = LOCK_TTL_SECONDS + MAX_VALIDATOR_TIMEOUT_SECONDS
 LOCK_TABLE = "resource_exclusive_locks"
 TRANSACTION_TABLE = "tenor_changesets_v1"
 FILE_TABLE = "tenor_changeset_files_v1"
+ROLLBACK_LOCK_TABLE = "tenor_changeset_rollback_locks_v1"
+RECOVERABLE_TRANSACTION_STATUSES = frozenset(
+    {"staging", "applying", "validating", "guarding", "rollback_required"}
+)
 PrecommitGuard = Callable[[dict[str, Any]], dict[str, Any]]
 
 
@@ -36,6 +41,27 @@ class ChangesetError(RuntimeError):
         super().__init__(verdict)
         self.verdict = verdict
         self.details = details or {}
+
+
+@dataclass(frozen=True)
+class ExecutionFence:
+    job_id: str
+    worker_instance_id: str
+    fence_token: int
+
+
+@dataclass(frozen=True)
+class RollbackResult:
+    ok: bool
+    restored: tuple[str, ...] = ()
+    conflicts: tuple[dict[str, str], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ok": self.ok,
+            "restored": list(self.restored),
+            "conflicts": [dict(item) for item in self.conflicts],
+        }
 
 
 def _now() -> int:
@@ -365,6 +391,9 @@ def ensure_schema(project_root: Path) -> None:
               task_id TEXT NOT NULL,
               agent_id TEXT NOT NULL,
               owner_pid INTEGER NOT NULL DEFAULT 0,
+              execution_job_id TEXT NOT NULL DEFAULT '',
+              worker_instance_id TEXT NOT NULL DEFAULT '',
+              fence_token INTEGER NOT NULL DEFAULT 0,
               status TEXT NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
@@ -392,6 +421,10 @@ def ensure_schema(project_root: Path) -> None:
               resource TEXT NOT NULL UNIQUE,
               agent_id TEXT NOT NULL,
               task_id TEXT NOT NULL,
+              changeset_id TEXT NOT NULL DEFAULT '',
+              execution_job_id TEXT NOT NULL DEFAULT '',
+              worker_instance_id TEXT NOT NULL DEFAULT '',
+              fence_token INTEGER NOT NULL DEFAULT 0,
               mode TEXT NOT NULL DEFAULT 'exclusive',
               created_at REAL NOT NULL,
               expires_at REAL NOT NULL,
@@ -399,6 +432,13 @@ def ensure_schema(project_root: Path) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_{LOCK_TABLE}_resource
               ON {LOCK_TABLE}(resource,expires_at);
+            CREATE TABLE IF NOT EXISTS {ROLLBACK_LOCK_TABLE}(
+              changeset_id TEXT PRIMARY KEY,
+              execution_job_id TEXT NOT NULL DEFAULT '',
+              worker_instance_id TEXT NOT NULL,
+              fence_token INTEGER NOT NULL,
+              acquired_at INTEGER NOT NULL
+            );
             """
         )
         columns = {
@@ -408,6 +448,44 @@ def ensure_schema(project_root: Path) -> None:
         if "owner_pid" not in columns:
             con.execute(
                 f"ALTER TABLE {TRANSACTION_TABLE} ADD COLUMN owner_pid INTEGER NOT NULL DEFAULT 0"
+            )
+        transaction_migrations = {
+            "execution_job_id": "TEXT NOT NULL DEFAULT ''",
+            "worker_instance_id": "TEXT NOT NULL DEFAULT ''",
+            "fence_token": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in transaction_migrations.items():
+            if name not in columns:
+                con.execute(
+                    f"ALTER TABLE {TRANSACTION_TABLE} ADD COLUMN {name} {declaration}"
+                )
+        lock_columns = {
+            str(row["name"])
+            for row in con.execute(f"PRAGMA table_info({LOCK_TABLE})").fetchall()
+        }
+        lock_migrations = {
+            "changeset_id": "TEXT NOT NULL DEFAULT ''",
+            "execution_job_id": "TEXT NOT NULL DEFAULT ''",
+            "worker_instance_id": "TEXT NOT NULL DEFAULT ''",
+            "fence_token": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in lock_migrations.items():
+            if name not in lock_columns:
+                con.execute(
+                    f"ALTER TABLE {LOCK_TABLE} ADD COLUMN {name} {declaration}"
+                )
+        rollback_columns = {
+            str(row["name"])
+            for row in con.execute(
+                f"PRAGMA table_info({ROLLBACK_LOCK_TABLE})"
+            ).fetchall()
+        }
+        if "execution_job_id" not in rollback_columns:
+            con.execute(
+                f"""
+                ALTER TABLE {ROLLBACK_LOCK_TABLE}
+                ADD COLUMN execution_job_id TEXT NOT NULL DEFAULT ''
+                """
             )
 
 
@@ -456,13 +534,37 @@ def _replace_file(target: Path, content: bytes) -> None:
             os.unlink(tmp_name)
 
 
+def _assert_execution_fence(
+    project_root: Path,
+    execution_fence: ExecutionFence | None,
+) -> None:
+    if execution_fence is None:
+        return
+    from runtime import tenor_jobs
+
+    proof = tenor_jobs.assert_worker_fence(
+        project_root,
+        job_id=execution_fence.job_id,
+        worker_instance_id=execution_fence.worker_instance_id,
+        fence_token=execution_fence.fence_token,
+        allowed_statuses=frozenset({"running", "recovering"}),
+    )
+    if not proof.get("ok"):
+        raise ChangesetError(
+            "TENOR_CHANGESET_EXECUTION_FENCE_LOST",
+            {"job_id": execution_fence.job_id},
+        )
+
+
 def _acquire_locks(
     project_root: Path,
     changeset_id: str,
     agent_id: str,
     task_id: str,
     resources: list[str],
+    execution_fence: ExecutionFence | None = None,
 ) -> None:
+    _assert_execution_fence(project_root, execution_fence)
     now = time.time()
     with db.connect(project_root) as con:
         con.execute("BEGIN IMMEDIATE")
@@ -507,12 +609,22 @@ def _acquire_locks(
                         )
             for resource in sorted(resources):
                 con.execute(
-                    f"INSERT INTO {LOCK_TABLE}(lock_id,resource,agent_id,task_id,mode,created_at,expires_at,heartbeat_at) VALUES(?,?,?,?,?,?,?,?)",
+                    f"""
+                    INSERT INTO {LOCK_TABLE}(
+                      lock_id,resource,agent_id,task_id,changeset_id,
+                      execution_job_id,worker_instance_id,fence_token,
+                      mode,created_at,expires_at,heartbeat_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
                     (
                         f"changeset-{changeset_id}-{uuid.uuid4().hex[:8]}",
                         resource,
                         agent_id,
                         task_id,
+                        changeset_id,
+                        execution_fence.job_id if execution_fence else "",
+                        execution_fence.worker_instance_id if execution_fence else "",
+                        execution_fence.fence_token if execution_fence else 0,
                         "exclusive",
                         now,
                         now + LOCK_TTL_SECONDS,
@@ -523,14 +635,91 @@ def _acquire_locks(
         except Exception:
             con.execute("ROLLBACK")
             raise
+    _assert_execution_fence(project_root, execution_fence)
 
 
-def _release_locks(project_root: Path, changeset_id: str) -> None:
+def _release_locks(
+    project_root: Path,
+    changeset_id: str,
+    execution_fence: ExecutionFence | None = None,
+) -> None:
+    if execution_fence is not None:
+        try:
+            _assert_execution_fence(project_root, execution_fence)
+        except ChangesetError:
+            return
+    with db.connect(project_root) as con:
+        if execution_fence is None:
+            con.execute(
+                f"""
+                DELETE FROM {LOCK_TABLE}
+                WHERE execution_job_id=''
+                  AND (
+                    changeset_id=?
+                    OR (
+                      changeset_id=''
+                      AND lock_id LIKE ?
+                    )
+                  )
+                """,
+                (changeset_id, f"changeset-{changeset_id}-%"),
+            )
+            return
+        transaction = con.execute(
+            f"""
+            SELECT 1 FROM {TRANSACTION_TABLE}
+            WHERE changeset_id=? AND execution_job_id=?
+              AND worker_instance_id=? AND fence_token=?
+            """,
+            (
+                changeset_id,
+                execution_fence.job_id,
+                execution_fence.worker_instance_id,
+                execution_fence.fence_token,
+            ),
+        ).fetchone()
+        if transaction:
+            con.execute(
+                f"DELETE FROM {LOCK_TABLE} WHERE changeset_id=?",
+                (changeset_id,),
+            )
+
+
+def heartbeat_execution_locks(
+    project_root: Path,
+    execution_fence: ExecutionFence,
+) -> bool:
+    _assert_execution_fence(project_root, execution_fence)
+    now = time.time()
     with db.connect(project_root) as con:
         con.execute(
-            f"DELETE FROM {LOCK_TABLE} WHERE lock_id LIKE ?",
-            (f"changeset-{changeset_id}-%",),
+            f"""
+            UPDATE {LOCK_TABLE}
+            SET heartbeat_at=?,expires_at=?
+            WHERE execution_job_id=? AND worker_instance_id=? AND fence_token=?
+            """,
+            (
+                now,
+                now + LOCK_TTL_SECONDS,
+                execution_fence.job_id,
+                execution_fence.worker_instance_id,
+                execution_fence.fence_token,
+            ),
         )
+        transaction = con.execute(
+            f"""
+            SELECT 1 FROM {TRANSACTION_TABLE}
+            WHERE execution_job_id=? AND worker_instance_id=? AND fence_token=?
+              AND status IN ('staging','applying','validating','guarding','rollback_required')
+            LIMIT 1
+            """,
+            (
+                execution_fence.job_id,
+                execution_fence.worker_instance_id,
+                execution_fence.fence_token,
+            ),
+        ).fetchone()
+    return bool(transaction)
 
 
 def _update_transaction(
@@ -540,61 +729,388 @@ def _update_transaction(
     *,
     error: dict[str, Any] | None = None,
     result: dict[str, Any] | None = None,
+    execution_fence: ExecutionFence | None = None,
+    expected_statuses: frozenset[str] | None = None,
 ) -> None:
-    with db.connect(project_root) as con:
-        con.execute(
-            f"UPDATE {TRANSACTION_TABLE} SET status=?,updated_at=?,error_json=?,result_json=? WHERE changeset_id=?",
-            (status, _now(), _json(error or {}), _json(result or {}), changeset_id),
+    clauses = ["changeset_id=?"]
+    params: list[Any] = [
+        status,
+        _now(),
+        _json(error or {}),
+        _json(result or {}),
+        changeset_id,
+    ]
+    if execution_fence is None:
+        clauses.append("execution_job_id=''")
+    else:
+        clauses.extend(
+            [
+                "execution_job_id=?",
+                "worker_instance_id=?",
+                "fence_token=?",
+            ]
         )
-
-
-def _rollback(project_root: Path, changeset_id: str) -> list[str]:
-    restored: list[str] = []
+        params.extend(
+            [
+                execution_fence.job_id,
+                execution_fence.worker_instance_id,
+                execution_fence.fence_token,
+            ]
+        )
+    if expected_statuses:
+        placeholders = ",".join("?" for _ in expected_statuses)
+        clauses.append(f"status IN ({placeholders})")
+        params.extend(sorted(expected_statuses))
     with db.connect(project_root) as con:
-        rows = con.execute(
-            f"SELECT * FROM {FILE_TABLE} WHERE changeset_id=? ORDER BY ordinal DESC",
-            (changeset_id,),
-        ).fetchall()
-    for row in rows:
-        target = project_root / row["resource"]
-        backup = Path(row["backup_path"])
-        if row["base_hash"] == NEW_FILE_HASH:
-            if target.exists() and not target.is_symlink():
-                target.unlink()
-                _fsync_parent(target.parent)
-        elif backup.is_file():
-            _replace_file(target, backup.read_bytes())
-        restored.append(row["resource"])
-    return sorted(restored)
+        updated = con.execute(
+            f"""
+            UPDATE {TRANSACTION_TABLE}
+            SET status=?,updated_at=?,error_json=?,result_json=?
+            WHERE {' AND '.join(clauses)}
+            """,
+            tuple(params),
+        ).rowcount
+    if updated:
+        return
+    _assert_execution_fence(project_root, execution_fence)
+    raise ChangesetError(
+        "TENOR_CHANGESET_STATE_TRANSITION_REJECTED",
+        {"changeset_id": changeset_id, "target_status": status},
+    )
 
 
-def recover_incomplete(project_root: Path) -> dict[str, Any]:
+def _rollback(
+    project_root: Path,
+    changeset_id: str,
+    execution_fence: ExecutionFence | None = None,
+) -> RollbackResult:
+    _assert_execution_fence(project_root, execution_fence)
+    owner = (
+        execution_fence.worker_instance_id
+        if execution_fence is not None
+        else f"legacy-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    execution_job_id = execution_fence.job_id if execution_fence is not None else ""
+    token = execution_fence.fence_token if execution_fence is not None else 0
+    with db.connect(project_root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            existing = con.execute(
+                f"SELECT * FROM {ROLLBACK_LOCK_TABLE} WHERE changeset_id=?",
+                (changeset_id,),
+            ).fetchone()
+            if existing:
+                now = _now()
+                can_transfer = bool(
+                    execution_fence is not None
+                    and str(existing["execution_job_id"] or "") == execution_job_id
+                    and int(existing["fence_token"] or 0) < token
+                )
+                stale_legacy_lock = bool(
+                    str(existing["execution_job_id"] or "") == ""
+                    and int(existing["acquired_at"] or 0)
+                    <= now - STALE_TRANSACTION_SECONDS
+                )
+                same_owner = bool(
+                    str(existing["execution_job_id"] or "") == execution_job_id
+                    and str(existing["worker_instance_id"] or "") == owner
+                    and int(existing["fence_token"] or 0) == token
+                )
+                if can_transfer or stale_legacy_lock:
+                    con.execute(
+                        f"""
+                        UPDATE {ROLLBACK_LOCK_TABLE}
+                        SET execution_job_id=?,worker_instance_id=?,
+                            fence_token=?,acquired_at=?
+                        WHERE changeset_id=?
+                          AND (
+                            (execution_job_id=? AND fence_token<?)
+                            OR (
+                              execution_job_id=''
+                              AND acquired_at<=?
+                            )
+                          )
+                        """,
+                        (
+                            execution_job_id,
+                            owner,
+                            token,
+                            now,
+                            changeset_id,
+                            execution_job_id,
+                            token,
+                            now - STALE_TRANSACTION_SECONDS,
+                        ),
+                    )
+                elif not same_owner:
+                    con.execute("ROLLBACK")
+                    return RollbackResult(
+                        False,
+                        conflicts=({
+                            "path": "<rollback-lock>",
+                            "expected_hash": f"{execution_job_id}:{owner}:{token}",
+                            "observed_hash": (
+                                f"{existing['execution_job_id']}:"
+                                f"{existing['worker_instance_id']}:"
+                                f"{existing['fence_token']}"
+                            ),
+                        },),
+                    )
+            else:
+                con.execute(
+                    f"""
+                    INSERT INTO {ROLLBACK_LOCK_TABLE}(
+                      changeset_id,execution_job_id,worker_instance_id,
+                      fence_token,acquired_at
+                    ) VALUES(?,?,?,?,?)
+                    """,
+                    (changeset_id, execution_job_id, owner, token, _now()),
+                )
+            rows = con.execute(
+                f"SELECT * FROM {FILE_TABLE} WHERE changeset_id=? ORDER BY ordinal DESC",
+                (changeset_id,),
+            ).fetchall()
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+
+    restored: list[str] = []
+    conflicts: list[dict[str, str]] = []
+    actions: list[Any] = []
+    try:
+        _assert_execution_fence(project_root, execution_fence)
+        for row in rows:
+            target = project_root / row["resource"]
+            try:
+                observed = _current_hash(target)
+            except ChangesetError:
+                observed = "__invalid_target__"
+            base_hash = str(row["base_hash"])
+            new_hash = str(row["new_hash"])
+            if observed == base_hash:
+                continue
+            if observed != new_hash:
+                conflicts.append({
+                    "path": str(row["resource"]),
+                    "expected_hash": new_hash,
+                    "observed_hash": observed,
+                })
+                continue
+            if base_hash != NEW_FILE_HASH and not Path(row["backup_path"]).is_file():
+                conflicts.append({
+                    "path": str(row["resource"]),
+                    "expected_hash": base_hash,
+                    "observed_hash": "backup_missing",
+                })
+                continue
+            actions.append(row)
+        if conflicts:
+            return RollbackResult(False, conflicts=tuple(conflicts))
+
+        for row in actions:
+            _assert_execution_fence(project_root, execution_fence)
+            target = project_root / row["resource"]
+            backup = Path(row["backup_path"])
+            observed = _current_hash(target)
+            if observed != str(row["new_hash"]):
+                return RollbackResult(
+                    False,
+                    restored=tuple(sorted(restored)),
+                    conflicts=({
+                        "path": str(row["resource"]),
+                        "expected_hash": str(row["new_hash"]),
+                        "observed_hash": observed,
+                    },),
+                )
+            if row["base_hash"] == NEW_FILE_HASH:
+                if target.exists() and not target.is_symlink():
+                    target.unlink()
+                    _fsync_parent(target.parent)
+            else:
+                _replace_file(target, backup.read_bytes())
+            restored.append(str(row["resource"]))
+        return RollbackResult(True, restored=tuple(sorted(restored)))
+    finally:
+        with db.connect(project_root) as con:
+            con.execute(
+                f"""
+                DELETE FROM {ROLLBACK_LOCK_TABLE}
+                WHERE changeset_id=? AND execution_job_id=?
+                  AND worker_instance_id=? AND fence_token=?
+                """,
+                (changeset_id, execution_job_id, owner, token),
+            )
+
+
+def recover_incomplete(
+    project_root: Path,
+    *,
+    recovery_fence: ExecutionFence | None = None,
+) -> dict[str, Any]:
     project_root = project_root.resolve()
     ensure_schema(project_root)
     recovered: list[str] = []
+    conflicts: list[dict[str, Any]] = []
     with db.connect(project_root) as con:
         rows = con.execute(
-            f"SELECT changeset_id,owner_pid,updated_at FROM {TRANSACTION_TABLE} WHERE status IN ('staging','applying','validating','guarding','rollback_required') ORDER BY created_at",
+            f"""
+            SELECT * FROM {TRANSACTION_TABLE}
+            WHERE status IN ('staging','applying','validating','guarding','rollback_required')
+            ORDER BY created_at
+            """,
         ).fetchall()
     for row in rows:
         age_seconds = max(0, _now() - int(row["updated_at"] or 0))
-        if (
-            int(row["owner_pid"] or 0) > 0
-            and db.process_is_alive(row["owner_pid"])
-            and age_seconds <= STALE_TRANSACTION_SECONDS
-        ):
+        execution_job_id = str(row["execution_job_id"] or "")
+        changeset_id = str(row["changeset_id"])
+        effective_fence: ExecutionFence | None = None
+        if execution_job_id:
+            if recovery_fence is None or recovery_fence.job_id != execution_job_id:
+                continue
+            _assert_execution_fence(project_root, recovery_fence)
+            with db.connect(project_root) as con:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    updated = con.execute(
+                        f"""
+                        UPDATE {TRANSACTION_TABLE}
+                        SET worker_instance_id=?,fence_token=?,owner_pid=?,updated_at=?
+                        WHERE changeset_id=? AND execution_job_id=?
+                          AND fence_token<?
+                          AND status IN ('staging','applying','validating','guarding','rollback_required')
+                        """,
+                        (
+                            recovery_fence.worker_instance_id,
+                            recovery_fence.fence_token,
+                            os.getpid(),
+                            _now(),
+                            changeset_id,
+                            recovery_fence.job_id,
+                            recovery_fence.fence_token,
+                        ),
+                    ).rowcount
+                    if updated:
+                        con.execute(
+                            f"""
+                            UPDATE {LOCK_TABLE}
+                            SET worker_instance_id=?,fence_token=?
+                            WHERE changeset_id=? AND execution_job_id=?
+                            """,
+                            (
+                                recovery_fence.worker_instance_id,
+                                recovery_fence.fence_token,
+                                changeset_id,
+                                recovery_fence.job_id,
+                            ),
+                        )
+                    con.execute("COMMIT")
+                except Exception:
+                    con.execute("ROLLBACK")
+                    raise
+            if not updated:
+                continue
+            effective_fence = recovery_fence
+        else:
+            if recovery_fence is not None or age_seconds <= STALE_TRANSACTION_SECONDS:
+                continue
+
+        rollback = _rollback(project_root, changeset_id, effective_fence)
+        if not rollback.ok:
+            error = {
+                "verdict": "TENOR_CHANGESET_ROLLBACK_CONFLICT",
+                "conflicts": list(rollback.conflicts),
+                "restored": list(rollback.restored),
+            }
+            _update_transaction(
+                project_root,
+                changeset_id,
+                "rollback_conflict",
+                error=error,
+                execution_fence=effective_fence,
+                expected_statuses=RECOVERABLE_TRANSACTION_STATUSES,
+            )
+            _release_locks(project_root, changeset_id, effective_fence)
+            conflicts.append({"changeset_id": changeset_id, **error})
             continue
-        changeset_id = row["changeset_id"]
-        restored = _rollback(project_root, changeset_id)
         _update_transaction(
             project_root,
             changeset_id,
             "rolled_back_recovered",
-            error={"verdict": "TENOR_CHANGESET_RECOVERED_AFTER_INTERRUPTION", "restored": restored},
+            error={
+                "verdict": "TENOR_CHANGESET_RECOVERED_AFTER_INTERRUPTION",
+                "restored": list(rollback.restored),
+            },
+            execution_fence=effective_fence,
+            expected_statuses=RECOVERABLE_TRANSACTION_STATUSES,
         )
-        _release_locks(project_root, changeset_id)
+        _release_locks(project_root, changeset_id, effective_fence)
         recovered.append(changeset_id)
-    return {"ok": True, "verdict": "TENOR_CHANGESET_RECOVERY_COMPLETE", "recovered": recovered}
+    return {
+        "ok": not conflicts,
+        "verdict": (
+            "TENOR_CHANGESET_RECOVERY_COMPLETE"
+            if not conflicts
+            else "TENOR_CHANGESET_RECOVERY_ROLLBACK_CONFLICT"
+        ),
+        "recovered": recovered,
+        "conflicts": conflicts,
+    }
+
+
+def _rollback_failure(
+    project_root: Path,
+    changeset_id: str,
+    *,
+    execution_fence: ExecutionFence | None,
+    verdict: str,
+    response_fields: dict[str, Any] | None = None,
+    cause: str = "",
+) -> dict[str, Any]:
+    fields = dict(response_fields or {})
+    rollback = _rollback(project_root, changeset_id, execution_fence)
+    restored = list(rollback.restored)
+    if not rollback.ok:
+        error = {
+            "verdict": "TENOR_CHANGESET_ROLLBACK_CONFLICT",
+            "cause": cause or verdict,
+            "restored": restored,
+            "conflicts": [dict(item) for item in rollback.conflicts],
+            **fields,
+        }
+        _update_transaction(
+            project_root,
+            changeset_id,
+            "rollback_conflict",
+            error=error,
+            execution_fence=execution_fence,
+            expected_statuses=RECOVERABLE_TRANSACTION_STATUSES,
+        )
+        return {
+            "ok": False,
+            "changeset_id": changeset_id,
+            **error,
+        }
+    error = {
+        "verdict": verdict,
+        "restored": restored,
+        **fields,
+    }
+    if cause:
+        error["cause"] = cause
+    _update_transaction(
+        project_root,
+        changeset_id,
+        "rolled_back",
+        error=error,
+        execution_fence=execution_fence,
+        expected_statuses=RECOVERABLE_TRANSACTION_STATUSES,
+    )
+    return {
+        "ok": False,
+        "changeset_id": changeset_id,
+        **error,
+    }
 
 
 def _run_validators(validators: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -665,6 +1181,7 @@ def apply_changeset(
     confirm_full_replacements: list[dict[str, Any]] | None = None,
     request_id: str = "",
     precommit_guard: PrecommitGuard | None = None,
+    execution_fence: ExecutionFence | None = None,
     _test_fail_after_replaces: int | None = None,
 ) -> dict[str, Any]:
     root = project_root.resolve()
@@ -678,6 +1195,10 @@ def apply_changeset(
     if len(request_id) > 200 or not request_id:
         return {"ok": False, "verdict": "TENOR_CHANGESET_REQUEST_ID_INVALID"}
     ensure_schema(root)
+    try:
+        _assert_execution_fence(root, execution_fence)
+    except ChangesetError as exc:
+        return {"ok": False, "verdict": exc.verdict, **exc.details}
     recover_incomplete(root)
     fingerprint = _request_fingerprint(
         task_id,
@@ -724,10 +1245,33 @@ def apply_changeset(
     changeset_id = f"cs-{uuid.uuid4().hex[:20]}"
     transaction_dir = _transaction_root(root, changeset_id)
     created = _now()
+    try:
+        _assert_execution_fence(root, execution_fence)
+    except ChangesetError as exc:
+        return {"ok": False, "verdict": exc.verdict, **exc.details}
     with db.connect(root) as con:
         inserted = con.execute(
-            f"INSERT OR IGNORE INTO {TRANSACTION_TABLE}(changeset_id,request_id,request_fingerprint,task_id,agent_id,owner_pid,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (changeset_id, request_id, fingerprint, task_id, agent_id, os.getpid(), "staging", created, created),
+            f"""
+            INSERT OR IGNORE INTO {TRANSACTION_TABLE}(
+              changeset_id,request_id,request_fingerprint,task_id,agent_id,
+              owner_pid,execution_job_id,worker_instance_id,fence_token,
+              status,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                changeset_id,
+                request_id,
+                fingerprint,
+                task_id,
+                agent_id,
+                os.getpid(),
+                execution_fence.job_id if execution_fence else "",
+                execution_fence.worker_instance_id if execution_fence else "",
+                execution_fence.fence_token if execution_fence else 0,
+                "staging",
+                created,
+                created,
+            ),
         ).rowcount
         if not inserted:
             raced = con.execute(
@@ -753,8 +1297,17 @@ def apply_changeset(
                 "status": raced["status"],
             }
     try:
-        _acquire_locks(root, changeset_id, agent_id, task_id, [item["path"] for item in canonical])
+        _assert_execution_fence(root, execution_fence)
+        _acquire_locks(
+            root,
+            changeset_id,
+            agent_id,
+            task_id,
+            [item["path"] for item in canonical],
+            execution_fence,
+        )
         for ordinal, item in enumerate(canonical):
+            _assert_execution_fence(root, execution_fence)
             if _current_hash(item["target"]) != item["base_hash"]:
                 raise ChangesetError("TENOR_CHANGESET_BASE_STALE", {"path": item["path"]})
             backup = transaction_dir / "backup" / f"{ordinal:04d}.bin"
@@ -764,8 +1317,20 @@ def apply_changeset(
             if item["operation"] != "delete":
                 _write_durable(staged, item["content"])
             with db.connect(root) as con:
-                con.execute(
-                    f"INSERT INTO {FILE_TABLE}(changeset_id,ordinal,resource,operation,base_hash,new_hash,backup_path,staged_path,applied) VALUES(?,?,?,?,?,?,?,?,0)",
+                inserted_file = con.execute(
+                    f"""
+                    INSERT INTO {FILE_TABLE}(
+                      changeset_id,ordinal,resource,operation,base_hash,new_hash,
+                      backup_path,staged_path,applied
+                    )
+                    SELECT ?,?,?,?,?,?,?,?,0
+                    WHERE EXISTS(
+                      SELECT 1 FROM {TRANSACTION_TABLE}
+                      WHERE changeset_id=? AND execution_job_id=?
+                        AND worker_instance_id=? AND fence_token=?
+                        AND status='staging'
+                    )
+                    """,
                     (
                         changeset_id,
                         ordinal,
@@ -775,44 +1340,114 @@ def apply_changeset(
                         item["new_hash"],
                         str(backup),
                         str(staged),
+                        changeset_id,
+                        execution_fence.job_id if execution_fence else "",
+                        execution_fence.worker_instance_id if execution_fence else "",
+                        execution_fence.fence_token if execution_fence else 0,
                     ),
+                ).rowcount
+            if not inserted_file:
+                _assert_execution_fence(root, execution_fence)
+                raise ChangesetError(
+                    "TENOR_CHANGESET_STATE_TRANSITION_REJECTED",
+                    {"changeset_id": changeset_id, "target_status": "staging"},
                 )
-        _update_transaction(root, changeset_id, "applying")
+        _update_transaction(
+            root,
+            changeset_id,
+            "applying",
+            execution_fence=execution_fence,
+            expected_statuses=frozenset({"staging"}),
+        )
         replaced = 0
         for item in canonical:
+            _assert_execution_fence(root, execution_fence)
             if _current_hash(item["target"]) != item["base_hash"]:
                 raise ChangesetError("TENOR_CHANGESET_BASE_STALE", {"path": item["path"]})
+            with db.connect(root) as con:
+                write_intent = con.execute(
+                    f"""
+                    UPDATE {FILE_TABLE}
+                    SET applied=-1
+                    WHERE changeset_id=? AND resource=? AND applied=0
+                      AND EXISTS(
+                        SELECT 1 FROM {TRANSACTION_TABLE}
+                        WHERE changeset_id=? AND execution_job_id=?
+                          AND worker_instance_id=? AND fence_token=?
+                          AND status='applying'
+                      )
+                    """,
+                    (
+                        changeset_id,
+                        item["path"],
+                        changeset_id,
+                        execution_fence.job_id if execution_fence else "",
+                        execution_fence.worker_instance_id if execution_fence else "",
+                        execution_fence.fence_token if execution_fence else 0,
+                    ),
+                ).rowcount
+            if not write_intent:
+                _assert_execution_fence(root, execution_fence)
+                raise ChangesetError(
+                    "TENOR_CHANGESET_STATE_TRANSITION_REJECTED",
+                    {"changeset_id": changeset_id, "target_status": "write_intent"},
+                )
+            _assert_execution_fence(root, execution_fence)
             if item["operation"] == "delete":
                 item["target"].unlink()
                 _fsync_parent(item["target"].parent)
             else:
                 _replace_file(item["target"], item["content"])
             replaced += 1
+            _assert_execution_fence(root, execution_fence)
             with db.connect(root) as con:
-                con.execute(
-                    f"UPDATE {FILE_TABLE} SET applied=1 WHERE changeset_id=? AND resource=?",
-                    (changeset_id, item["path"]),
+                marked = con.execute(
+                    f"""
+                    UPDATE {FILE_TABLE}
+                    SET applied=1
+                    WHERE changeset_id=? AND resource=?
+                      AND EXISTS(
+                        SELECT 1 FROM {TRANSACTION_TABLE}
+                        WHERE changeset_id=? AND execution_job_id=?
+                          AND worker_instance_id=? AND fence_token=?
+                          AND status='applying'
+                      )
+                    """,
+                    (
+                        changeset_id,
+                        item["path"],
+                        changeset_id,
+                        execution_fence.job_id if execution_fence else "",
+                        execution_fence.worker_instance_id if execution_fence else "",
+                        execution_fence.fence_token if execution_fence else 0,
+                    ),
+                ).rowcount
+            if not marked:
+                _assert_execution_fence(root, execution_fence)
+                raise ChangesetError(
+                    "TENOR_CHANGESET_STATE_TRANSITION_REJECTED",
+                    {"changeset_id": changeset_id, "target_status": "applying"},
                 )
             if _test_fail_after_replaces is not None and replaced >= _test_fail_after_replaces:
                 raise ChangesetError("TENOR_CHANGESET_TEST_INJECTED_FAILURE")
 
-        _update_transaction(root, changeset_id, "validating")
+        _update_transaction(
+            root,
+            changeset_id,
+            "validating",
+            execution_fence=execution_fence,
+            expected_statuses=frozenset({"applying"}),
+        )
         validation_results = _run_validators(canonical_validators)
+        _assert_execution_fence(root, execution_fence)
         if any(not result["ok"] for result in validation_results):
-            restored = _rollback(root, changeset_id)
-            error = {
-                "verdict": "TENOR_CHANGESET_VALIDATION_FAILED_ROLLED_BACK",
-                "restored": restored,
-                "validators": validation_results,
-            }
-            _update_transaction(root, changeset_id, "rolled_back", error=error)
-            return {
-                "ok": False,
-                "verdict": error["verdict"],
-                "changeset_id": changeset_id,
-                "restored": restored,
-                "validators": validation_results,
-            }
+            return _rollback_failure(
+                root,
+                changeset_id,
+                execution_fence=execution_fence,
+                verdict="TENOR_CHANGESET_VALIDATION_FAILED_ROLLED_BACK",
+                response_fields={"validators": validation_results},
+            )
         drifted_resources: list[str] = []
         for item in canonical:
             try:
@@ -822,22 +1457,16 @@ def apply_changeset(
             if observed_hash != item["new_hash"]:
                 drifted_resources.append(item["path"])
         if drifted_resources:
-            restored = _rollback(root, changeset_id)
-            error = {
-                "verdict": "TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK",
-                "drifted_resources": sorted(drifted_resources),
-                "restored": restored,
-                "validators": validation_results,
-            }
-            _update_transaction(root, changeset_id, "rolled_back", error=error)
-            return {
-                "ok": False,
-                "verdict": error["verdict"],
-                "changeset_id": changeset_id,
-                "drifted_resources": error["drifted_resources"],
-                "restored": restored,
-                "validators": validation_results,
-            }
+            return _rollback_failure(
+                root,
+                changeset_id,
+                execution_fence=execution_fence,
+                verdict="TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK",
+                response_fields={
+                    "drifted_resources": sorted(drifted_resources),
+                    "validators": validation_results,
+                },
+            )
         files = [
             {
                 "path": item["path"],
@@ -858,7 +1487,14 @@ def apply_changeset(
             "validators": validation_results,
         }
         if precommit_guard is not None:
-            _update_transaction(root, changeset_id, "guarding", result=result)
+            _update_transaction(
+                root,
+                changeset_id,
+                "guarding",
+                result=result,
+                execution_fence=execution_fence,
+                expected_statuses=frozenset({"validating"}),
+            )
             try:
                 guard = precommit_guard(dict(result))
             except Exception as exc:
@@ -867,54 +1503,98 @@ def apply_changeset(
                     "verdict": "TENOR_CHANGESET_PRECOMMIT_GUARD_EXCEPTION",
                     "reason": f"{type(exc).__name__}: {exc}",
                 }
+            _assert_execution_fence(root, execution_fence)
             if not isinstance(guard, dict) or not guard.get("ok"):
-                restored = _rollback(root, changeset_id)
-                error = {
-                    "verdict": "TENOR_CHANGESET_PRECOMMIT_GUARD_FAILED_ROLLED_BACK",
-                    "guard": guard if isinstance(guard, dict) else {"value": repr(guard)},
-                    "restored": restored,
-                    "validators": validation_results,
-                }
-                _update_transaction(root, changeset_id, "rolled_back", error=error)
-                return {
-                    "ok": False,
-                    "verdict": error["verdict"],
-                    "changeset_id": changeset_id,
-                    "guard": error["guard"],
-                    "restored": restored,
-                    "validators": validation_results,
-                }
+                return _rollback_failure(
+                    root,
+                    changeset_id,
+                    execution_fence=execution_fence,
+                    verdict="TENOR_CHANGESET_PRECOMMIT_GUARD_FAILED_ROLLED_BACK",
+                    response_fields={
+                        "guard": (
+                            guard
+                            if isinstance(guard, dict)
+                            else {"value": repr(guard)}
+                        ),
+                        "validators": validation_results,
+                    },
+                )
         result["verdict"] = "TENOR_CHANGESET_COMMITTED"
         result["committed_at"] = _now()
-        _update_transaction(root, changeset_id, "committed", result=result)
+        _assert_execution_fence(root, execution_fence)
+        _update_transaction(
+            root,
+            changeset_id,
+            "committed",
+            result=result,
+            execution_fence=execution_fence,
+            expected_statuses=(
+                frozenset({"guarding"})
+                if precommit_guard is not None
+                else frozenset({"validating"})
+            ),
+        )
         return result
     except ChangesetError as exc:
-        restored = _rollback(root, changeset_id)
-        error = {"verdict": exc.verdict, "details": exc.details, "restored": restored}
-        _update_transaction(root, changeset_id, "rolled_back", error=error)
+        if exc.verdict == "TENOR_CHANGESET_EXECUTION_FENCE_LOST":
+            return {
+                "ok": False,
+                "verdict": exc.verdict,
+                "changeset_id": changeset_id,
+                **exc.details,
+            }
         verdict = (
             "TENOR_CHANGESET_BASE_STALE"
             if exc.verdict == "TENOR_CHANGESET_BASE_STALE"
             else "TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK"
         )
-        return {
-            "ok": False,
-            "verdict": verdict,
-            "changeset_id": changeset_id,
-            "cause": exc.verdict,
-            "restored": restored,
-            **exc.details,
-        }
+        try:
+            return _rollback_failure(
+                root,
+                changeset_id,
+                execution_fence=execution_fence,
+                verdict=verdict,
+                response_fields=dict(exc.details),
+                cause=exc.verdict,
+            )
+        except ChangesetError as rollback_exc:
+            if rollback_exc.verdict == "TENOR_CHANGESET_EXECUTION_FENCE_LOST":
+                return {
+                    "ok": False,
+                    "verdict": rollback_exc.verdict,
+                    "changeset_id": changeset_id,
+                    **rollback_exc.details,
+                }
+            raise
     except Exception as exc:
-        restored = _rollback(root, changeset_id)
-        error = {
-            "verdict": "TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK",
-            "reason": f"{type(exc).__name__}: {exc}",
-            "restored": restored,
-        }
-        _update_transaction(root, changeset_id, "rolled_back", error=error)
-        return {"ok": False, "changeset_id": changeset_id, **error}
+        try:
+            return _rollback_failure(
+                root,
+                changeset_id,
+                execution_fence=execution_fence,
+                verdict="TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK",
+                response_fields={"reason": f"{type(exc).__name__}: {exc}"},
+            )
+        except ChangesetError as rollback_exc:
+            if rollback_exc.verdict == "TENOR_CHANGESET_EXECUTION_FENCE_LOST":
+                return {
+                    "ok": False,
+                    "verdict": rollback_exc.verdict,
+                    "changeset_id": changeset_id,
+                    **rollback_exc.details,
+                }
+            raise
     finally:
-        _release_locks(root, changeset_id)
+        _release_locks(root, changeset_id, execution_fence)
         if transaction_dir.exists():
-            shutil.rmtree(transaction_dir, ignore_errors=True)
+            with db.connect(root) as con:
+                terminal = con.execute(
+                    f"""
+                    SELECT 1 FROM {TRANSACTION_TABLE}
+                    WHERE changeset_id=?
+                      AND status IN ('committed','rolled_back','rolled_back_recovered')
+                    """,
+                    (changeset_id,),
+                ).fetchone()
+            if terminal:
+                shutil.rmtree(transaction_dir, ignore_errors=True)

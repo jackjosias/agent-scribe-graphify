@@ -8,7 +8,10 @@ from pathlib import Path
 
 def main() -> int:
     target = Path(__file__).resolve().parent / "rag" / "scribe-rag"
-    os.execv(str(target), [str(target), *sys.argv[1:]])
+    os.execv(
+        sys.executable,
+        [sys.executable, str(target), *sys.argv[1:]],
+    )
     return 127
 
 

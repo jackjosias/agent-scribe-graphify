@@ -749,6 +749,7 @@ def _execute_changeset_bound_sync(
     request_id: str = "",
     confirm_deletions: list[str] | None = None,
     confirm_full_replacements: list[dict[str, Any]] | None = None,
+    execution_fence: tenor_changeset.ExecutionFence | None = None,
 ) -> dict[str, Any]:
     agent_id, blocked = _bound_agent()
     if blocked:
@@ -818,6 +819,7 @@ def _execute_changeset_bound_sync(
         confirm_full_replacements=confirm_full_replacements or [],
         request_id=request_id,
         precommit_guard=precommit_guard,
+        execution_fence=execution_fence,
     )
     if not result.get("ok"):
         guard = result.get("guard") if isinstance(result.get("guard"), dict) else {}
@@ -967,6 +969,7 @@ def execute_changeset_sync(
     request_id: str = "",
     confirm_deletions: list[str] | None = None,
     confirm_full_replacements: list[dict[str, Any]] | None = None,
+    execution_fence: tenor_changeset.ExecutionFence | None = None,
 ) -> dict[str, Any]:
     """Execute one accepted changeset inside the isolated worker process."""
 
@@ -988,6 +991,7 @@ def execute_changeset_sync(
         request_id=request_id,
         confirm_deletions=confirm_deletions,
         confirm_full_replacements=confirm_full_replacements,
+        execution_fence=execution_fence,
     )
     payload = _payload(response)
     return payload or response

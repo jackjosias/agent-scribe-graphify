@@ -3,11 +3,9 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
-import os
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -362,18 +360,14 @@ class AtomicTextWriteHardeningTest(unittest.TestCase):
             captured["dir"] = kwargs.get("dir")
             captured["prefix"] = kwargs.get("prefix")
             captured["suffix"] = kwargs.get("suffix")
-            fd, name = real_mkstemp(*args, **kwargs)
-            captured["tmp_name"] = name
-            return fd, name
+            return real_mkstemp(*args, **kwargs)
 
         content = "# Graph Report\n\nBootstrap placeholder.\n"
         with mock.patch.object(tempfile, "mkstemp", fake_mkstemp):
             scribe_bootstrap._atomic_text_write(target, content)
         self.assertEqual(captured["dir"], str(target.parent))
-        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["prefix"], f".{target.name}.")
         self.assertEqual(captured["suffix"], ".tmp")
-        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
-        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
         self.assertEqual(target.read_text(encoding="utf-8"), content)
 
     def test_atomic_text_write_concurrent_no_orphans(self) -> None:

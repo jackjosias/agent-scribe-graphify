@@ -71,6 +71,19 @@ def _ensure_schema(project_root: Path | None = None) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_direct_fs_authorized_task
               ON direct_fs_authorized_mutations_v1(task_id,agent_id,resource);
+            CREATE TABLE IF NOT EXISTS canonical_memory_promotions_v1(
+              entry_id TEXT PRIMARY KEY,
+              task_id TEXT NOT NULL,
+              agent_id TEXT NOT NULL,
+              resource TEXT NOT NULL,
+              source_record_path TEXT NOT NULL,
+              source_record_digest TEXT NOT NULL,
+              before_hash TEXT NOT NULL,
+              after_hash TEXT NOT NULL,
+              created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_memory_promotions_task
+              ON canonical_memory_promotions_v1(task_id,agent_id,resource);
             """
         )
         columns = {
@@ -262,24 +275,30 @@ def _receipt_is_committed(con: Any, item: dict[str, str]) -> bool:
             == _normalize_hash_value(str(item.get("after_hash") or ""))
         )
     if tool == "scribe_promote_record":
-        # Canonical promotion is a first-class MCP mutation. Accept its receipt
-        # only after the task context confirms that this exact canonical entry
-        # was promoted for the same task and agent. This prevents callers from
-        # laundering an arbitrary direct write by merely naming the tool.
         row = con.execute(
             """
-            SELECT task_id,agent_id,scribe_record_promoted,scribe_record_entry_id
-            FROM task_context_v2
-            WHERE task_id=? AND agent_id=?
+            SELECT entry_id,task_id,agent_id,resource,source_record_path,
+                   source_record_digest,after_hash
+            FROM canonical_memory_promotions_v1
+            WHERE entry_id=?
             """,
-            (task_id, agent_id),
+            (patch_id,),
         ).fetchone()
+        if not row:
+            return False
+        expected_entry_id = "CANON-" + hashlib.sha256(
+            f"{row['source_record_digest']}:{row['source_record_path']}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16].upper()
         return bool(
-            row
-            and patch_id
-            and item.get("after_hash")
-            and row["scribe_record_promoted"]
-            and row["scribe_record_entry_id"] == patch_id
+            patch_id == expected_entry_id == row["entry_id"]
+            and row["task_id"] == task_id
+            and row["agent_id"] == agent_id
+            and row["resource"] == resource
+            and row["source_record_digest"]
+            and _normalize_hash_value(str(row["after_hash"] or ""))
+            == _normalize_hash_value(str(item.get("after_hash") or ""))
         )
     return False
 
@@ -303,6 +322,70 @@ def _verified_authorized_since(con: Any, cutoff_rowid: int) -> list[dict[str, st
         except Exception:
             continue
     return verified
+
+
+def _verified_active_tenor_writes(
+    con: Any,
+    current: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[str]]:
+    current_map = _status_key(current)
+    try:
+        rows = con.execute(
+            """
+            SELECT tx.task_id,tx.agent_id,tx.changeset_id,
+                   tx.execution_job_id,tx.worker_instance_id,tx.fence_token,
+                   files.resource,files.new_hash,files.applied,
+                   jobs.status AS job_status,jobs.lease_expires_at,
+                   locks.expires_at AS lock_expires_at
+            FROM tenor_changesets_v1 AS tx
+            JOIN tenor_changeset_files_v1 AS files
+              ON files.changeset_id=tx.changeset_id
+            JOIN tenor_runtime_jobs_v1 AS jobs
+              ON jobs.job_id=tx.execution_job_id
+             AND jobs.worker_instance_id=tx.worker_instance_id
+             AND jobs.fence_token=tx.fence_token
+            JOIN resource_exclusive_locks AS locks
+              ON locks.changeset_id=tx.changeset_id
+             AND locks.resource=files.resource
+             AND locks.execution_job_id=tx.execution_job_id
+             AND locks.worker_instance_id=tx.worker_instance_id
+             AND locks.fence_token=tx.fence_token
+            WHERE tx.execution_job_id!=''
+              AND tx.status IN ('applying','validating','guarding','rollback_required')
+              AND jobs.status IN ('running','recovering')
+              AND jobs.lease_expires_at>?
+              AND locks.expires_at>?
+              AND files.applied IN (-1,1)
+            """,
+            (_now(), time.time()),
+        ).fetchall()
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return [], []
+        return [], [f"TENOR_ACTIVE_WRITE_PROOF_UNAVAILABLE:{type(exc).__name__}:{exc}"]
+    verified: list[dict[str, str]] = []
+    for row in rows:
+        resource = str(row["resource"] or "")
+        entry = current_map.get(resource)
+        if entry is None:
+            continue
+        expected = _normalize_hash_value(str(row["new_hash"] or ""))
+        observed = str(entry.get("hash") or "")
+        if not (
+            expected == observed
+            or (expected == patch_queue.NEW_FILE_HASH and not observed)
+        ):
+            continue
+        verified.append({
+            "task_id": str(row["task_id"] or ""),
+            "agent_id": str(row["agent_id"] or ""),
+            "resource": resource,
+            "tool": "tenor_active_fenced_write",
+            "patch_id": str(row["changeset_id"] or ""),
+            "before_hash": "",
+            "after_hash": expected,
+        })
+    return verified, []
 
 
 def _status_key(entries: list[dict[str, str]]) -> dict[str, dict[str, str]]:
@@ -375,19 +458,36 @@ def workspace_snapshot(
     return {"verdict": "DIRECT_FS_TRIPWIRE_SNAPSHOT_CREATED", "task_id": task_id, "agent_id": agent_id, "baseline": baseline}
 
 
-def record_authorized_mutation(task_id: str, agent_id: str, resource: str, tool: str, patch_id: str = "", before_hash: str = "", after_hash: str = "", project_root: Path | None = None) -> dict[str, Any]:
+def record_authorized_mutation(
+    task_id: str,
+    agent_id: str,
+    resource: str,
+    tool: str,
+    patch_id: str = "",
+    before_hash: str = "",
+    after_hash: str = "",
+    project_root: Path | None = None,
+    *,
+    connection: Any | None = None,
+) -> dict[str, Any]:
     root = _project_root(project_root)
     if not task_id or not agent_id or not resource or not tool:
         raise ValueError("task_id, agent_id, resource and tool are required")
-    _ensure_schema(root)
+    if connection is None:
+        _ensure_schema(root)
     safe_resource = _safe_resource(resource)
     mutation_id = f"dfm-{uuid.uuid4().hex[:12]}"
-    with db.connect(root) as con:
+    def insert(con: Any) -> None:
         con.execute(
             "INSERT INTO direct_fs_authorized_mutations_v1(id,task_id,agent_id,resource,tool,patch_id,before_hash,after_hash,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
             (mutation_id, task_id, agent_id, safe_resource, tool, patch_id or "", _normalize_hash_value(before_hash or ""), _normalize_hash_value(after_hash or ""), _now()),
         )
         db.add_event(con, "direct_fs_tripwire.authorized_mutation", {"task_id": task_id, "resource": safe_resource, "tool": tool, "patch_id": patch_id or ""}, agent_id)
+    if connection is not None:
+        insert(connection)
+    else:
+        with db.connect(root) as con:
+            insert(con)
     return {"verdict": "DIRECT_FS_AUTHORIZED_MUTATION_RECORDED", "id": mutation_id, "resource": safe_resource}
 
 
@@ -417,16 +517,22 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
             current = _workspace_status(root)
             return {"verdict": "DIRECT_FS_TRIPWIRE_NO_SNAPSHOT", "task_id": task_id, "agent_id": agent_id, "suspects": [], "git_status": current}
         baseline = json.loads(snapshot["baseline_status_json"])
-        verified_authorized = _verified_authorized_since(
-            con,
-            int(snapshot.get("authorization_cutoff_rowid") or 0),
-        )
     current = _workspace_status(root)
     baseline_map = _status_key(baseline)
     current_map = _status_key(current)
     for path in sorted(set(baseline_map).difference(current_map)):
         current.append({"path": path, "status": "ABSENT", "hash": ""})
     current.sort(key=lambda item: item["path"])
+    with db.connect(root) as con:
+        verified_authorized = _verified_authorized_since(
+            con,
+            int(snapshot.get("authorization_cutoff_rowid") or 0),
+        )
+        active_tenor_writes, proof_warnings = _verified_active_tenor_writes(
+            con,
+            current,
+        )
+    verified_authorized.extend(active_tenor_writes)
     suspects: list[dict[str, str]] = []
     wanted_resource = _safe_resource(resource)
     for entry in current:
@@ -452,8 +558,28 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
     verdict = DIRECT_WRITE_BYPASS_DETECTED if suspects else TRIPWIRE_CLEAN
     with db.connect(root) as con:
         event = "direct_fs_tripwire.bypass_detected" if suspects else "direct_fs_tripwire.clean"
-        db.add_event(con, event, {"task_id": task_id, "resource": wanted_resource, "suspects": suspects, "authorized": verified_authorized}, agent_id)
-    return {"verdict": verdict, "task_id": task_id, "agent_id": agent_id, "resource": wanted_resource, "suspects": suspects, "git_status": current, "authorized_mutations": verified_authorized}
+        db.add_event(
+            con,
+            event,
+            {
+                "task_id": task_id,
+                "resource": wanted_resource,
+                "suspects": suspects,
+                "authorized": verified_authorized,
+                "proof_warnings": proof_warnings,
+            },
+            agent_id,
+        )
+    return {
+        "verdict": verdict,
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "resource": wanted_resource,
+        "suspects": suspects,
+        "git_status": current,
+        "authorized_mutations": verified_authorized,
+        "proof_warnings": proof_warnings,
+    }
 
 
 def assert_no_unauthorized_mutations(project_root: Path | None, task_id: str, agent_id: str, resource: str = "") -> dict[str, Any]:

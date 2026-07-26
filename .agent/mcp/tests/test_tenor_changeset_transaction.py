@@ -6,8 +6,10 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -16,7 +18,7 @@ MCP_DIR = ROOT / ".agent" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from runtime import db, tenor_changeset
+from runtime import db, tenor_changeset, tenor_jobs
 from _strict_cleanup import remove_tree_strict
 
 
@@ -258,7 +260,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(alive, f"validator descendant {child_pid} survived timeout")
 
-    def test_validator_target_mutation_is_detected_and_rolled_back(self) -> None:
+    def test_validator_target_mutation_is_preserved_as_rollback_conflict(self) -> None:
         result = self.apply(
             [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
             validators=[{
@@ -271,9 +273,26 @@ class TenorChangesetTransactionTest(unittest.TestCase):
             }],
         )
         self.assertFalse(result["ok"], result)
-        self.assertEqual(result["verdict"], "TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK")
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_ROLLBACK_CONFLICT")
+        self.assertEqual(
+            result["cause"],
+            "TENOR_CHANGESET_VALIDATOR_MUTATION_ROLLED_BACK",
+        )
         self.assertEqual(result["drifted_resources"], ["src/a.txt"])
-        self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+        self.assertEqual(
+            (self.root / "src" / "a.txt").read_text(encoding="utf-8"),
+            "validator-drift\n",
+        )
+        self.assertEqual(result["restored"], [])
+        with db.connect(self.root) as con:
+            status = con.execute(
+                f"""
+                SELECT status FROM {tenor_changeset.TRANSACTION_TABLE}
+                WHERE changeset_id=?
+                """,
+                (result["changeset_id"],),
+            ).fetchone()["status"]
+        self.assertEqual(status, "rollback_conflict")
 
     def test_mid_commit_failure_rolls_back_already_replaced_file(self) -> None:
         result = self.apply(
@@ -354,7 +373,7 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertFalse(second["ok"], second)
         self.assertEqual(second["verdict"], "TENOR_CHANGESET_IDEMPOTENCY_CONFLICT")
 
-    def test_recovery_preserves_live_transaction_and_recovers_dead_owner(self) -> None:
+    def test_legacy_recovery_uses_durable_age_not_pid_visibility(self) -> None:
         tenor_changeset.ensure_schema(self.root)
         now = int(time.time())
         with db.connect(self.root) as con:
@@ -371,8 +390,15 @@ class TenorChangesetTransactionTest(unittest.TestCase):
             ).fetchone()[0]
             self.assertEqual(status, "applying")
             con.execute(
-                f"UPDATE {tenor_changeset.TRANSACTION_TABLE} SET owner_pid=? WHERE changeset_id='cs-live'",
-                (2**30,),
+                f"""
+                UPDATE {tenor_changeset.TRANSACTION_TABLE}
+                SET owner_pid=?,updated_at=?
+                WHERE changeset_id='cs-live'
+                """,
+                (
+                    2**30,
+                    now - tenor_changeset.STALE_TRANSACTION_SECONDS - 1,
+                ),
             )
 
         dead = tenor_changeset.recover_incomplete(self.root)
@@ -396,6 +422,421 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_CHANGESET_APPLY_FAILED_ROLLED_BACK")
         self.assertEqual(result["cause"], "TENOR_CHANGESET_RESOURCE_BUSY")
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+
+    def test_identical_concurrent_writers_have_exactly_one_winner(self) -> None:
+        barrier = threading.Barrier(2)
+        change = self.change("src/a.txt", "alpha\n", "shared-winner\n")
+
+        def write(index: int) -> dict[str, object]:
+            barrier.wait(timeout=5)
+            return self.apply(
+                [change],
+                request_id=f"identical-concurrent-{index}",
+                validators=[{
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.15)",
+                    ],
+                    "timeout_seconds": 20,
+                }],
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(write, range(2)))
+        self.assertEqual(sum(bool(item["ok"]) for item in results), 1, results)
+        self.assertEqual(
+            (self.root / "src" / "a.txt").read_text(encoding="utf-8"),
+            "shared-winner\n",
+        )
+
+    def test_contradictory_concurrent_writers_have_exactly_one_winner(self) -> None:
+        barrier = threading.Barrier(2)
+        desired = ("winner-a\n", "winner-b\n")
+
+        def write(index: int) -> dict[str, object]:
+            barrier.wait(timeout=5)
+            return self.apply(
+                [self.change("src/a.txt", "alpha\n", desired[index])],
+                request_id=f"contradictory-concurrent-{index}",
+                validators=[{
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        "import time; time.sleep(0.15)",
+                    ],
+                    "timeout_seconds": 20,
+                }],
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(write, range(2)))
+        winners = [index for index, item in enumerate(results) if item["ok"]]
+        self.assertEqual(len(winners), 1, results)
+        self.assertEqual(
+            (self.root / "src" / "a.txt").read_text(encoding="utf-8"),
+            desired[winners[0]],
+        )
+
+    def test_old_execution_fence_is_rejected_before_first_write(self) -> None:
+        submitted = tenor_jobs.submit_job(
+            self.root,
+            kind="changeset",
+            agent_id="agent-a",
+            task_id="job-task",
+            request_id="fenced-job",
+            payload={"changes": []},
+            max_runtime_seconds=60,
+            auto_launch=False,
+        )
+        claimed = tenor_jobs.claim_job(self.root, str(submitted["job_id"]))
+        old = claimed["worker_fence"]
+        with db.connect(self.root) as con:
+            con.execute(
+                f"UPDATE {tenor_jobs.JOB_TABLE} SET lease_expires_at=? WHERE job_id=?",
+                (int(time.time()) - 1, submitted["job_id"]),
+            )
+        recovered = tenor_jobs.recover_stale_jobs(self.root)
+        self.assertEqual(recovered["requeued"], [submitted["job_id"]])
+        result = self.apply(
+            [self.change("src/a.txt", "alpha\n", "forbidden\n")],
+            request_id="stale-fence-write",
+            execution_fence=tenor_changeset.ExecutionFence(
+                job_id=str(submitted["job_id"]),
+                worker_instance_id=str(old["worker_instance_id"]),
+                fence_token=int(old["fence_token"]),
+            ),
+        )
+        self.assertEqual(
+            result["verdict"],
+            "TENOR_CHANGESET_EXECUTION_FENCE_LOST",
+            result,
+        )
+        self.assertEqual(
+            (self.root / "src" / "a.txt").read_text(encoding="utf-8"),
+            "alpha\n",
+        )
+
+    def test_fenced_transaction_requires_exact_recovery_instance(self) -> None:
+        submitted = tenor_jobs.submit_job(
+            self.root,
+            kind="changeset",
+            agent_id="agent-a",
+            task_id="recover-task",
+            request_id="recover-fenced-job",
+            payload={"changes": []},
+            max_runtime_seconds=60,
+            auto_launch=False,
+        )
+        job_id = str(submitted["job_id"])
+        claimed = tenor_jobs.claim_job(self.root, job_id)
+        fence = claimed["worker_fence"]
+        changeset_id = "cs-fenced-recovery"
+        transaction_dir = (
+            self.root
+            / ".agent"
+            / "state"
+            / "runtime"
+            / "tenor-changesets"
+            / changeset_id
+        )
+        backup = transaction_dir / "backup" / "0000.bin"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"alpha\n")
+        staged = transaction_dir / "staged" / "0000.bin"
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"alpha-2\n")
+        (self.root / "src" / "a.txt").write_bytes(b"alpha-2\n")
+        tenor_changeset.ensure_schema(self.root)
+        now = int(time.time())
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.TRANSACTION_TABLE}(
+                  changeset_id,request_id,request_fingerprint,task_id,agent_id,
+                  owner_pid,execution_job_id,worker_instance_id,fence_token,
+                  status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    changeset_id,
+                    "recover-request",
+                    "fingerprint",
+                    "recover-task",
+                    "agent-a",
+                    999_999_999,
+                    job_id,
+                    fence["worker_instance_id"],
+                    fence["fence_token"],
+                    "applying",
+                    now,
+                    now,
+                ),
+            )
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.FILE_TABLE}(
+                  changeset_id,ordinal,resource,operation,base_hash,new_hash,
+                  backup_path,staged_path,applied
+                ) VALUES(?,?,?,?,?,?,?,?,1)
+                """,
+                (
+                    changeset_id,
+                    0,
+                    "src/a.txt",
+                    "replace",
+                    hashlib.sha256(b"alpha\n").hexdigest(),
+                    hashlib.sha256(b"alpha-2\n").hexdigest(),
+                    str(backup),
+                    str(staged),
+                ),
+            )
+        generic = tenor_changeset.recover_incomplete(self.root)
+        self.assertEqual(generic["recovered"], [])
+        self.assertEqual((self.root / "src" / "a.txt").read_bytes(), b"alpha-2\n")
+        with db.connect(self.root) as con:
+            con.execute(
+                f"UPDATE {tenor_jobs.JOB_TABLE} SET lease_expires_at=? WHERE job_id=?",
+                (int(time.time()) - 1, job_id),
+            )
+        recovered = tenor_jobs.recover_stale_jobs(self.root)
+        self.assertEqual(recovered["requeued"], [job_id], recovered)
+        self.assertEqual((self.root / "src" / "a.txt").read_bytes(), b"alpha\n")
+        with db.connect(self.root) as con:
+            row = con.execute(
+                f"""
+                SELECT status,worker_instance_id,fence_token
+                FROM {tenor_changeset.TRANSACTION_TABLE}
+                WHERE changeset_id=?
+                """,
+                (changeset_id,),
+            ).fetchone()
+        self.assertEqual(row["status"], "rolled_back_recovered")
+        self.assertEqual(row["fence_token"], 2)
+        self.assertNotEqual(row["worker_instance_id"], fence["worker_instance_id"])
+
+    def test_retry_exhaustion_recovers_transaction_before_terminal_failure(self) -> None:
+        submitted = tenor_jobs.submit_job(
+            self.root,
+            kind="changeset",
+            agent_id="agent-a",
+            task_id="exhausted-recovery-task",
+            request_id="exhausted-recovery-job",
+            payload={"changes": []},
+            max_runtime_seconds=60,
+            auto_launch=False,
+        )
+        job_id = str(submitted["job_id"])
+        claimed = tenor_jobs.claim_job(self.root, job_id)
+        first_fence = claimed["worker_fence"]
+        changeset_id = "cs-exhausted-recovery"
+        transaction_dir = (
+            self.root
+            / ".agent"
+            / "state"
+            / "runtime"
+            / "tenor-changesets"
+            / changeset_id
+        )
+        backup = transaction_dir / "backup" / "0000.bin"
+        backup.parent.mkdir(parents=True)
+        backup.write_bytes(b"alpha\n")
+        staged = transaction_dir / "staged" / "0000.bin"
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"alpha-2\n")
+        (self.root / "src" / "a.txt").write_bytes(b"alpha-2\n")
+        now = int(time.time())
+        tenor_changeset.ensure_schema(self.root)
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                UPDATE {tenor_jobs.JOB_TABLE}
+                SET fence_token=?,lease_expires_at=?,updated_at=?
+                WHERE job_id=?
+                """,
+                (
+                    tenor_jobs.MAX_JOB_ATTEMPTS,
+                    now - 1,
+                    now - 1,
+                    job_id,
+                ),
+            )
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.TRANSACTION_TABLE}(
+                  changeset_id,request_id,request_fingerprint,task_id,agent_id,
+                  owner_pid,execution_job_id,worker_instance_id,fence_token,
+                  status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    changeset_id,
+                    "exhausted-recovery-request",
+                    "fingerprint",
+                    "exhausted-recovery-task",
+                    "agent-a",
+                    999_999_999,
+                    job_id,
+                    first_fence["worker_instance_id"],
+                    tenor_jobs.MAX_JOB_ATTEMPTS,
+                    "applying",
+                    now,
+                    now,
+                ),
+            )
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.FILE_TABLE}(
+                  changeset_id,ordinal,resource,operation,base_hash,new_hash,
+                  backup_path,staged_path,applied
+                ) VALUES(?,?,?,?,?,?,?,?,1)
+                """,
+                (
+                    changeset_id,
+                    0,
+                    "src/a.txt",
+                    "replace",
+                    hashlib.sha256(b"alpha\n").hexdigest(),
+                    hashlib.sha256(b"alpha-2\n").hexdigest(),
+                    str(backup),
+                    str(staged),
+                ),
+            )
+
+        recovered = tenor_jobs.recover_stale_jobs(self.root)
+
+        self.assertEqual(recovered["failed"], [job_id], recovered)
+        self.assertEqual((self.root / "src" / "a.txt").read_bytes(), b"alpha\n")
+        snapshot = tenor_jobs.job_snapshot(
+            self.root,
+            job_id=job_id,
+            limit=1,
+        )["jobs"][0]
+        self.assertEqual(snapshot["status"], "failed", snapshot)
+        self.assertEqual(
+            snapshot["fence_token"],
+            tenor_jobs.MAX_JOB_ATTEMPTS + 1,
+            snapshot,
+        )
+        self.assertEqual(
+            snapshot["error"]["verdict"],
+            "TENOR_JOB_RETRY_EXHAUSTED",
+            snapshot,
+        )
+        with db.connect(self.root) as con:
+            transaction = con.execute(
+                f"""
+                SELECT status,fence_token
+                FROM {tenor_changeset.TRANSACTION_TABLE}
+                WHERE changeset_id=?
+                """,
+                (changeset_id,),
+            ).fetchone()
+            rollback_locks = con.execute(
+                f"""
+                SELECT COUNT(*) FROM {tenor_changeset.ROLLBACK_LOCK_TABLE}
+                WHERE changeset_id=?
+                """,
+                (changeset_id,),
+            ).fetchone()[0]
+        self.assertEqual(transaction["status"], "rolled_back_recovered")
+        self.assertEqual(
+            transaction["fence_token"],
+            tenor_jobs.MAX_JOB_ATTEMPTS + 1,
+        )
+        self.assertEqual(rollback_locks, 0)
+
+    def test_stale_legacy_rollback_lock_is_recovered_without_pid_authority(self) -> None:
+        tenor_changeset.ensure_schema(self.root)
+        changeset_id = "cs-stale-legacy-rollback-lock"
+        now = int(time.time())
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.TRANSACTION_TABLE}(
+                  changeset_id,request_id,request_fingerprint,task_id,agent_id,
+                  owner_pid,status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    changeset_id,
+                    "legacy-lock-request",
+                    "fingerprint",
+                    "task-a",
+                    "agent-a",
+                    999_999_999,
+                    "applying",
+                    now - tenor_changeset.STALE_TRANSACTION_SECONDS - 2,
+                    now - tenor_changeset.STALE_TRANSACTION_SECONDS - 2,
+                ),
+            )
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.ROLLBACK_LOCK_TABLE}(
+                  changeset_id,execution_job_id,worker_instance_id,
+                  fence_token,acquired_at
+                ) VALUES(?,?,?,?,?)
+                """,
+                (
+                    changeset_id,
+                    "",
+                    "abandoned-legacy-owner",
+                    0,
+                    now - tenor_changeset.STALE_TRANSACTION_SECONDS - 1,
+                ),
+            )
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.LOCK_TABLE}(
+                  lock_id,resource,agent_id,task_id,changeset_id,
+                  execution_job_id,worker_instance_id,fence_token,
+                  mode,created_at,expires_at,heartbeat_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    f"changeset-{changeset_id}-legacy",
+                    "src/a.txt",
+                    "agent-a",
+                    "task-a",
+                    "",
+                    "",
+                    "",
+                    0,
+                    "exclusive",
+                    now - 100,
+                    now + 100,
+                    now - 100,
+                ),
+            )
+
+        recovered = tenor_changeset.recover_incomplete(self.root)
+
+        self.assertEqual(recovered["recovered"], [changeset_id], recovered)
+        with db.connect(self.root) as con:
+            transaction_status = con.execute(
+                f"""
+                SELECT status FROM {tenor_changeset.TRANSACTION_TABLE}
+                WHERE changeset_id=?
+                """,
+                (changeset_id,),
+            ).fetchone()[0]
+            rollback_lock_count = con.execute(
+                f"""
+                SELECT COUNT(*) FROM {tenor_changeset.ROLLBACK_LOCK_TABLE}
+                WHERE changeset_id=?
+                """,
+                (changeset_id,),
+            ).fetchone()[0]
+            resource_lock_count = con.execute(
+                f"""
+                SELECT COUNT(*) FROM {tenor_changeset.LOCK_TABLE}
+                WHERE lock_id=?
+                """,
+                (f"changeset-{changeset_id}-legacy",),
+            ).fetchone()[0]
+        self.assertEqual(transaction_status, "rolled_back_recovered")
+        self.assertEqual(rollback_lock_count, 0)
+        self.assertEqual(resource_lock_count, 0)
 
     def test_runtime_database_connection_closes_on_context_exit(self) -> None:
         with db.connect(self.root) as con:

@@ -17,7 +17,8 @@ TENOR_INIT_READY
   -> tenor_task_start
      -> READY_FOR_CHANGESET | READY_FOR_READ_FINISH | BLOCKED
   -> tenor_apply_changeset | tenor_task_control
-     -> COMMITTED_AND_FINISHED | ROLLED_BACK_AND_RETRYABLE | TERMINAL
+     -> COMMITTED_AND_FINISHED | ROLLED_BACK_AND_RETRYABLE
+        | ROLLBACK_CONFLICT_PRESERVED | TERMINAL
 ```
 
 `tenor_activity` is read-only and may be called at any point after bridge.
@@ -32,8 +33,13 @@ TENOR_INIT_READY
 - Staging and backups are durable before replacement.
 - Validators are argv arrays, use no shell, have bounded timeout/output and run
   after all files are applied.
-- Any apply or validator failure restores every pre-transaction byte state.
-- Incomplete transactions are recovered on the next server start.
+- Rollback first preflights every current hash. It restores only a target still
+  equal to the changeset `new_hash`; later bytes are never overwritten.
+- A rollback hash mismatch is terminal evidence
+  `TENOR_CHANGESET_ROLLBACK_CONFLICT`, not permission to destroy a newer write.
+- Fenced incomplete transactions are recovered only by the exact recovery
+  instance after an atomic fence transfer. Generic recovery never uses PID
+  visibility as distributed authority.
 - Reusing the same request id and payload returns the prior result; reusing it
   with a different payload is rejected.
 
@@ -44,9 +50,38 @@ TENOR_INIT_READY
 - Cross-agent task control and changeset application are refused.
 - A daemon heartbeat reports process presence independently of model turns.
 - Valid task activity renews a rolling TTL.
-- A live PID receives bounded grace; a dead or abandoned process expires
-  fail-closed.
+- Job authority is a non-expired SQLite lease plus the exact
+  `(job_id, worker_instance_id, fence_token)`.
+- A PID is diagnostic only. It cannot authorize heartbeat, publication,
+  rollback, lock release or recovery.
+- Recovery atomically increments the fence and preserves one logical
+  `attempt_count`; an older instance fails closed at every critical boundary.
+- Retry exhaustion never bypasses recovery: a terminal recovery fence resolves
+  the incomplete changeset before `TENOR_JOB_RETRY_EXHAUSTED` is published.
 - Parallel agents are observed, never heuristically retired as “ghosts.”
+
+## Graphify causal publication
+
+- Workspace identity is `relative-path-size-content-sha256-v2`; timestamps do
+  not participate in graph identity.
+- Source enumeration, bytes and parallel workers are bounded. Each file is
+  checked before and after hashing; concurrent mutation fails closed.
+- A build refuses every active changeset, revalidates the same fingerprint
+  before publication and emits a monotone `graph_epoch`.
+- At most one Graphify job is active. A queued rebuild has launch priority and
+  fences new changesets until readiness is current.
+
+## SCRIBE promotion and tripwire proof
+
+- Canonical promotion serializes writers through the coordination database.
+- File replacement, deterministic `(entry_id, source path, source digest)`
+  proof, tripwire receipt and task-context flag commit as one recoverable
+  operation; a failed SQL commit restores the previous bytes.
+- Canonical `summary` and `l0_abstract` are identical, and successful promotion
+  requires semantic retrieval of the entry.
+- A concurrent TENOR mutation is exempt from tripwire suspicion only when its
+  current hash, declared `new_hash`, write intent, transaction, exclusive lock,
+  live job lease, worker instance and fence token all agree.
 
 ## Internal compatibility
 

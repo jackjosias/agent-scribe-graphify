@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,10 @@ def call_tool(name: str, **args: Any) -> dict[str, Any]:
 
 def git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True)
+
+
+def scribe_rag_command(*args: str) -> list[str]:
+    return [sys.executable, str(SCRIBE_RAG), *args]
 
 
 class CanonicalMemoryGateTest(unittest.TestCase):
@@ -257,7 +262,7 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertIn(f"CANONICAL_PROMOTION_{token}", str(entry.value))
         proc = subprocess.run(
-            [str(SCRIBE_RAG), "query", f"CANONICAL_PROMOTION_{token}"],
+            scribe_rag_command("query", f"CANONICAL_PROMOTION_{token}"),
             cwd=str(self.root),
             text=True,
             capture_output=True,
@@ -508,6 +513,11 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         entry_value = getattr(entry, "value", {}) or {}
         combined = " ".join(str(v) for v in entry_value.values())
         self.assertIn(canon_summary, combined)
+        semantic_hits = store.search(canon_summary, limit=10)
+        self.assertIn(
+            promoted["entry_id"],
+            [document.entity.id for _score, document in semantic_hits],
+        )
 
     def test_24_canonical_promotion_write_finish_pipeline(self) -> None:
         ctx = self.ready_context()
@@ -534,7 +544,13 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertIn(result.get("verdict"), ("CANONICAL_MEMORY_PROMOTED", "TASK_FINISHED_OK"), result)
 
     def test_25_scribe_rag_entities_preserved_after_rebuild(self) -> None:
-        subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        subprocess.run(
+            scribe_rag_command("build"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         ctx = self.ready_context(intent="read")
         record = call_tool(
             "scribe_record",
@@ -555,9 +571,21 @@ class CanonicalMemoryGateTest(unittest.TestCase):
             record_path=record["record_path"],
         )
         self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
-        cp = subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        cp = subprocess.run(
+            scribe_rag_command("build"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         self.assertEqual(cp.returncode, 0, f"scribe-rag build failed: {cp.stderr}")
-        bc = subprocess.run([str(SCRIBE_RAG), "context"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        bc = subprocess.run(
+            scribe_rag_command("context"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         self.assertEqual(bc.returncode, 0, f"scribe-rag context failed: {bc.stderr}")
         self.assertNotIn("entities: 0", bc.stdout)
         self.assertIn("entities:", bc.stdout)
@@ -596,6 +624,65 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         entry = next(item for item in data["canonical"] if item["id"] == promoted["entry_id"])
         self.assertTrue(entry.get("schema_patch_date"))
         self.assertTrue(entry.get("status_log"))
+
+    def test_27_concurrent_promotions_preserve_both_entries(self) -> None:
+        record_dir = self.root / ".agent" / "state" / "runtime" / "scribe-records"
+        record_dir.mkdir(parents=True, exist_ok=True)
+        records: list[tuple[dict[str, Any], Path]] = []
+        for index in range(2):
+            record = {
+                "request": f"concurrent promotion {index}",
+                "summary": f"CONCURRENT_CANONICAL_PROMOTION_{index}",
+                "verdict": "PASS",
+                "record_type": "validation",
+                "memory_policy": "canonical_required",
+                "timestamp": 1_785_000_000 + index,
+                "resources": ["tracked.txt"],
+            }
+            path = record_dir / f"concurrent-{index}.json"
+            path.write_text(
+                json.dumps(record, ensure_ascii=False, sort_keys=True),
+                encoding="utf-8",
+            )
+            records.append((record, path))
+
+        def promote(index: int) -> dict[str, Any]:
+            record, path = records[index]
+            return canonical_memory_gate.promote_record(
+                self.root,
+                record,
+                path,
+                scope="tracked.txt",
+                memory_policy="canonical_required",
+                agent_id=f"concurrent-agent-{index}",
+                task_id=f"concurrent-task-{index}",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(promote, range(2)))
+        self.assertTrue(all(result["ok"] for result in results), results)
+        raw = (self.root / RESOURCE).read_text(encoding="utf-8")
+        for index, result in enumerate(results):
+            self.assertIn(result["entry_id"], raw)
+            self.assertIn(f"CONCURRENT_CANONICAL_PROMOTION_{index}", raw)
+        self.assertFalse(
+            (
+                self.root
+                / ".agent"
+                / "state"
+                / "locks"
+                / "canonical-memory-promotion.lock"
+            ).exists()
+        )
+        with db.connect(self.root) as con:
+            proofs = con.execute(
+                """
+                SELECT COUNT(*) FROM canonical_memory_promotions_v1
+                WHERE entry_id IN (?,?)
+                """,
+                (results[0]["entry_id"], results[1]["entry_id"]),
+            ).fetchone()[0]
+        self.assertEqual(proofs, 2)
 
 
 if __name__ == "__main__":
