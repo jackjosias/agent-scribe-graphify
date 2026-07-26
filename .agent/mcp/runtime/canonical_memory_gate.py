@@ -21,6 +21,11 @@ except Exception:
     import direct_fs_tripwire  # type: ignore
 
 try:
+    from .owned_file_lock import owned_file_lock
+except Exception:
+    from owned_file_lock import owned_file_lock  # type: ignore
+
+try:
     _SCRIBE_SCRIPTS = Path(__file__).resolve().parents[2] / "workflow" / "scribe" / "sel" / "scripts"
     if str(_SCRIBE_SCRIPTS) not in sys.path:
         sys.path.insert(0, str(_SCRIBE_SCRIPTS))
@@ -713,16 +718,19 @@ def _append_canonical_entry_text(existing: str, entry_block: str) -> str:
     canon_marker = "\ncanonical:\n"
     metrics_marker = "\nmetrics:\n"
     if canon_marker in existing:
-        prefix, suffix = existing.rsplit(metrics_marker, 1)
-        canon_prefix, canon_body = prefix.rsplit(canon_marker, 1)
-        return canon_prefix + canon_marker + canon_body.rstrip() + "\n" + entry_block + metrics_marker + suffix
+        if metrics_marker in existing:
+            prefix, suffix = existing.rsplit(metrics_marker, 1)
+            canon_prefix, canon_body = prefix.rsplit(canon_marker, 1)
+            return canon_prefix + canon_marker + canon_body.rstrip() + "\n" + entry_block + metrics_marker + suffix
+        canon_prefix, canon_body = existing.rsplit(canon_marker, 1)
+        return canon_prefix + canon_marker + canon_body.rstrip() + "\n" + entry_block
     if metrics_marker in existing:
         prefix, suffix = existing.rsplit(metrics_marker, 1)
         return prefix.rstrip() + "\n" + canon_marker + entry_block + metrics_marker + suffix
     return existing.rstrip() + "\n" + canon_marker + entry_block
 
 
-def promote_record(
+def _promote_record_locked(
     project_root: Path | None,
     record: dict[str, Any],
     source_record_path: Path,
@@ -945,3 +953,61 @@ def promote_record(
         "source_record_digest": source_record_digest,
         "doctor_validation": "PASS",
     }
+
+
+def promote_record(
+    project_root: Path | None,
+    record: dict[str, Any],
+    source_record_path: Path,
+    *,
+    scope: str = "",
+    memory_policy: str = "canonical_required",
+    agent_id: str = "",
+    task_id: str = "",
+) -> dict[str, Any]:
+    """Serialize canonical publication across threads and host processes."""
+
+    root = _project_root(project_root)
+    lock_path = (
+        root
+        / ".agent"
+        / "state"
+        / "locks"
+        / "canonical-memory-promotion.lock"
+    )
+    try:
+        with owned_file_lock(
+            lock_path,
+            purpose="canonical-memory-promotion",
+            timeout_seconds=30.0,
+            stale_after_seconds=120.0,
+        ):
+            return _promote_record_locked(
+                root,
+                record,
+                source_record_path,
+                scope=scope,
+                memory_policy=memory_policy,
+                agent_id=agent_id,
+                task_id=task_id,
+            )
+    except Exception as exc:
+        scribe_path = _scribe_path(root)
+        record_path = (
+            str(source_record_path.relative_to(root))
+            if source_record_path.is_relative_to(root)
+            else str(source_record_path)
+        )
+        return {
+            "ok": False,
+            "verdict": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "state": "CANONICAL_MEMORY_PROMOTION_FAILED",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "canonical_memory_file": (
+                str(scribe_path.relative_to(root))
+                if scribe_path.is_relative_to(root)
+                else scribe_path.name
+            ),
+            "record_path": record_path,
+            "canonical_memory_updated": False,
+        }

@@ -227,16 +227,20 @@ def _iter_source_files(
                 relative = path.relative_to(root).as_posix()
                 if path.name not in _MARKER_FILES and path.suffix.lower() not in _SOURCE_SUFFIXES:
                     continue
-                stat = entry.stat(follow_symlinks=False)
-                size = int(stat.st_size)
+                # DirEntry.stat() can expose zero-valued st_ino/st_dev fields
+                # on Windows while os.stat() and fstat() expose the real file
+                # index. Snapshot through the path so every later identity
+                # comparison uses the same stat family on every platform.
+                source_stat = os.stat(path, follow_symlinks=False)
+                size = int(source_stat.st_size)
                 total_bytes += size
                 rows.append(
                     SourceSnapshot(
                         relative=relative,
                         size=size,
-                        mtime_ns=int(stat.st_mtime_ns),
-                        device=int(stat.st_dev),
-                        inode=int(stat.st_ino),
+                        mtime_ns=int(source_stat.st_mtime_ns),
+                        device=int(source_stat.st_dev),
+                        inode=int(source_stat.st_ino),
                     )
                 )
                 if len(rows) > max_files or total_bytes > max_bytes:

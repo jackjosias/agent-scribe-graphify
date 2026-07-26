@@ -251,18 +251,14 @@ class AtomicLockWriteHardeningTest(unittest.TestCase):
             captured["dir"] = kwargs.get("dir")
             captured["prefix"] = kwargs.get("prefix")
             captured["suffix"] = kwargs.get("suffix")
-            fd, name = real_mkstemp(*args, **kwargs)
-            captured["tmp_name"] = name
-            return fd, name
+            return real_mkstemp(*args, **kwargs)
 
         payload = {"schema": "tenor_init_lock_v2", "nonce": "abc", "pid": 999999}
         with mock.patch.object(tempfile, "mkstemp", fake_mkstemp):
             orchestrator._atomic_lock_write(lock_path, payload)
         self.assertEqual(captured["dir"], str(lock_path.parent))
-        self.assertTrue(str(captured["prefix"]).startswith(f".{lock_path.name}."))
+        self.assertEqual(captured["prefix"], f".{lock_path.name}.")
         self.assertEqual(captured["suffix"], ".tmp")
-        self.assertNotIn(str(os.getpid()), captured["tmp_name"])
-        self.assertNotIn(str(time.time_ns()), captured["tmp_name"])
         self.assertEqual(json.loads(lock_path.read_text(encoding="utf-8")), payload)
 
     def test_atomic_lock_write_concurrent_no_orphans(self) -> None:

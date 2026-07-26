@@ -40,6 +40,10 @@ def git(root: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True)
 
 
+def scribe_rag_command(*args: str) -> list[str]:
+    return [sys.executable, str(SCRIBE_RAG), *args]
+
+
 class CanonicalMemoryGateTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -258,7 +262,7 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertIsNotNone(entry)
         self.assertIn(f"CANONICAL_PROMOTION_{token}", str(entry.value))
         proc = subprocess.run(
-            [str(SCRIBE_RAG), "query", f"CANONICAL_PROMOTION_{token}"],
+            scribe_rag_command("query", f"CANONICAL_PROMOTION_{token}"),
             cwd=str(self.root),
             text=True,
             capture_output=True,
@@ -540,7 +544,13 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         self.assertIn(result.get("verdict"), ("CANONICAL_MEMORY_PROMOTED", "TASK_FINISHED_OK"), result)
 
     def test_25_scribe_rag_entities_preserved_after_rebuild(self) -> None:
-        subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        subprocess.run(
+            scribe_rag_command("build"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         ctx = self.ready_context(intent="read")
         record = call_tool(
             "scribe_record",
@@ -561,9 +571,21 @@ class CanonicalMemoryGateTest(unittest.TestCase):
             record_path=record["record_path"],
         )
         self.assertEqual(promoted.get("verdict"), "CANONICAL_MEMORY_PROMOTED", promoted)
-        cp = subprocess.run([str(SCRIBE_RAG), "build"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        cp = subprocess.run(
+            scribe_rag_command("build"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         self.assertEqual(cp.returncode, 0, f"scribe-rag build failed: {cp.stderr}")
-        bc = subprocess.run([str(SCRIBE_RAG), "context"], cwd=str(self.root), text=True, capture_output=True, timeout=30)
+        bc = subprocess.run(
+            scribe_rag_command("context"),
+            cwd=str(self.root),
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
         self.assertEqual(bc.returncode, 0, f"scribe-rag context failed: {bc.stderr}")
         self.assertNotIn("entities: 0", bc.stdout)
         self.assertIn("entities:", bc.stdout)
@@ -643,6 +665,15 @@ class CanonicalMemoryGateTest(unittest.TestCase):
         for index, result in enumerate(results):
             self.assertIn(result["entry_id"], raw)
             self.assertIn(f"CONCURRENT_CANONICAL_PROMOTION_{index}", raw)
+        self.assertFalse(
+            (
+                self.root
+                / ".agent"
+                / "state"
+                / "locks"
+                / "canonical-memory-promotion.lock"
+            ).exists()
+        )
         with db.connect(self.root) as con:
             proofs = con.execute(
                 """

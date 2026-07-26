@@ -298,9 +298,7 @@ class AtomicWriterHardeningTest(unittest.TestCase):
             captured["dir"] = kwargs.get("dir")
             captured["prefix"] = kwargs.get("prefix")
             captured["suffix"] = kwargs.get("suffix")
-            fd, name = real_mkstemp(*args, **kwargs)
-            captured["tmp_name"] = name
-            return fd, name
+            return real_mkstemp(*args, **kwargs)
 
         return fake_mkstemp
 
@@ -311,7 +309,7 @@ class AtomicWriterHardeningTest(unittest.TestCase):
         with mock.patch.object(tempfile, "mkstemp", self._capture_mkstemp(captured)):
             readiness._atomic_json(target, payload)
         self.assertEqual(captured["dir"], str(target.parent))
-        self.assertTrue(str(captured["prefix"]).startswith(f".{target.name}."))
+        self.assertEqual(captured["prefix"], f".{target.name}.")
         self.assertEqual(captured["suffix"], ".tmp")
         self.assertEqual(json.loads(target.read_text(encoding="utf-8")), payload)
 

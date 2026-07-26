@@ -291,7 +291,7 @@ class DirectFsTripwireTest(unittest.TestCase):
         self.assertEqual(result["authorized_mutations"], [], result)
 
     def test_24_direct_delete_is_detected_without_git(self) -> None:
-        shutil.rmtree(self.root / ".git")
+        (self.root / ".git").rename(Path(self.tmp.name) / ".git-disabled")
         current = self.before(resource="tracked.txt")
         (self.root / "tracked.txt").unlink()
         result = self.audit(current)
@@ -385,10 +385,9 @@ class DirectFsTripwireTest(unittest.TestCase):
                     current_time,
                 ),
             )
-        (self.root / "tracked.txt").write_text(
-            "tenor concurrent\n",
-            encoding="utf-8",
-        )
+        # Keep the proof byte-exact on Windows, where write_text() translates
+        # LF to CRLF and would otherwise invalidate the expected SHA-256.
+        (self.root / "tracked.txt").write_bytes(b"tenor concurrent\n")
         attested = self.audit(current)
         self.assertEqual(attested["verdict"], "WORKSPACE_AUDIT_OK", attested)
         self.assertTrue(
