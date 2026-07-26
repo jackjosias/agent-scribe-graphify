@@ -308,14 +308,23 @@ tenor_apply_changeset(task_id, changes[], validators[])
   -> preflight de tous les chemins/hashes/locks avant la première écriture
   -> TENOR_CHANGESET_ACCEPTED, accusé durable non terminal
 tenor_activity() après poll_after_ms
-  -> job succeeded ou failed avec commit/rollback de tous les fichiers
+  -> job succeeded, rollback conditionnel ou conflit non destructif explicite
   -> validation obligatoire, filtrage/promotion SCRIBE et clôture terminale
 ```
 
-Tant que le job est `queued`, `launching` ou `running`, l'agent ne resoumet pas
+Tant que le job est `queued`, `recovering`, `launching` ou `running`, l'agent ne resoumet pas
 le changeset et n'appelle pas `tenor_task_control`. Les validateurs s'exécutent
 dans un worker borné afin que `file_hash`, `tenor_activity` et les diagnostics
 restent disponibles. Seul `job.result` terminal constitue une preuve de fin.
+
+L'autorité du worker ne vient jamais de son PID. Chaque mutation, heartbeat,
+publication terminale, rollback et libération de lock exige un bail SQLite
+non expiré et le triplet exact `(job_id, worker_instance_id, fence_token)`.
+Une reprise transfère atomiquement un token monotone ; l'ancien worker échoue
+fermé. `attempt_count` compte la tentative métier et n'est pas gonflé par un
+transfert d'infrastructure. Même si le budget de reprise est épuisé, TENOR
+acquiert d'abord un fence terminal et récupère toute transaction incomplète
+avant de publier `TENOR_JOB_RETRY_EXHAUSTED`.
 
 Le changeset accepte jusqu'à 64 fichiers, refuse traversal et symlinks et
 acquiert les locks dans un ordre stable. Pour un fichier texte existant,
@@ -325,6 +334,11 @@ d'occurrences exact. `operation="replace"` signifie toujours le contenu
 intégral ; une réduction destructive exige une confirmation portant le chemin,
 le hash avant et le hash après. `create` déduit le sentinel de nouveau fichier
 en interne. Toute mutation exige au moins un validateur argv sans shell.
+
+Un rollback n'écrase jamais un writer plus récent : tous les hashes sont
+préflightés et un fichier n'est restauré que si ses octets courants correspondent
+encore au `new_hash` du changeset. Sinon TENOR conserve les octets et les preuves
+avec `TENOR_CHANGESET_ROLLBACK_CONFLICT`.
 
 La capsule décisionnelle est vérifiée immédiatement avant l'écriture. Si une
 autre tâche enrichit SCRIBE ou renouvelle le manifeste Graphify, le même appel
@@ -339,6 +353,11 @@ causale reste un reçu runtime motivé. Une décision architecturale ambiguë re
 ouverte jusqu'à `tenor_task_control(action="memory_promote"|"memory_skip")`.
 Il n'existe aucune clôture silencieuse sans admission mémoire.
 
+Une promotion SCRIBE canonique publie sous une transaction coordonnée le fichier,
+la preuve déterministe liée au digest source, le reçu tripwire et le flag de
+contexte. Le résumé est aussi écrit dans `l0_abstract` et doit être retrouvable
+sémantiquement avant toute clôture déclarée.
+
 Une erreur de payload ou d'ancre reste récupérable dans la même tâche. Si
 l'opérateur abandonne une tâche non commitée, `tenor_task_control(action="cancel")`
 la ferme sans changeset factice. Le modèle ne demande jamais à l'utilisateur
@@ -346,7 +365,11 @@ d'appliquer un patch manuel et ne bascule jamais vers Edit/Bash.
 
 Hors TENOR INIT, un opérateur ou un contrôle de maintenance peut appeler
 `graphify_project_build(timeout_seconds=180)`. Ce tool est idempotent,
-single-flight et refuse les propriétaires produit actifs. Un rebuild retourne
+single-flight et refuse les propriétaires produit ou changesets actifs. Son
+fingerprint causal est `relative-path-size-content-sha256-v2` : `mtime` est
+ignoré, une mutation pendant le hash échoue fermé et le manifeste publie un
+`graph_epoch` monotone. Un rebuild en attente a priorité et bloque le lancement
+de nouveaux writers jusqu'au graphe frais. Un rebuild retourne
 `GRAPHIFY_BUILD_ACCEPTED`; l'agent attend `poll_after_ms` puis interroge
 `graphify_required_check`. Le modèle ne doit
 jamais l'utiliser comme chorégraphie de reprise d'INIT, exécuter

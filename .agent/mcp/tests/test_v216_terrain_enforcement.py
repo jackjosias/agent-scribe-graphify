@@ -25,7 +25,14 @@ for path in (MCP_DIR, AGENT_DIR):
         sys.path.insert(0, str(path))
 
 from host_adapter import host_config
-from runtime import db, graphify_build, graphify_readiness, installation_state, tenor_jobs
+from runtime import (
+    db,
+    graphify_build,
+    graphify_readiness,
+    installation_state,
+    tenor_changeset,
+    tenor_jobs,
+)
 from _strict_cleanup import remove_tree_strict
 from unittest.mock import patch
 
@@ -156,6 +163,88 @@ class V216TerrainEnforcementTest(unittest.TestCase):
         result = self.call("graphify_project_build", timeout_seconds=1)
         self.assertEqual(result["verdict"], "GRAPHIFY_BUILD_ACTIVE_OWNERSHIP", result)
         self.assertGreaterEqual(result["ownership"]["active_resource_locks"], 1, result)
+
+    def test_graphify_rebuild_waits_for_changeset_commit_then_converges(self) -> None:
+        tenor_changeset.ensure_schema(self.root)
+        now = int(time.time())
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                INSERT INTO {tenor_changeset.TRANSACTION_TABLE}(
+                  changeset_id,request_id,request_fingerprint,task_id,agent_id,
+                  owner_pid,status,created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "cs-graphify-deferred",
+                    "graphify-deferred",
+                    "fingerprint",
+                    "graphify-task",
+                    "terrain-agent",
+                    os.getpid(),
+                    "applying",
+                    now,
+                    now,
+                ),
+            )
+        (self.root / "one.py").write_text("value = 99\n", encoding="utf-8")
+        calls = 0
+
+        def fake_runner(
+            *_args: object,
+            **_kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal calls
+            calls += 1
+            ready = graphify_readiness.write_smoke_fixture(self.root)
+            self.assertTrue(ready["ok"], ready)
+            return subprocess.CompletedProcess(
+                ["graphify"],
+                0,
+                stdout="fixture ready\n",
+            )
+
+        public_blocked = self.call(
+            "graphify_project_build",
+            timeout_seconds=180,
+        )
+        self.assertEqual(
+            public_blocked["verdict"],
+            "GRAPHIFY_BUILD_ACTIVE_CHANGESET",
+            public_blocked,
+        )
+        blocked = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=180,
+            allow_fixture=True,
+            runner=fake_runner,
+        )
+        self.assertEqual(blocked["verdict"], "GRAPHIFY_BUILD_ACTIVE_CHANGESET")
+        self.assertEqual(calls, 0)
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                UPDATE {tenor_changeset.TRANSACTION_TABLE}
+                SET status='committed',updated_at=?
+                WHERE changeset_id='cs-graphify-deferred'
+                """,
+                (int(time.time()),),
+            )
+        rebuilt = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=180,
+            allow_fixture=True,
+            runner=fake_runner,
+        )
+        repeated = graphify_build.build_project_graph(
+            self.root,
+            timeout_seconds=180,
+            allow_fixture=True,
+            runner=fake_runner,
+        )
+        self.assertEqual(rebuilt["verdict"], "GRAPHIFY_PROJECT_BUILD_OK", rebuilt)
+        self.assertEqual(repeated["verdict"], "GRAPHIFY_ALREADY_READY", repeated)
+        self.assertEqual(calls, 1)
 
     def test_graphify_build_is_accepted_without_holding_the_mcp_request_open(self) -> None:
         shutil.rmtree(graphify_readiness.canonical_output_dir(self.root))

@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,15 +17,29 @@ from . import db
 
 JOB_TABLE = "tenor_runtime_jobs_v1"
 JOB_KINDS = frozenset({"changeset", "graphify_build"})
-ACTIVE_STATUSES = frozenset({"queued", "launching", "running"})
+ACTIVE_STATUSES = frozenset({"queued", "recovering", "launching", "running"})
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 MAX_JOB_ATTEMPTS = 3
 MAX_PAYLOAD_BYTES = 8 * 1024 * 1024
 MAX_RESULT_BYTES = 512 * 1024
 DEFAULT_MAX_WORKERS = 4
 LAUNCH_STALE_SECONDS = 30
+DEFAULT_LEASE_SECONDS = 15
+MIN_LEASE_SECONDS = 3
+MAX_LEASE_SECONDS = 300
 
 _LAUNCH_LOCK = threading.RLock()
+
+
+@dataclass(frozen=True)
+class WorkerFence:
+    job_id: str
+    worker_instance_id: str
+    fence_token: int
+    lease_expires_at: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _now() -> int:
@@ -67,6 +82,15 @@ def _max_workers() -> int:
     return max(1, min(requested, 16))
 
 
+def _lease_seconds() -> int:
+    raw = os.environ.get("AGENT_TENOR_JOB_LEASE_SECONDS", "").strip()
+    try:
+        requested = int(raw) if raw else DEFAULT_LEASE_SECONDS
+    except ValueError:
+        requested = DEFAULT_LEASE_SECONDS
+    return max(MIN_LEASE_SECONDS, min(requested, MAX_LEASE_SECONDS))
+
+
 def ensure_schema(project_root: Path | str) -> None:
     root = Path(project_root).resolve()
     db.init_db(root)
@@ -83,6 +107,11 @@ def ensure_schema(project_root: Path | str) -> None:
               payload_json TEXT NOT NULL,
               status TEXT NOT NULL,
               owner_pid INTEGER NOT NULL DEFAULT 0,
+              worker_instance_id TEXT NOT NULL DEFAULT '',
+              fence_token INTEGER NOT NULL DEFAULT 0,
+              lease_expires_at INTEGER NOT NULL DEFAULT 0,
+              heartbeat_at INTEGER NOT NULL DEFAULT 0,
+              recovery_prepared INTEGER NOT NULL DEFAULT 0,
               attempt_count INTEGER NOT NULL DEFAULT 0,
               max_runtime_seconds INTEGER NOT NULL,
               result_json TEXT NOT NULL DEFAULT '{{}}',
@@ -99,6 +128,22 @@ def ensure_schema(project_root: Path | str) -> None:
               ON {JOB_TABLE}(task_id,status,updated_at);
             """
         )
+        columns = {
+            str(row["name"])
+            for row in con.execute(f"PRAGMA table_info({JOB_TABLE})").fetchall()
+        }
+        migrations = {
+            "worker_instance_id": "TEXT NOT NULL DEFAULT ''",
+            "fence_token": "INTEGER NOT NULL DEFAULT 0",
+            "lease_expires_at": "INTEGER NOT NULL DEFAULT 0",
+            "heartbeat_at": "INTEGER NOT NULL DEFAULT 0",
+            "recovery_prepared": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in migrations.items():
+            if name not in columns:
+                con.execute(
+                    f"ALTER TABLE {JOB_TABLE} ADD COLUMN {name} {declaration}"
+                )
 
 
 def _public_row(row: Any) -> dict[str, Any]:
@@ -108,10 +153,82 @@ def _public_row(row: Any) -> dict[str, Any]:
     data.pop("payload_json", None)
     data["overdue"] = bool(
         data.get("status") in ACTIVE_STATUSES
-        and data.get("started_at")
-        and _now() > int(data["started_at"]) + int(data.get("max_runtime_seconds") or 0)
+        and (
+            (
+                int(data.get("lease_expires_at") or 0) > 0
+                and _now() >= int(data["lease_expires_at"])
+            )
+            or (
+                data.get("started_at")
+                and _now()
+                > int(data["started_at"]) + int(data.get("max_runtime_seconds") or 0)
+            )
+        )
     )
     return data
+
+
+def _fence_from_row(row: Any) -> WorkerFence:
+    return WorkerFence(
+        job_id=str(row["job_id"]),
+        worker_instance_id=str(row["worker_instance_id"] or ""),
+        fence_token=int(row["fence_token"] or 0),
+        lease_expires_at=int(row["lease_expires_at"] or 0),
+    )
+
+
+def _fence_payload(row: Any) -> dict[str, Any]:
+    return _fence_from_row(row).to_dict()
+
+
+def _fence_matches(
+    row: Any,
+    worker_instance_id: str,
+    fence_token: int,
+    *,
+    require_live_lease: bool = True,
+) -> bool:
+    if (
+        str(row["worker_instance_id"] or "") != str(worker_instance_id or "")
+        or int(row["fence_token"] or 0) != int(fence_token or 0)
+    ):
+        return False
+    if require_live_lease and int(row["lease_expires_at"] or 0) <= _now():
+        return False
+    return True
+
+
+def assert_worker_fence(
+    project_root: Path | str,
+    *,
+    job_id: str,
+    worker_instance_id: str,
+    fence_token: int,
+    allowed_statuses: frozenset[str] = frozenset({"launching", "running", "recovering"}),
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    ensure_schema(root)
+    with db.connect(root) as con:
+        row = con.execute(
+            f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+    if (
+        not row
+        or str(row["status"]) not in allowed_statuses
+        or not _fence_matches(row, worker_instance_id, fence_token)
+    ):
+        return {
+            "ok": False,
+            "verdict": "TENOR_JOB_FENCE_LOST",
+            "job_id": job_id,
+        }
+    return {
+        "ok": True,
+        "verdict": "TENOR_JOB_FENCE_VALID",
+        "job_id": job_id,
+        "worker_fence": _fence_payload(row),
+    }
 
 
 def submit_job(
@@ -179,9 +296,35 @@ def submit_job(
                 if auto_launch and current["status"] == "queued":
                     launch_queued_jobs(root)
                 return result
+            if normalized_kind == "graphify_build":
+                active_graphify = con.execute(
+                    f"""
+                    SELECT * FROM {JOB_TABLE}
+                    WHERE kind='graphify_build'
+                      AND status IN ('queued','recovering','launching','running')
+                    ORDER BY created_at,job_id
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if active_graphify:
+                    con.execute("COMMIT")
+                    current = _public_row(active_graphify)
+                    if auto_launch and current["status"] == "queued":
+                        launch_queued_jobs(root)
+                    return {
+                        "ok": True,
+                        "verdict": "TENOR_GRAPHIFY_REBUILD_ALREADY_PENDING",
+                        **current,
+                    }
             if task_id:
                 active = con.execute(
-                    f"SELECT * FROM {JOB_TABLE} WHERE task_id=? AND status IN ('queued','launching','running') ORDER BY created_at LIMIT 1",
+                    f"""
+                    SELECT * FROM {JOB_TABLE}
+                    WHERE task_id=?
+                      AND status IN ('queued','recovering','launching','running')
+                    ORDER BY created_at
+                    LIMIT 1
+                    """,
                     (task_id,),
                 ).fetchone()
                 if active:
@@ -236,15 +379,74 @@ def submit_job(
     }
 
 
-def claim_job(project_root: Path | str, job_id: str) -> dict[str, Any]:
+def submit_graphify_rebuild(
+    project_root: Path | str,
+    *,
+    timeout_seconds: int = 180,
+    auto_launch: bool = True,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    try:
+        from . import graphify_readiness
+
+        workspace = graphify_readiness.workspace_fingerprint(root)
+        if workspace["truncated"]:
+            return {
+                "ok": False,
+                "verdict": "TENOR_GRAPHIFY_REBUILD_FINGERPRINT_TOO_LARGE",
+            }
+        fingerprint = str(workspace["fingerprint"])
+    except Exception as exc:
+        return {
+            "ok": False,
+            "verdict": "TENOR_GRAPHIFY_REBUILD_FINGERPRINT_FAILED",
+            "reason": f"{type(exc).__name__}: {exc}",
+        }
+    return submit_job(
+        root,
+        kind="graphify_build",
+        agent_id="",
+        task_id="",
+        request_id=f"graphify-rebuild-{fingerprint}",
+        payload={"timeout_seconds": int(timeout_seconds)},
+        max_runtime_seconds=max(60, int(timeout_seconds) + 60),
+        auto_launch=auto_launch,
+    )
+
+
+def claim_job(
+    project_root: Path | str,
+    job_id: str,
+    *,
+    worker_instance_id: str = "",
+    fence_token: int = 0,
+) -> dict[str, Any]:
     root = Path(project_root).resolve()
     ensure_schema(root)
+    if not worker_instance_id or int(fence_token or 0) <= 0:
+        reserved = _reserve_launch(root, job_id)
+        if reserved is None:
+            snapshot = job_snapshot(root, job_id=job_id, limit=1)
+            current = snapshot["jobs"][0] if snapshot["jobs"] else {}
+            return {
+                "ok": False,
+                "verdict": "TENOR_JOB_NOT_CLAIMABLE",
+                "job_id": job_id,
+                "status": str(current.get("status") or "missing"),
+            }
+        worker_instance_id = reserved.worker_instance_id
+        fence_token = reserved.fence_token
     now = _now()
+    lease_expires_at = now + _lease_seconds()
     with db.connect(root) as con:
         con.execute("BEGIN IMMEDIATE")
         try:
             row = con.execute(f"SELECT * FROM {JOB_TABLE} WHERE job_id=?", (job_id,)).fetchone()
-            if not row or row["status"] not in {"queued", "launching"}:
+            if (
+                not row
+                or row["status"] != "launching"
+                or not _fence_matches(row, worker_instance_id, fence_token)
+            ):
                 con.execute("COMMIT")
                 return {
                     "ok": False,
@@ -252,15 +454,45 @@ def claim_job(project_root: Path | str, job_id: str) -> dict[str, Any]:
                     "job_id": job_id,
                     "status": str(row["status"]) if row else "missing",
                 }
-            increment = 1 if row["status"] == "queued" else 0
-            con.execute(
-                f"UPDATE {JOB_TABLE} SET status='running',owner_pid=?,attempt_count=attempt_count+?,started_at=COALESCE(started_at,?),updated_at=? WHERE job_id=?",
-                (os.getpid(), increment, now, now, job_id),
-            )
+            updated = con.execute(
+                f"""
+                UPDATE {JOB_TABLE}
+                SET status='running',owner_pid=?,started_at=COALESCE(started_at,?),
+                    heartbeat_at=?,lease_expires_at=?,updated_at=?
+                WHERE job_id=? AND status='launching'
+                  AND worker_instance_id=? AND fence_token=?
+                  AND lease_expires_at>?
+                """,
+                (
+                    os.getpid(),
+                    now,
+                    now,
+                    lease_expires_at,
+                    now,
+                    job_id,
+                    worker_instance_id,
+                    int(fence_token),
+                    now,
+                ),
+            ).rowcount
+            if not updated:
+                con.execute("COMMIT")
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_JOB_FENCE_LOST",
+                    "job_id": job_id,
+                }
             db.add_event(
                 con,
                 "tenor.job_running",
-                {"job_id": job_id, "kind": row["kind"], "task_id": row["task_id"], "pid": os.getpid()},
+                {
+                    "job_id": job_id,
+                    "kind": row["kind"],
+                    "task_id": row["task_id"],
+                    "pid": os.getpid(),
+                    "worker_instance_id": worker_instance_id,
+                    "fence_token": int(fence_token),
+                },
                 str(row["agent_id"] or "") or None,
             )
             claimed = con.execute(f"SELECT * FROM {JOB_TABLE} WHERE job_id=?", (job_id,)).fetchone()
@@ -271,7 +503,56 @@ def claim_job(project_root: Path | str, job_id: str) -> dict[str, Any]:
     return {
         "ok": True,
         "verdict": "TENOR_JOB_CLAIMED",
-        "job": {**_public_row(claimed), "payload": _load_json(str(claimed["payload_json"] or "{}"))},
+        "worker_fence": _fence_payload(claimed),
+        "job": {
+            **_public_row(claimed),
+            "payload": _load_json(str(claimed["payload_json"] or "{}")),
+            "worker_fence": _fence_payload(claimed),
+        },
+    }
+
+
+def heartbeat_job(
+    project_root: Path | str,
+    job_id: str,
+    *,
+    worker_instance_id: str,
+    fence_token: int,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    ensure_schema(root)
+    now = _now()
+    lease_expires_at = now + _lease_seconds()
+    with db.connect(root) as con:
+        updated = con.execute(
+            f"""
+            UPDATE {JOB_TABLE}
+            SET heartbeat_at=?,lease_expires_at=?,updated_at=?
+            WHERE job_id=? AND status IN ('launching','running','recovering')
+              AND worker_instance_id=? AND fence_token=?
+              AND lease_expires_at>?
+            """,
+            (
+                now,
+                lease_expires_at,
+                now,
+                job_id,
+                worker_instance_id,
+                int(fence_token),
+                now,
+            ),
+        ).rowcount
+        row = con.execute(
+            f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+    if not updated or not row:
+        return {"ok": False, "verdict": "TENOR_JOB_FENCE_LOST", "job_id": job_id}
+    return {
+        "ok": True,
+        "verdict": "TENOR_JOB_HEARTBEAT",
+        "job_id": job_id,
+        "worker_fence": _fence_payload(row),
     }
 
 
@@ -279,6 +560,8 @@ def _finish_job(
     project_root: Path | str,
     job_id: str,
     *,
+    worker_instance_id: str,
+    fence_token: int,
     status: str,
     result: dict[str, Any] | None = None,
     error: dict[str, Any] | None = None,
@@ -302,10 +585,35 @@ def _finish_job(
             if not row:
                 con.execute("COMMIT")
                 return {"ok": False, "verdict": "TENOR_JOB_UNKNOWN", "job_id": job_id}
-            con.execute(
-                f"UPDATE {JOB_TABLE} SET status=?,owner_pid=0,payload_json='{{}}',result_json=?,error_json=?,updated_at=?,finished_at=? WHERE job_id=?",
-                (status, result_json, error_json, now, now, job_id),
-            )
+            updated = con.execute(
+                f"""
+                UPDATE {JOB_TABLE}
+                SET status=?,owner_pid=0,worker_instance_id='',lease_expires_at=0,
+                    heartbeat_at=0,recovery_prepared=0,payload_json='{{}}',
+                    result_json=?,error_json=?,updated_at=?,finished_at=?
+                WHERE job_id=? AND status IN ('launching','running','recovering')
+                  AND worker_instance_id=? AND fence_token=?
+                  AND lease_expires_at>?
+                """,
+                (
+                    status,
+                    result_json,
+                    error_json,
+                    now,
+                    now,
+                    job_id,
+                    worker_instance_id,
+                    int(fence_token),
+                    now,
+                ),
+            ).rowcount
+            if not updated:
+                con.execute("COMMIT")
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_JOB_FENCE_LOST",
+                    "job_id": job_id,
+                }
             db.add_event(
                 con,
                 f"tenor.job_{status}",
@@ -324,12 +632,65 @@ def _finish_job(
     return {"ok": status == "succeeded", "verdict": verdict, "job_id": job_id, "status": status}
 
 
-def complete_job(project_root: Path | str, job_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    return _finish_job(project_root, job_id, status="succeeded", result=result)
+def complete_job(
+    project_root: Path | str,
+    job_id: str,
+    result: dict[str, Any],
+    *,
+    worker_instance_id: str,
+    fence_token: int,
+) -> dict[str, Any]:
+    root = Path(project_root).resolve()
+    ensure_schema(root)
+    with db.connect(root) as con:
+        row = con.execute(
+            f"SELECT kind FROM {JOB_TABLE} WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+    finished = _finish_job(
+        project_root,
+        job_id,
+        worker_instance_id=worker_instance_id,
+        fence_token=fence_token,
+        status="succeeded",
+        result=result,
+    )
+    if (
+        finished.get("ok")
+        and row
+        and row["kind"] == "changeset"
+        and str(result.get("verdict") or "")
+        in {
+            "TENOR_CHANGESET_COMMITTED",
+            "TENOR_CHANGESET_COMMITTED_MEMORY_DECISION_REQUIRED",
+            "TENOR_CHANGESET_COMMITTED_TASK_FINISHED",
+            "TENOR_CHANGESET_RECOVERED_TERMINAL_STATE",
+        }
+    ):
+        finished["graphify_rebuild"] = submit_graphify_rebuild(
+            root,
+            auto_launch=False,
+        )
+    return finished
 
 
-def fail_job(project_root: Path | str, job_id: str, error: dict[str, Any]) -> dict[str, Any]:
-    return _finish_job(project_root, job_id, status="failed", error=error, result=error)
+def fail_job(
+    project_root: Path | str,
+    job_id: str,
+    error: dict[str, Any],
+    *,
+    worker_instance_id: str,
+    fence_token: int,
+) -> dict[str, Any]:
+    return _finish_job(
+        project_root,
+        job_id,
+        worker_instance_id=worker_instance_id,
+        fence_token=fence_token,
+        status="failed",
+        error=error,
+        result=error,
+    )
 
 
 def job_snapshot(
@@ -375,33 +736,128 @@ def active_job_for_task(project_root: Path | str, task_id: str) -> dict[str, Any
     return next((job for job in snapshot["jobs"] if job["status"] in ACTIVE_STATUSES), None)
 
 
-def _reserve_launch(project_root: Path, job_id: str) -> bool:
+def _reserve_launch(project_root: Path, job_id: str) -> WorkerFence | None:
     now = _now()
+    lease_expires_at = now + _lease_seconds()
     with db.connect(project_root) as con:
         con.execute("BEGIN IMMEDIATE")
         try:
+            row = con.execute(
+                f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if not row or row["status"] != "queued":
+                con.execute("COMMIT")
+                return None
             active = int(
                 con.execute(
-                    f"SELECT COUNT(*) AS count FROM {JOB_TABLE} WHERE status IN ('launching','running')",
+                    f"SELECT COUNT(*) AS count FROM {JOB_TABLE} WHERE status IN ('recovering','launching','running')",
                 ).fetchone()["count"]
             )
             if active >= _max_workers():
                 con.execute("COMMIT")
-                return False
+                return None
+            if row["kind"] == "changeset":
+                graphify_pending = con.execute(
+                    f"""
+                    SELECT 1 FROM {JOB_TABLE}
+                    WHERE kind='graphify_build'
+                      AND status IN ('queued','recovering','launching','running')
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if graphify_pending:
+                    con.execute("COMMIT")
+                    return None
+            if row["kind"] == "graphify_build":
+                try:
+                    transaction_active = con.execute(
+                        """
+                        SELECT 1 FROM tenor_changesets_v1
+                        WHERE status IN ('staging','applying','validating','guarding','rollback_required')
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                except Exception as exc:
+                    if "no such table" in str(exc).lower():
+                        transaction_active = None
+                    else:
+                        raise
+                if transaction_active:
+                    con.execute("COMMIT")
+                    return None
+
+            prepared = bool(
+                int(row["recovery_prepared"] or 0)
+                and str(row["worker_instance_id"] or "")
+                and int(row["fence_token"] or 0) > 0
+                and int(row["lease_expires_at"] or 0) > now
+            )
+            worker_instance_id = (
+                str(row["worker_instance_id"])
+                if prepared
+                else f"worker-{uuid.uuid4().hex}"
+            )
+            fence_token = (
+                int(row["fence_token"])
+                if prepared
+                else int(row["fence_token"] or 0) + 1
+            )
+            if fence_token > MAX_JOB_ATTEMPTS:
+                con.execute("COMMIT")
+                return None
             updated = con.execute(
-                f"UPDATE {JOB_TABLE} SET status='launching',owner_pid=?,attempt_count=attempt_count+1,updated_at=? WHERE job_id=? AND status='queued' AND attempt_count<?",
-                (os.getpid(), now, job_id, MAX_JOB_ATTEMPTS),
+                f"""
+                UPDATE {JOB_TABLE}
+                SET status='launching',owner_pid=?,worker_instance_id=?,
+                    fence_token=?,lease_expires_at=?,heartbeat_at=?,
+                    recovery_prepared=0,
+                    attempt_count=CASE WHEN attempt_count=0 THEN 1 ELSE attempt_count END,
+                    updated_at=?
+                WHERE job_id=? AND status='queued' AND fence_token<=?
+                """,
+                (
+                    os.getpid(),
+                    worker_instance_id,
+                    fence_token,
+                    lease_expires_at,
+                    now,
+                    now,
+                    job_id,
+                    MAX_JOB_ATTEMPTS,
+                ),
             ).rowcount
+            reserved = con.execute(
+                f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
             con.execute("COMMIT")
-            return bool(updated)
+            if not updated or not reserved:
+                return None
+            return _fence_from_row(reserved)
         except Exception:
             con.execute("ROLLBACK")
             raise
 
 
-def _worker_command(project_root: Path, job_id: str) -> list[str]:
+def _worker_command(
+    project_root: Path,
+    job_id: str,
+    worker_fence: WorkerFence,
+) -> list[str]:
     worker = Path(__file__).resolve().with_name("tenor_job_worker.py")
-    return [sys.executable, str(worker), "--root", str(project_root), "--job-id", job_id]
+    return [
+        sys.executable,
+        str(worker),
+        "--root",
+        str(project_root),
+        "--job-id",
+        job_id,
+        "--worker-instance-id",
+        worker_fence.worker_instance_id,
+        "--fence-token",
+        str(worker_fence.fence_token),
+    ]
 
 
 def _secure_log(project_root: Path, job_id: str) -> tuple[int, Path]:
@@ -425,7 +881,11 @@ def _reap_process(process: subprocess.Popen[bytes], project_root: Path) -> None:
         return
 
 
-def _spawn_worker(project_root: Path, job_id: str) -> dict[str, Any]:
+def _spawn_worker(
+    project_root: Path,
+    job_id: str,
+    worker_fence: WorkerFence,
+) -> dict[str, Any]:
     descriptor, log_path = _secure_log(project_root, job_id)
     env = os.environ.copy()
     env["AGENT_SCRIBE_GRAPHIFY_ROOT"] = str(project_root)
@@ -447,21 +907,46 @@ def _spawn_worker(project_root: Path, job_id: str) -> dict[str, Any]:
     else:
         kwargs["start_new_session"] = True
     try:
-        process = subprocess.Popen(_worker_command(project_root, job_id), **kwargs)
+        process = subprocess.Popen(
+            _worker_command(project_root, job_id, worker_fence),
+            **kwargs,
+        )
     finally:
         os.close(descriptor)
     with db.connect(project_root) as con:
-        con.execute(
-            f"UPDATE {JOB_TABLE} SET owner_pid=?,updated_at=? WHERE job_id=? AND status='launching'",
-            (process.pid, _now(), job_id),
-        )
+        now = _now()
+        updated = con.execute(
+            f"""
+            UPDATE {JOB_TABLE} SET owner_pid=?,updated_at=?
+            WHERE job_id=? AND status='launching'
+              AND worker_instance_id=? AND fence_token=? AND lease_expires_at>?
+            """,
+            (
+                process.pid,
+                now,
+                job_id,
+                worker_fence.worker_instance_id,
+                worker_fence.fence_token,
+                now,
+            ),
+        ).rowcount
+    if not updated:
+        process.terminate()
+        process.wait(timeout=5)
+        raise RuntimeError("TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION")
     threading.Thread(
         target=_reap_process,
         args=(process, project_root),
         name=f"tenor-job-reaper-{job_id}",
         daemon=True,
     ).start()
-    return {"job_id": job_id, "pid": process.pid, "log_path": str(log_path)}
+    return {
+        "job_id": job_id,
+        "pid": process.pid,
+        "log_path": str(log_path),
+        "worker_instance_id": worker_fence.worker_instance_id,
+        "fence_token": worker_fence.fence_token,
+    }
 
 
 def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
@@ -477,20 +962,29 @@ def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
             )
             capacity = max(0, _max_workers() - active)
             rows = con.execute(
-                f"SELECT job_id FROM {JOB_TABLE} WHERE status='queued' AND attempt_count<? ORDER BY created_at,job_id LIMIT ?",
+                f"""
+                SELECT job_id FROM {JOB_TABLE}
+                WHERE status='queued' AND fence_token<=?
+                ORDER BY CASE WHEN kind='graphify_build' THEN 0 ELSE 1 END,
+                         created_at,job_id
+                LIMIT ?
+                """,
                 (MAX_JOB_ATTEMPTS, capacity),
             ).fetchall()
         for row in rows:
             job_id = str(row["job_id"])
-            if not _reserve_launch(root, job_id):
+            worker_fence = _reserve_launch(root, job_id)
+            if worker_fence is None:
                 continue
             try:
-                launched.append(_spawn_worker(root, job_id))
+                launched.append(_spawn_worker(root, job_id, worker_fence))
             except Exception as exc:
                 fail_job(
                     root,
                     job_id,
                     {"ok": False, "verdict": "TENOR_JOB_LAUNCH_FAILED", "reason": f"{type(exc).__name__}: {exc}"},
+                    worker_instance_id=worker_fence.worker_instance_id,
+                    fence_token=worker_fence.fence_token,
                 )
     return {
         "ok": True,
@@ -528,6 +1022,96 @@ def _task_terminal_result(project_root: Path, row: Any) -> dict[str, Any] | None
     }
 
 
+def _begin_recovery(
+    project_root: Path,
+    job_id: str,
+) -> tuple[WorkerFence, dict[str, Any]] | None:
+    now = _now()
+    with db.connect(project_root) as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            row = con.execute(
+                f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if (
+                not row
+                or row["status"] not in {"launching", "running", "recovering"}
+                or int(row["lease_expires_at"] or 0) > now
+            ):
+                con.execute("COMMIT")
+                return None
+            current_token = int(row["fence_token"] or 0)
+            worker_instance_id = f"recovery-{uuid.uuid4().hex}"
+            fence_token = current_token + 1
+            lease_expires_at = now + _lease_seconds()
+            updated = con.execute(
+                f"""
+                UPDATE {JOB_TABLE}
+                SET status='recovering',owner_pid=?,worker_instance_id=?,
+                    fence_token=?,lease_expires_at=?,heartbeat_at=?,
+                    recovery_prepared=0,updated_at=?
+                WHERE job_id=? AND status IN ('launching','running','recovering')
+                  AND fence_token=? AND lease_expires_at<=?
+                """,
+                (
+                    os.getpid(),
+                    worker_instance_id,
+                    fence_token,
+                    lease_expires_at,
+                    now,
+                    now,
+                    job_id,
+                    current_token,
+                    now,
+                ),
+            ).rowcount
+            claimed = con.execute(
+                f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            con.execute("COMMIT")
+            if not updated or not claimed:
+                return None
+            claimed_payload = dict(claimed)
+            claimed_payload["_retry_exhausted"] = (
+                current_token >= MAX_JOB_ATTEMPTS
+            )
+            return _fence_from_row(claimed), claimed_payload
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+
+
+def _finish_recovery(
+    project_root: Path,
+    worker_fence: WorkerFence,
+) -> bool:
+    now = _now()
+    lease_expires_at = now + _lease_seconds()
+    with db.connect(project_root) as con:
+        updated = con.execute(
+            f"""
+            UPDATE {JOB_TABLE}
+            SET status='queued',owner_pid=0,recovery_prepared=1,
+                heartbeat_at=?,lease_expires_at=?,updated_at=?,started_at=NULL
+            WHERE job_id=? AND status='recovering'
+              AND worker_instance_id=? AND fence_token=?
+              AND lease_expires_at>?
+            """,
+            (
+                now,
+                lease_expires_at,
+                now,
+                worker_fence.job_id,
+                worker_fence.worker_instance_id,
+                worker_fence.fence_token,
+                now,
+            ),
+        ).rowcount
+    return bool(updated)
+
+
 def recover_stale_jobs(project_root: Path | str) -> dict[str, Any]:
     root = Path(project_root).resolve()
     ensure_schema(root)
@@ -537,44 +1121,82 @@ def recover_stale_jobs(project_root: Path | str) -> dict[str, Any]:
     reconciled: list[str] = []
     with db.connect(root) as con:
         rows = con.execute(
-            f"SELECT * FROM {JOB_TABLE} WHERE status IN ('launching','running') ORDER BY created_at",
+            f"""
+            SELECT * FROM {JOB_TABLE}
+            WHERE status IN ('launching','running','recovering')
+              AND lease_expires_at<=?
+            ORDER BY created_at
+            """,
+            (now,),
         ).fetchall()
     for row in rows:
-        pid = int(row["owner_pid"] or 0)
-        stale_launch = row["status"] == "launching" and now - int(row["updated_at"] or 0) >= LAUNCH_STALE_SECONDS
-        if not stale_launch and db.process_is_alive(pid):
+        recovery = _begin_recovery(root, str(row["job_id"]))
+        if recovery is None:
+            with db.connect(root) as con:
+                current = con.execute(
+                    f"SELECT status FROM {JOB_TABLE} WHERE job_id=?",
+                    (row["job_id"],),
+                ).fetchone()
+            if current and current["status"] == "failed":
+                failed.append(str(row["job_id"]))
             continue
-        terminal = _task_terminal_result(root, row)
+        worker_fence, recovery_row = recovery
+        terminal = _task_terminal_result(root, recovery_row)
         if terminal:
-            complete_job(root, str(row["job_id"]), terminal)
-            reconciled.append(str(row["job_id"]))
+            completed = complete_job(
+                root,
+                str(row["job_id"]),
+                terminal,
+                worker_instance_id=worker_fence.worker_instance_id,
+                fence_token=worker_fence.fence_token,
+            )
+            if completed.get("ok"):
+                reconciled.append(str(row["job_id"]))
             continue
         if row["kind"] == "changeset":
             try:
                 from . import tenor_changeset
 
-                tenor_changeset.recover_incomplete(root)
+                recovered_changesets = tenor_changeset.recover_incomplete(
+                    root,
+                    recovery_fence=tenor_changeset.ExecutionFence(
+                        job_id=worker_fence.job_id,
+                        worker_instance_id=worker_fence.worker_instance_id,
+                        fence_token=worker_fence.fence_token,
+                    ),
+                )
+                if not recovered_changesets.get("ok"):
+                    raise RuntimeError(str(recovered_changesets))
             except Exception as exc:
                 fail_job(
                     root,
                     str(row["job_id"]),
                     {"ok": False, "verdict": "TENOR_JOB_RECOVERY_FAILED", "reason": f"{type(exc).__name__}: {exc}"},
+                    worker_instance_id=worker_fence.worker_instance_id,
+                    fence_token=worker_fence.fence_token,
                 )
                 failed.append(str(row["job_id"]))
                 continue
-        if int(row["attempt_count"] or 0) >= MAX_JOB_ATTEMPTS:
-            fail_job(
+        if recovery_row.get("_retry_exhausted"):
+            exhausted = {
+                "ok": False,
+                "verdict": "TENOR_JOB_RETRY_EXHAUSTED",
+                "attempts": int(recovery_row.get("attempt_count") or 0),
+                "fence_token": worker_fence.fence_token,
+            }
+            terminal_failure = fail_job(
                 root,
                 str(row["job_id"]),
-                {"ok": False, "verdict": "TENOR_JOB_RETRY_EXHAUSTED", "attempts": int(row["attempt_count"] or 0)},
+                exhausted,
+                worker_instance_id=worker_fence.worker_instance_id,
+                fence_token=worker_fence.fence_token,
             )
+            if terminal_failure.get("status") == "failed":
+                failed.append(str(row["job_id"]))
+            continue
+        if not _finish_recovery(root, worker_fence):
             failed.append(str(row["job_id"]))
             continue
-        with db.connect(root) as con:
-            con.execute(
-                f"UPDATE {JOB_TABLE} SET status='queued',owner_pid=0,updated_at=?,started_at=NULL WHERE job_id=? AND status IN ('launching','running')",
-                (now, row["job_id"]),
-            )
         requeued.append(str(row["job_id"]))
     return {
         "ok": True,

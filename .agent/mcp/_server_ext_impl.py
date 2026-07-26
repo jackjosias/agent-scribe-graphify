@@ -2021,6 +2021,14 @@ def graphify_project_build(timeout_seconds: int = 180) -> Dict[str, Any]:
             "minimum": graphify_build.MIN_TIMEOUT_SECONDS,
             "maximum": graphify_build.MAX_TIMEOUT_SECONDS,
         })
+    if graphify_build.has_active_changeset_transaction(server.ROOT):
+        return server.ok({
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_ACTIVE_CHANGESET",
+            "state": "HARD_STOP",
+            "reason": "A TENOR changeset transaction is still mutating project sources.",
+            "rebuilt": False,
+        })
     ownership = db.workspace_mutation_blockers(server.ROOT)
     if ownership["total"]:
         return server.ok({

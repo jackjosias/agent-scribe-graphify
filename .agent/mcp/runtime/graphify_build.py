@@ -15,6 +15,7 @@ PROCESS_GRACE_SECONDS = 30
 OUTPUT_LIMIT = 20_000
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+ExecutionGuard = Callable[[], None]
 
 
 def _readiness_payload(readiness: graphify_readiness.Readiness) -> dict[str, Any]:
@@ -39,13 +40,58 @@ def _run_graphify(
     return subprocess.CompletedProcess(command, completed.returncode, stdout=completed.stdout)
 
 
+def has_active_changeset_transaction(project_root: Path) -> bool:
+    try:
+        with db.connect(project_root) as con:
+            row = con.execute(
+                """
+                SELECT 1 FROM tenor_changesets_v1
+                WHERE status IN ('staging','applying','validating','guarding','rollback_required')
+                LIMIT 1
+                """
+            ).fetchone()
+    except Exception as exc:
+        if "no such table" in str(exc).lower():
+            return False
+        raise
+    return bool(row)
+
+
+def _guard_result(execution_guard: ExecutionGuard | None) -> dict[str, Any] | None:
+    if execution_guard is None:
+        return None
+    try:
+        execution_guard()
+    except Exception as exc:
+        return {
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_EXECUTION_FENCE_LOST",
+            "state": "HARD_STOP",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "rebuilt": False,
+        }
+    return None
+
+
 def _build_under_lock(
     project_root: Path,
     *,
     timeout_seconds: int,
     allow_fixture: bool | None,
     runner: Runner,
+    execution_guard: ExecutionGuard | None,
 ) -> dict[str, Any]:
+    blocked = _guard_result(execution_guard)
+    if blocked is not None:
+        return blocked
+    if has_active_changeset_transaction(project_root):
+        return {
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_ACTIVE_CHANGESET",
+            "state": "HARD_STOP",
+            "reason": "A TENOR changeset transaction is still mutating project sources.",
+            "rebuilt": False,
+        }
     ownership = db.workspace_mutation_blockers(project_root)
     if ownership["total"]:
         return {
@@ -71,7 +117,28 @@ def _build_under_lock(
             "rebuilt": False,
         }
 
-    fingerprint_before = graphify_readiness.workspace_fingerprint(project_root)["fingerprint"]
+    blocked = _guard_result(execution_guard)
+    if blocked is not None:
+        return blocked
+    try:
+        before = graphify_readiness.workspace_fingerprint(project_root)
+    except graphify_readiness.WorkspaceFingerprintError as exc:
+        return {
+            "ok": False,
+            "verdict": graphify_readiness.GRAPHIFY_WORKSPACE_MUTATING,
+            "state": "HARD_STOP",
+            "reason": str(exc),
+            "rebuilt": False,
+        }
+    if before["truncated"]:
+        return {
+            "ok": False,
+            "verdict": graphify_readiness.GRAPHIFY_WORKSPACE_TOO_LARGE,
+            "state": "HARD_STOP",
+            "reason": "Workspace fingerprint exceeded its configured bounds.",
+            "rebuilt": False,
+        }
+    fingerprint_before = str(before["fingerprint"])
 
     command = [
         sys.executable,
@@ -119,6 +186,19 @@ def _build_under_lock(
         }
 
     output = completed.stdout or ""
+    blocked = _guard_result(execution_guard)
+    if blocked is not None:
+        manifest = graphify_readiness.manifest_path(project_root)
+        invalidation_error = ""
+        try:
+            manifest.unlink(missing_ok=True)
+        except OSError as exc:
+            invalidation_error = str(exc)
+        return {
+            **blocked,
+            "manifest_invalidated": not manifest.exists(),
+            "invalidation_error": invalidation_error,
+        }
     if completed.returncode != 0:
         return {
             "ok": False,
@@ -130,7 +210,25 @@ def _build_under_lock(
             "rebuilt": False,
         }
 
-    fingerprint_after = graphify_readiness.workspace_fingerprint(project_root)["fingerprint"]
+    if has_active_changeset_transaction(project_root):
+        return {
+            "ok": False,
+            "verdict": "GRAPHIFY_BUILD_ACTIVE_CHANGESET",
+            "state": "HARD_STOP",
+            "reason": "A TENOR changeset began before Graphify could publish readiness.",
+            "rebuilt": False,
+        }
+    try:
+        after = graphify_readiness.workspace_fingerprint(project_root)
+    except graphify_readiness.WorkspaceFingerprintError as exc:
+        return {
+            "ok": False,
+            "verdict": graphify_readiness.GRAPHIFY_WORKSPACE_MUTATING,
+            "state": "HARD_STOP",
+            "reason": str(exc),
+            "rebuilt": False,
+        }
+    fingerprint_after = str(after["fingerprint"])
     if fingerprint_after != fingerprint_before:
         manifest = (
             graphify_readiness.canonical_output_dir(project_root)
@@ -172,6 +270,9 @@ def _build_under_lock(
             "rebuilt": False,
         }
 
+    blocked = _guard_result(execution_guard)
+    if blocked is not None:
+        return blocked
     return {
         "ok": True,
         "verdict": "GRAPHIFY_PROJECT_BUILD_OK",
@@ -189,6 +290,7 @@ def build_project_graph(
     lock_held: bool = False,
     allow_fixture: bool | None = None,
     runner: Runner = _run_graphify,
+    execution_guard: ExecutionGuard | None = None,
 ) -> dict[str, Any]:
     """Build Graphify once for a project and make concurrent callers converge.
 
@@ -221,6 +323,7 @@ def build_project_graph(
             timeout_seconds=timeout,
             allow_fixture=allow_fixture,
             runner=runner,
+            execution_guard=execution_guard,
         )
 
     wait_timeout = float(timeout + PROCESS_GRACE_SECONDS + 30)
@@ -240,6 +343,7 @@ def build_project_graph(
                 timeout_seconds=timeout,
                 allow_fixture=allow_fixture,
                 runner=runner,
+                execution_guard=execution_guard,
             )
     except tenor_init_orchestrator.TenorInitBusy as exc:
         return {

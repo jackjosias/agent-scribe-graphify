@@ -6,6 +6,7 @@ import os
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -24,10 +25,22 @@ class TenorJobsTest(unittest.TestCase):
         self.root = Path(self.tmp.name) / "project"
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True)
         db.init_db(self.root)
+        self.previous_lease = os.environ.get("AGENT_TENOR_JOB_LEASE_SECONDS")
+        os.environ["AGENT_TENOR_JOB_LEASE_SECONDS"] = "3"
 
     def tearDown(self) -> None:
+        if self.previous_lease is None:
+            os.environ.pop("AGENT_TENOR_JOB_LEASE_SECONDS", None)
+        else:
+            os.environ["AGENT_TENOR_JOB_LEASE_SECONDS"] = self.previous_lease
         remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
+
+    @staticmethod
+    def fence(claimed: dict[str, object]) -> tuple[str, int]:
+        payload = claimed["worker_fence"]
+        assert isinstance(payload, dict)
+        return str(payload["worker_instance_id"]), int(payload["fence_token"])
 
     def submit(
         self,
@@ -74,10 +87,13 @@ class TenorJobsTest(unittest.TestCase):
         job_id = str(submitted["job_id"])
         claimed = tenor_jobs.claim_job(self.root, job_id)
         self.assertTrue(claimed["ok"], claimed)
+        worker_instance_id, fence_token = self.fence(claimed)
         completed = tenor_jobs.complete_job(
             self.root,
             job_id,
             {"ok": True, "verdict": "PROBE_COMPLETE", "secret_free": True},
+            worker_instance_id=worker_instance_id,
+            fence_token=fence_token,
         )
         snapshot = tenor_jobs.job_snapshot(self.root, job_id=job_id)
 
@@ -91,15 +107,19 @@ class TenorJobsTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(json.loads(row["payload_json"]), {})
 
-    def test_dead_running_worker_is_requeued(self) -> None:
+    def test_expired_worker_lease_is_requeued_without_pid_authority(self) -> None:
         submitted = self.submit()
         job_id = str(submitted["job_id"])
         claimed = tenor_jobs.claim_job(self.root, job_id)
         self.assertTrue(claimed["ok"], claimed)
         with db.connect(self.root) as con:
             con.execute(
-                f"UPDATE {tenor_jobs.JOB_TABLE} SET owner_pid=?,updated_at=? WHERE job_id=?",
-                (999_999_999, int(time.time()) - 60, job_id),
+                f"""
+                UPDATE {tenor_jobs.JOB_TABLE}
+                SET owner_pid=?,lease_expires_at=?,updated_at=?
+                WHERE job_id=?
+                """,
+                (999_999_999, int(time.time()) - 1, int(time.time()) - 60, job_id),
             )
 
         recovered = tenor_jobs.recover_stale_jobs(self.root)
@@ -107,7 +127,172 @@ class TenorJobsTest(unittest.TestCase):
 
         self.assertIn(job_id, recovered["requeued"])
         self.assertEqual(snapshot["jobs"][0]["status"], "queued")
-        self.assertGreaterEqual(snapshot["jobs"][0]["attempt_count"], 1)
+        self.assertEqual(snapshot["jobs"][0]["attempt_count"], 1)
+        self.assertEqual(snapshot["jobs"][0]["fence_token"], 2)
+
+    def test_live_lease_remains_authoritative_when_pid_looks_dead(self) -> None:
+        submitted = self.submit()
+        job_id = str(submitted["job_id"])
+        claimed = tenor_jobs.claim_job(self.root, job_id)
+        self.assertTrue(claimed["ok"], claimed)
+        with db.connect(self.root) as con:
+            con.execute(
+                f"""
+                UPDATE {tenor_jobs.JOB_TABLE}
+                SET owner_pid=?,updated_at=?
+                WHERE job_id=?
+                """,
+                (999_999_999, int(time.time()) - 600, job_id),
+            )
+        recovered = tenor_jobs.recover_stale_jobs(self.root)
+        snapshot = tenor_jobs.job_snapshot(self.root, job_id=job_id)["jobs"][0]
+        self.assertEqual(recovered["requeued"], [])
+        self.assertEqual(snapshot["status"], "running")
+        self.assertEqual(snapshot["fence_token"], 1)
+
+    def test_heartbeat_and_terminal_publish_require_current_live_fence(self) -> None:
+        submitted = self.submit()
+        job_id = str(submitted["job_id"])
+        claimed = tenor_jobs.claim_job(self.root, job_id)
+        old_instance, old_token = self.fence(claimed)
+        heartbeat = tenor_jobs.heartbeat_job(
+            self.root,
+            job_id,
+            worker_instance_id=old_instance,
+            fence_token=old_token,
+        )
+        self.assertTrue(heartbeat["ok"], heartbeat)
+        with db.connect(self.root) as con:
+            con.execute(
+                f"UPDATE {tenor_jobs.JOB_TABLE} SET lease_expires_at=? WHERE job_id=?",
+                (int(time.time()) - 1, job_id),
+            )
+        expired_heartbeat = tenor_jobs.heartbeat_job(
+            self.root,
+            job_id,
+            worker_instance_id=old_instance,
+            fence_token=old_token,
+        )
+        expired_finish = tenor_jobs.complete_job(
+            self.root,
+            job_id,
+            {"ok": True, "verdict": "STALE_WORKER"},
+            worker_instance_id=old_instance,
+            fence_token=old_token,
+        )
+        self.assertEqual(expired_heartbeat["verdict"], "TENOR_JOB_FENCE_LOST")
+        self.assertEqual(expired_finish["verdict"], "TENOR_JOB_FENCE_LOST")
+
+        recovered = tenor_jobs.recover_stale_jobs(self.root)
+        self.assertEqual(recovered["requeued"], [job_id])
+        replacement = tenor_jobs.claim_job(self.root, job_id)
+        new_instance, new_token = self.fence(replacement)
+        self.assertNotEqual(new_instance, old_instance)
+        self.assertEqual((old_token, new_token), (1, 2))
+        rejected_old = tenor_jobs.complete_job(
+            self.root,
+            job_id,
+            {"ok": True, "verdict": "STALE_WORKER"},
+            worker_instance_id=old_instance,
+            fence_token=old_token,
+        )
+        accepted_new = tenor_jobs.complete_job(
+            self.root,
+            job_id,
+            {"ok": True, "verdict": "CURRENT_WORKER"},
+            worker_instance_id=new_instance,
+            fence_token=new_token,
+        )
+        self.assertEqual(rejected_old["verdict"], "TENOR_JOB_FENCE_LOST")
+        self.assertEqual(accepted_new["verdict"], "TENOR_JOB_SUCCEEDED")
+        snapshot = tenor_jobs.job_snapshot(self.root, job_id=job_id)["jobs"][0]
+        self.assertEqual(snapshot["attempt_count"], 1)
+        self.assertEqual(snapshot["result"]["verdict"], "CURRENT_WORKER")
+
+    def test_concurrent_recovery_transfers_fence_once(self) -> None:
+        submitted = self.submit()
+        job_id = str(submitted["job_id"])
+        claimed = tenor_jobs.claim_job(self.root, job_id)
+        self.assertTrue(claimed["ok"], claimed)
+        with db.connect(self.root) as con:
+            con.execute(
+                f"UPDATE {tenor_jobs.JOB_TABLE} SET lease_expires_at=? WHERE job_id=?",
+                (int(time.time()) - 1, job_id),
+            )
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(
+                executor.map(
+                    lambda _index: tenor_jobs.recover_stale_jobs(self.root),
+                    range(16),
+                )
+            )
+        self.assertEqual(
+            sum(job_id in result["requeued"] for result in results),
+            1,
+            results,
+        )
+        snapshot = tenor_jobs.job_snapshot(self.root, job_id=job_id)["jobs"][0]
+        self.assertEqual(snapshot["status"], "queued")
+        self.assertEqual(snapshot["fence_token"], 2)
+        self.assertEqual(snapshot["attempt_count"], 1)
+
+    def test_concurrent_graphify_requests_converge_to_one_job(self) -> None:
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            results = list(
+                executor.map(
+                    lambda _index: tenor_jobs.submit_graphify_rebuild(
+                        self.root,
+                        auto_launch=False,
+                    ),
+                    range(24),
+                )
+            )
+        self.assertTrue(all(result["ok"] for result in results), results)
+        self.assertEqual(len({result["job_id"] for result in results}), 1, results)
+        snapshot = tenor_jobs.job_snapshot(
+            self.root,
+            kind="graphify_build",
+        )
+        self.assertEqual(snapshot["count"], 1, snapshot)
+        self.assertEqual(snapshot["jobs"][0]["status"], "queued")
+
+    def test_pending_graphify_rebuild_fences_new_changeset_launch(self) -> None:
+        changeset = self.submit(request_id="changeset-before-rebuild")
+        graphify = tenor_jobs.submit_graphify_rebuild(
+            self.root,
+            auto_launch=False,
+        )
+        blocked = tenor_jobs.claim_job(self.root, str(changeset["job_id"]))
+        self.assertEqual(blocked["verdict"], "TENOR_JOB_NOT_CLAIMABLE", blocked)
+        claimed_graphify = tenor_jobs.claim_job(
+            self.root,
+            str(graphify["job_id"]),
+        )
+        self.assertTrue(claimed_graphify["ok"], claimed_graphify)
+
+    def test_committed_changeset_schedules_one_graphify_rebuild(self) -> None:
+        submitted = self.submit(request_id="committed-with-rebuild")
+        claimed = tenor_jobs.claim_job(self.root, str(submitted["job_id"]))
+        worker_instance_id, fence_token = self.fence(claimed)
+        completed = tenor_jobs.complete_job(
+            self.root,
+            str(submitted["job_id"]),
+            {
+                "ok": True,
+                "verdict": "TENOR_CHANGESET_COMMITTED_TASK_FINISHED",
+            },
+            worker_instance_id=worker_instance_id,
+            fence_token=fence_token,
+        )
+        self.assertEqual(completed["verdict"], "TENOR_JOB_SUCCEEDED", completed)
+        rebuild = completed["graphify_rebuild"]
+        self.assertTrue(rebuild["ok"], rebuild)
+        snapshot = tenor_jobs.job_snapshot(
+            self.root,
+            kind="graphify_build",
+        )
+        self.assertEqual(snapshot["count"], 1, snapshot)
+        self.assertEqual(snapshot["jobs"][0]["status"], "queued")
 
     def test_graphify_worker_runs_outside_request_and_publishes_result(self) -> None:
         previous_fixture = os.environ.get(graphify_readiness.FIXTURE_ENV)
@@ -150,7 +335,15 @@ class TenorJobsTest(unittest.TestCase):
     def test_worker_watchdog_bounds_hung_job_and_exhausts_retries(self) -> None:
         script = self.root / ".agent" / "workflow" / "scribe" / "scribe"
         script.parent.mkdir(parents=True)
-        script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        script.write_text(
+            "import os,time\n"
+            "with open('graphify-worker-pids.txt','a',encoding='utf-8') as handle:\n"
+            "    handle.write(str(os.getpid()) + '\\n')\n"
+            "    handle.flush()\n"
+            "    os.fsync(handle.fileno())\n"
+            "time.sleep(30)\n",
+            encoding="utf-8",
+        )
         submitted = tenor_jobs.submit_job(
             self.root,
             kind="graphify_build",
@@ -161,7 +354,7 @@ class TenorJobsTest(unittest.TestCase):
             max_runtime_seconds=1,
             auto_launch=True,
         )
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 30
         current: dict[str, object] = {}
         while time.monotonic() < deadline:
             current = tenor_jobs.job_snapshot(
@@ -174,9 +367,32 @@ class TenorJobsTest(unittest.TestCase):
             tenor_jobs.recover_and_launch(self.root)
             time.sleep(0.1)
         self.assertEqual(current.get("status"), "failed", current)
-        self.assertEqual(current.get("attempt_count"), tenor_jobs.MAX_JOB_ATTEMPTS, current)
+        self.assertEqual(current.get("attempt_count"), 1, current)
+        self.assertEqual(
+            current.get("fence_token"),
+            tenor_jobs.MAX_JOB_ATTEMPTS + 1,
+            current,
+        )
         error = current.get("error") or {}
         self.assertEqual(error.get("verdict"), "TENOR_JOB_RETRY_EXHAUSTED", current)
+        child_pid_sequence = [
+            int(value)
+            for value in (self.root / "graphify-worker-pids.txt")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if value.strip()
+        ]
+        self.assertGreaterEqual(len(child_pid_sequence), 1, child_pid_sequence)
+        child_pids = set(child_pid_sequence)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and any(
+            db.process_is_alive(pid) for pid in child_pids
+        ):
+            time.sleep(0.05)
+        self.assertFalse(
+            any(db.process_is_alive(pid) for pid in child_pids),
+            child_pids,
+        )
 
 
 if __name__ == "__main__":
