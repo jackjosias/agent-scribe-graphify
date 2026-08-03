@@ -495,7 +495,10 @@ def _configure_codex(
     block = _codex_block(binding_id, project_root)
     pattern = re.compile(re.escape(_MANAGED_TOML_START) + r".*?" + re.escape(_MANAGED_TOML_END), re.DOTALL)
     if pattern.search(text):
-        updated = pattern.sub(block, text)
+        # A replacement string treats backslashes as group escapes. Codex TOML
+        # paths contain escaped Windows separators, so insert the managed block
+        # through a callable to preserve its bytes and remain idempotent.
+        updated = pattern.sub(lambda _match: block, text)
     else:
         unmanaged = re.search(rf'^\s*\[mcp_servers\.(?:"{re.escape(SERVER_NAME)}"|{re.escape(SERVER_NAME)})\]\s*$', text, re.MULTILINE)
         if unmanaged:

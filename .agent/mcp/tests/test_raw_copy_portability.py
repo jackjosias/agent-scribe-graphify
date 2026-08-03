@@ -237,6 +237,24 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         self.assertEqual(second["verdict"], host_config.HOST_CONFIG_READY)
         self.assertEqual(config.read_text(encoding="utf-8"), content)
 
+    def test_codex_configuration_preserves_literal_backslashes(self) -> None:
+        target = self.base / r"codex\windows\project"
+        _project_markers(target, memory="memory\n")
+        _copy_complete_agent(self.source, target)
+        config = target / ".codex" / "config.toml"
+        config.parent.mkdir(parents=True)
+        config.write_text('model = "gpt-5"\n', encoding="utf-8")
+
+        first = host_config.configure_host(target, explicit="codex-cli")
+        self.assertTrue(first["restart_required"], first)
+        content = config.read_text(encoding="utf-8")
+        second = host_config.configure_host(target, explicit="codex-cli")
+        self.assertEqual(second["verdict"], host_config.HOST_CONFIG_READY)
+        self.assertFalse(second["restart_required"])
+        self.assertEqual(config.read_text(encoding="utf-8"), content)
+        server = tomllib.loads(content)["mcp_servers"][host_config.SERVER_NAME]
+        self.assertEqual(server["cwd"], str(target.resolve()))
+
     def test_codex_binding_rejects_a_different_absolute_root(self) -> None:
         target = self.base / "codex bound root"
         _project_markers(target, memory="memory\n")
