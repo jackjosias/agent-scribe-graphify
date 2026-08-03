@@ -530,10 +530,14 @@ def _replace_file(target: Path, content: bytes) -> None:
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tenor-tmp", dir=str(target.parent))
     try:
         with os.fdopen(fd, "wb") as handle:
-            os.fchmod(handle.fileno(), target_mode)
+            fchmod = getattr(os, "fchmod", None)
+            if callable(fchmod):
+                fchmod(handle.fileno(), target_mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        if not callable(fchmod):
+            os.chmod(tmp_name, target_mode)
         os.replace(tmp_name, target)
         _fsync_parent(target.parent)
     finally:

@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 import tempfile
+import tomllib
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -212,7 +213,13 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         self.assertEqual(content.count("agent-scribe-graphify:host-config:start"), 1)
         self.assertEqual(content.count("agent-scribe-graphify:host-config:end"), 1)
         self.assertIn('default_tools_approval_mode = "approve"', content)
-        self.assertIn(f'cwd = "{target.resolve()}"', content)
+        parsed = tomllib.loads(content)
+        server = parsed["mcp_servers"][host_config.SERVER_NAME]
+        self.assertEqual(server["cwd"], str(target.resolve()))
+        self.assertEqual(
+            server["env"]["AGENT_SCRIBE_GRAPHIFY_ROOT"],
+            str(target.resolve()),
+        )
         binding = json.loads(
             (target / host_config.BINDING_RELATIVE).read_text(encoding="utf-8")
         )

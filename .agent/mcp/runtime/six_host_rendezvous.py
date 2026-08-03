@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ def initialize(
     if expected_hosts != EXPECTED_HOSTS:
         raise RendezvousError("RENDEZVOUS_EXPECTED_HOSTS_MUST_BE_SIX")
     database.parent.mkdir(parents=True, exist_ok=True)
-    with _connect(database) as connection:
+    with contextlib.closing(_connect(database)) as connection:
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.executescript(
             """
@@ -138,7 +139,7 @@ def register_bridge(
         raise RendezvousError("RENDEZVOUS_PARTICIPANT_INVALID")
     if not agent_session_id:
         raise RendezvousError("RENDEZVOUS_AGENT_SESSION_REQUIRED")
-    with _connect(database) as connection:
+    with contextlib.closing(_connect(database)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         meta = connection.execute(
             "SELECT run_id,model,expected_hosts FROM replay_meta WHERE singleton=1"
@@ -230,7 +231,7 @@ def record_activity(
     if not 1.0 <= float(timeout_seconds) <= 300.0:
         raise RendezvousError("RENDEZVOUS_TIMEOUT_INVALID")
     now = time.time_ns()
-    with _connect(database) as connection:
+    with contextlib.closing(_connect(database)) as connection:
         connection.execute("BEGIN IMMEDIATE")
         participant = connection.execute(
             """
@@ -304,7 +305,7 @@ def record_activity(
 
 
 def snapshot(database: Path, *, run_id: str) -> dict[str, Any]:
-    with _connect(database) as connection:
+    with contextlib.closing(_connect(database)) as connection:
         meta = connection.execute(
             "SELECT * FROM replay_meta WHERE singleton=1"
         ).fetchone()
@@ -334,7 +335,7 @@ def snapshot(database: Path, *, run_id: str) -> dict[str, Any]:
 
 
 def integrity_check(database: Path) -> dict[str, str]:
-    with _connect(database) as connection:
+    with contextlib.closing(_connect(database)) as connection:
         quick = str(connection.execute("PRAGMA quick_check").fetchone()[0])
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
     return {"quick_check": quick, "integrity_check": integrity}

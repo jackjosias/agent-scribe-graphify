@@ -48,7 +48,10 @@ class _TailBuffer:
 def _drain(stream: BinaryIO, target: _TailBuffer) -> None:
     try:
         while True:
-            chunk = stream.read(64 * 1024)
+            try:
+                chunk = stream.read(64 * 1024)
+            except (OSError, ValueError):
+                return
             if not chunk:
                 return
             target.append(chunk)
@@ -155,6 +158,13 @@ def run_bounded(
     finally:
         if process.poll() is None:
             terminate_process_tree(process)
+        # A descendant can inherit the write end of a pipe after the direct
+        # child exits, especially on Windows. Closing our read handles makes
+        # the daemon readers terminate without waiting on that descendant.
+        for stream in (process.stdout, None if merge_stderr else process.stderr):
+            if stream is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    stream.close()
         for reader in readers:
             reader.join(timeout=5)
         with _ACTIVE_PROCESSES_LOCK:

@@ -136,7 +136,8 @@ class GraphifyLocalRuntimeTest(unittest.TestCase):
 
     def test_runtime_location_is_project_local_and_platform_scoped(self) -> None:
         location = graphify_runtime.runtime_install_dir(self.root)
-        self.assertTrue(location.is_relative_to(self.root / ".agent" / "state"))
+        expected_state = (self.root / ".agent" / "state").resolve()
+        self.assertTrue(location.is_relative_to(expected_state))
         self.assertIn(graphify_runtime.runtime_platform_key(), location.parts)
         self.assertNotIn(str(Path.home()), str(location))
 

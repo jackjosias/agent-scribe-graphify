@@ -425,11 +425,19 @@ def _atomic_json(path: Path, value: Any) -> None:
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        # Directory fsync is a POSIX durability primitive. Windows does not
+        # expose directories through os.open with compatible semantics.
+        if os.name != "nt":
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            try:
+                directory = os.open(path.parent, flags)
+            except OSError:
+                directory = None
+            if directory is not None:
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
