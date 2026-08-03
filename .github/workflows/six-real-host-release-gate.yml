@@ -1,0 +1,201 @@
+name: Six real Codex hosts release gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Exact Codex model for all six hosts
+        required: true
+        default: gpt-5.6-terra
+        type: string
+      soak_runs:
+        description: Independent six-host waves (1 for terrain, 12 for soak)
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "6"
+          - "12"
+          - "24"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: six-real-host-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  credentialed-release-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CODEX_VERSION: "0.145.0"
+      CODEX_ELF_SHA256: "a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14"
+      REPLAY_MODEL: ${{ inputs.model }}
+      SOAK_RUNS: ${{ inputs.soak_runs }}
+      CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+      CODEX_AUTH_JSON_RAW: ${{ secrets.CODEX_AUTH_JSON }}
+    steps:
+      - name: Checkout immutable source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: Require credentialed Codex auth
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$RUNNER_TEMP/codex-auth"
+          if [ -n "${CODEX_AUTH_JSON_B64:-}" ]; then
+            printf '%s' "$CODEX_AUTH_JSON_B64" \
+              | base64 --decode \
+              > "$RUNNER_TEMP/codex-auth/auth.json"
+          elif [ -n "${CODEX_AUTH_JSON_RAW:-}" ]; then
+            printf '%s' "$CODEX_AUTH_JSON_RAW" \
+              > "$RUNNER_TEMP/codex-auth/auth.json"
+          else
+            echo "CODEX_AUTH_JSON_B64 or CODEX_AUTH_JSON secret is required" >&2
+            exit 78
+          fi
+          chmod 600 "$RUNNER_TEMP/codex-auth/auth.json"
+          python -m json.tool "$RUNNER_TEMP/codex-auth/auth.json" >/dev/null
+
+      - name: Install and attest the direct native Codex ELF
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$RUNNER_TEMP/codex-package"
+          npm install \
+            --prefix "$RUNNER_TEMP/codex-package" \
+            --ignore-scripts \
+            "@openai/codex@${CODEX_VERSION}"
+          CODEX_ELF="$RUNNER_TEMP/codex-package/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+          test -f "$CODEX_ELF"
+          test -x "$CODEX_ELF"
+          test ! -L "$CODEX_ELF"
+          ACTUAL_SHA256="$(sha256sum "$CODEX_ELF" | awk '{print $1}')"
+          test "$ACTUAL_SHA256" = "$CODEX_ELF_SHA256"
+          file "$CODEX_ELF" | grep -F "ELF 64-bit"
+          test "$("$CODEX_ELF" --version)" = "codex-cli ${CODEX_VERSION}"
+          echo "CODEX_ELF=$CODEX_ELF" >> "$GITHUB_ENV"
+
+      - name: Run release-grade unit oracles
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python .agent/mcp/tests/test_six_host_rendezvous.py
+          python .agent/mcp/tests/test_six_real_host_llm_replay.py
+          python .agent/mcp/tests/test_sqlite_connection_policy.py
+          python .agent/mcp/tests/test_raw_copy_portability.py
+          python -m py_compile \
+            .agent/mcp/runtime/six_host_rendezvous.py \
+            .agent/scripts/six_host_mcp_proxy.py \
+            .agent/scripts/six_host_pre_tool_hook.py \
+            .agent/scripts/six_real_host_llm_replay.py
+
+      - name: Run canonical validation suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python .agent/scripts/validation_suite.py \
+            2>&1 | tee "$RUNNER_TEMP/validation-suite.log"
+          grep -Fx "VALIDATION_SUITE_OK" "$RUNNER_TEMP/validation-suite.log"
+
+      - name: Run six real hosts and bounded soak
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          install -d -m 700 "$RUNNER_TEMP/replay-evidence"
+          python .agent/scripts/six_real_host_llm_replay.py \
+            --root "$GITHUB_WORKSPACE" \
+            --codex-bin "$CODEX_ELF" \
+            --expected-codex-sha256 "$CODEX_ELF_SHA256" \
+            --model "$REPLAY_MODEL" \
+            --auth-mode auth-link \
+            --auth-source "$RUNNER_TEMP/codex-auth/auth.json" \
+            --allow-auth-link \
+            --output-dir "$RUNNER_TEMP/replay-evidence" \
+            --timeout-seconds 300 \
+            --soak-runs "$SOAK_RUNS" \
+            2>&1 | tee "$RUNNER_TEMP/replay.log"
+          grep -F "SIX_REAL_HOST_LLM_REPLAY_OK" "$RUNNER_TEMP/replay.log"
+          if [ "$SOAK_RUNS" -gt 1 ]; then
+            grep -Fx "SIX_REAL_HOST_LLM_SOAK_OK" "$RUNNER_TEMP/replay.log"
+          fi
+
+      - name: Verify release artefact and clean tree
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "replay-evidence"
+          summaries = list(root.glob("*/result.json"))
+          expected = int(os.environ["SOAK_RUNS"])
+          if len(summaries) != expected:
+              raise SystemExit(
+                  f"RESULT_CARDINALITY expected={expected} actual={len(summaries)}"
+              )
+          for result_path in summaries:
+              result = json.loads(result_path.read_text(encoding="utf-8"))
+              if result.get("verdict") != "SIX_REAL_HOST_LLM_REPLAY_OK":
+                  raise SystemExit(f"BAD_VERDICT:{result_path}")
+              manifest_path = result_path.with_name("manifest.json")
+              manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+              if manifest.get("file_count") != 25:
+                  raise SystemExit(f"BAD_MANIFEST_COUNT:{manifest_path}")
+              for item in manifest["files"]:
+                  path = result_path.parent / item["name"]
+                  digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                  if digest != item["sha256"] or path.stat().st_size != item["size"]:
+                      raise SystemExit(f"MANIFEST_MISMATCH:{path}")
+          print("REDACTED_RELEASE_ARTEFACT_OK")
+          PY
+          git diff --check
+          test -z "$(git status --porcelain=v1 --untracked-files=all)" || {
+            echo "Release gate left the checkout dirty" >&2
+            git status --short >&2
+            exit 1
+          }
+
+      - name: Remove live authentication before upload
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ -e "$RUNNER_TEMP/codex-auth/auth.json" ]; then
+            unlink "$RUNNER_TEMP/codex-auth/auth.json"
+          fi
+
+      - name: Upload redacted field evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: six-real-codex-hosts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/replay-evidence
+            ${{ runner.temp }}/replay.log
+            ${{ runner.temp }}/validation-suite.log
+          if-no-files-found: error
+          retention-days: 90
