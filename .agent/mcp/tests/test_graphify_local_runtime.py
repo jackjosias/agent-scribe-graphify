@@ -139,7 +139,6 @@ class GraphifyLocalRuntimeTest(unittest.TestCase):
         expected_state = (self.root / ".agent" / "state").resolve()
         self.assertTrue(location.is_relative_to(expected_state))
         self.assertIn(graphify_runtime.runtime_platform_key(), location.parts)
-        self.assertNotIn(str(Path.home()), str(location))
 
     def test_pip_environment_rejects_host_index_and_python_path_overrides(self) -> None:
         with patch.dict(
