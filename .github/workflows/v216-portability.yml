@@ -29,7 +29,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -127,7 +127,12 @@ jobs:
           output_dir = Path(os.environ["V216_LOG_DIR"])
           output_dir.mkdir(parents=True, exist_ok=True)
           results_path = output_dir / "results.json"
-          results = []
+          expected_labels = [label for label, _script in tests]
+          result_document = {
+              "complete": False,
+              "expected_labels": expected_labels,
+              "results": [],
+          }
 
           def as_text(value):
               if isinstance(value, bytes):
@@ -136,7 +141,7 @@ jobs:
 
           def persist_results():
               results_path.write_text(
-                  json.dumps(results, indent=2, sort_keys=True) + "\n",
+                  json.dumps(result_document, indent=2, sort_keys=True) + "\n",
                   encoding="utf-8",
               )
 
@@ -167,12 +172,17 @@ jobs:
 
               combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
               (output_dir / f"{label}.log").write_text(combined, encoding="utf-8")
-              results.append({"label": label, "script": script, "returncode": returncode})
+              result_document["results"].append(
+                  {"label": label, "script": script, "returncode": returncode}
+              )
               persist_results()
               print(f"PORTABLE_TEST {label} rc={returncode}", flush=True)
               if returncode != 0:
                   lines = combined.splitlines()
                   print("\n".join(lines[-80:]), file=sys.stderr, flush=True)
+
+          result_document["complete"] = True
+          persist_results()
 
       - name: Upload portable test logs
         if: always()
@@ -196,7 +206,22 @@ jobs:
           results_path = Path(os.environ["V216_LOG_DIR"]) / "results.json"
           if not results_path.is_file():
               raise SystemExit("PORTABLE_RESULTS_MISSING")
-          results = json.loads(results_path.read_text(encoding="utf-8"))
+          document = json.loads(results_path.read_text(encoding="utf-8"))
+          if not isinstance(document, dict):
+              raise SystemExit("PORTABLE_RESULTS_SCHEMA_INVALID")
+          expected_labels = document.get("expected_labels")
+          results = document.get("results")
+          if not isinstance(expected_labels, list) or not isinstance(results, list):
+              raise SystemExit("PORTABLE_RESULTS_SCHEMA_INVALID")
+          actual_labels = [result.get("label") for result in results]
+          if document.get("complete") is not True:
+              raise SystemExit(
+                  f"PORTABLE_TEST_RUN_INCOMPLETE: expected={expected_labels} actual={actual_labels}"
+              )
+          if actual_labels != expected_labels:
+              raise SystemExit(
+                  f"PORTABLE_TEST_SET_MISMATCH: expected={expected_labels} actual={actual_labels}"
+              )
           failures = [result for result in results if result["returncode"] != 0]
           if failures:
               raise SystemExit(f"PORTABLE_TEST_FAILURES: {failures}")
