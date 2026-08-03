@@ -23,6 +23,9 @@ graphify-out/
 .agent/state/**/*.backup-*
 .pytest_cache/
 
+# Project-local host bindings contain an absolute checkout root and a generated
+# one-time identity. They are runtime state, never release content.
+.codex/
 
 # OS
 .DS_Store

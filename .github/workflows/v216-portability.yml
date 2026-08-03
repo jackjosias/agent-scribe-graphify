@@ -65,6 +65,7 @@ jobs:
           .agent/mcp/runtime/tenor_jobs.py
           .agent/mcp/runtime/tenor_job_worker.py
           .agent/mcp/runtime/tenor_public_api.py
+          .agent/mcp/runtime/six_host_rendezvous.py
           .agent/mcp/runtime/direct_fs_tripwire.py
           .agent/mcp/runtime/canonical_memory_gate.py
           .agent/mcp/_server_ext_impl.py
@@ -74,6 +75,9 @@ jobs:
           .agent/host_adapter/instructions.py
           .agent/host_adapter/host_config.py
           .agent/host_adapter/templates.py
+          .agent/scripts/six_host_mcp_proxy.py
+          .agent/scripts/six_host_pre_tool_hook.py
+          .agent/scripts/six_real_host_llm_replay.py
           .agent/workflow/scribe/sel/scripts/proof_signer.py
           .agent/workflow/scribe/sel/scripts/scribe_bootstrap.py
           .agent/workflow/scribe/sel/scripts/scribe_tenor_init_v216.py
@@ -109,6 +113,9 @@ jobs:
               ("tenor_task_prompt", ".agent/mcp/tests/test_tenor_task_prompt.py"),
               ("stable_agent_identity", ".agent/mcp/tests/test_stable_agent_identity.py"),
               ("tenor_agent_activity", ".agent/mcp/tests/test_tenor_agent_activity.py"),
+              ("six_host_rendezvous", ".agent/mcp/tests/test_six_host_rendezvous.py"),
+              ("six_real_host_llm_replay", ".agent/mcp/tests/test_six_real_host_llm_replay.py"),
+              ("sqlite_connection_policy", ".agent/mcp/tests/test_sqlite_connection_policy.py"),
               ("tenor_changeset_transaction", ".agent/mcp/tests/test_tenor_changeset_transaction.py"),
               ("tenor_jobs", ".agent/mcp/tests/test_tenor_jobs.py"),
               ("direct_fs_tripwire", ".agent/mcp/tests/test_direct_fs_tripwire.py"),

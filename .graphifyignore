@@ -1,10 +1,11 @@
 # SCRIBE-PORTABLE-WORKFLOW:START
-# Keep the canonical root graph focused on application code.
-# SCRIBE/TENOR tooling is causal/process infrastructure, not app architecture.
+# Keep the application graph focused on product code.
 .agent/
+.agents/
 .codex/
 .vscode/
 scribe-out/
+graphify-out/
 AGENT-MEMOIRE_PROJECT_STATUS.scribe
 AGENTS.md
 # SCRIBE-PORTABLE-WORKFLOW:END

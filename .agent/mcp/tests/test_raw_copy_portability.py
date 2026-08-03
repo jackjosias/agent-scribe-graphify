@@ -161,7 +161,10 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         (target / "opencode.jsonc").write_text("{}\n", encoding="utf-8")
         (target / ".codex").mkdir()
         (target / ".codex" / "config.toml").write_text("model = \"gpt-5\"\n", encoding="utf-8")
-        detection = host_config.detect_host(target)
+        # Validator workers intentionally inherit the bound host identity.
+        # This fixture tests project-marker ambiguity, so isolate it from the
+        # ambient MCP process binding explicitly.
+        detection = host_config.detect_host(target, environ={})
         self.assertFalse(detection["ok"])
         self.assertEqual(detection["verdict"], host_config.HOST_DETECTION_AMBIGUOUS)
         self.assertEqual(set(detection["candidates"]), {"opencode", "codex-cli"})
@@ -209,13 +212,14 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         self.assertEqual(content.count("agent-scribe-graphify:host-config:start"), 1)
         self.assertEqual(content.count("agent-scribe-graphify:host-config:end"), 1)
         self.assertIn('default_tools_approval_mode = "approve"', content)
+        self.assertIn(f'cwd = "{target.resolve()}"', content)
         binding = json.loads(
             (target / host_config.BINDING_RELATIVE).read_text(encoding="utf-8")
         )
         environment = {
             "AGENT_MCP_HOST": "codex-cli",
             "AGENT_MCP_BINDING_ID": binding["binding_id"],
-            "AGENT_SCRIBE_GRAPHIFY_ROOT": ".",
+            "AGENT_SCRIBE_GRAPHIFY_ROOT": str(target.resolve()),
         }
         self.assertTrue(
             host_config.verify_host_process_binding(
@@ -225,6 +229,27 @@ class RawCopyPortabilityAcceptanceTest(unittest.TestCase):
         second = host_config.configure_host(target, explicit="codex-cli")
         self.assertEqual(second["verdict"], host_config.HOST_CONFIG_READY)
         self.assertEqual(config.read_text(encoding="utf-8"), content)
+
+    def test_codex_binding_rejects_a_different_absolute_root(self) -> None:
+        target = self.base / "codex bound root"
+        _project_markers(target, memory="memory\n")
+        _copy_complete_agent(self.source, target)
+        configured = host_config.configure_host(target, explicit="codex-cli")
+        self.assertTrue(configured["ok"], configured)
+        binding = json.loads(
+            (target / host_config.BINDING_RELATIVE).read_text(encoding="utf-8")
+        )
+        result = host_config.verify_host_process_binding(
+            target,
+            environ={
+                "AGENT_MCP_HOST": "codex-cli",
+                "AGENT_MCP_BINDING_ID": binding["binding_id"],
+                "AGENT_SCRIBE_GRAPHIFY_ROOT": str(self.base / "other"),
+            },
+            claimed_host="codex-cli",
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["verdict"], "HOST_PROCESS_ROOT_MISMATCH")
 
     def test_shell_without_binding_never_counts_as_host_visibility(self) -> None:
         target = self.base / "unbound shell"

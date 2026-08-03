@@ -4,6 +4,7 @@ import hashlib
 import os
 import shutil
 import sqlite3
+import stat
 import sys
 import tempfile
 import threading
@@ -208,6 +209,50 @@ class TenorChangesetTransactionTest(unittest.TestCase):
         self.assertEqual(result["verdict"], "TENOR_CHANGESET_VALIDATION_FAILED_ROLLED_BACK")
         self.assertEqual((self.root / "src" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
         self.assertEqual((self.root / "src" / "b.txt").read_text(encoding="utf-8"), "beta\n")
+
+    @unittest.skipIf(os.name == "nt", "POSIX file modes")
+    def test_commit_and_rollback_preserve_existing_executable_mode(self) -> None:
+        target = self.root / "src" / "a.txt"
+        target.chmod(0o755)
+        committed = self.apply(
+            [self.change("src/a.txt", "alpha\n", "alpha-2\n")],
+            request_id="mode-preserved-commit",
+        )
+        self.assertTrue(committed["ok"], committed)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
+        rolled_back = self.apply(
+            [self.change("src/a.txt", "alpha-2\n", "alpha-3\n")],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(9)"],
+                "timeout_seconds": 20,
+            }],
+            request_id="mode-preserved-rollback",
+        )
+        self.assertFalse(rolled_back["ok"], rolled_back)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+        self.assertEqual(target.read_text(encoding="utf-8"), "alpha-2\n")
+
+    def test_failed_validator_removes_created_file(self) -> None:
+        target = self.root / "src" / "new.txt"
+        result = self.apply(
+            [{
+                "path": "src/new.txt",
+                "operation": "create",
+                "content": "temporary\n",
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(9)"],
+                "timeout_seconds": 20,
+            }],
+            request_id="created-file-rollback",
+        )
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(
+            result["verdict"],
+            "TENOR_CHANGESET_VALIDATION_FAILED_ROLLED_BACK",
+        )
+        self.assertFalse(target.exists())
 
     def test_validator_output_is_streamed_into_bounded_tail_buffers(self) -> None:
         results = tenor_changeset._run_validators([{

@@ -134,8 +134,23 @@ def configure_connection(
     requested_mode = configured_journal_mode()
     try:
         con.execute(f"PRAGMA busy_timeout={timeout_ms}")
-        row = con.execute(f"PRAGMA journal_mode={requested_mode}").fetchone()
-        effective_mode = str(row[0]).strip().upper() if row else ""
+        current_row = con.execute("PRAGMA journal_mode").fetchone()
+        current_mode = (
+            str(current_row[0]).strip().upper() if current_row else ""
+        )
+        # Setting journal_mode is a database-wide operation that can acquire
+        # locks and rewrite header state. Reissuing it on every short-lived
+        # reader amplified six-host replay traffic into hundreds of needless
+        # write negotiations. The portable default database already opens in
+        # DELETE mode, so change the policy only when the effective mode
+        # genuinely differs from the explicitly requested mode.
+        if current_mode == requested_mode:
+            effective_mode = current_mode
+        else:
+            row = con.execute(
+                f"PRAGMA journal_mode={requested_mode}"
+            ).fetchone()
+            effective_mode = str(row[0]).strip().upper() if row else ""
         if effective_mode != requested_mode:
             raise CoordinationError(
                 "SQLITE_JOURNAL_MODE_MISMATCH: "

@@ -237,6 +237,29 @@ journal:
     pourquoi: "The tripwire initially false-positive runtime state and missed legitimate mutation recording because hashes were normalized differently and the hostile redteam used an ignored path. The fix kept .agent/state ignored, normalized hashes, preserved symlink identity, required the resource lock for apply_patch tests, and moved the hostile redteam mutation onto a normal repo file so bypass detection is actually exercised."
     scribe_delta: "JOURNAL-003"
 
+canonical:
+  - id: "CANON-CB0B0D92C9664113"
+    date: "2026-07-30"
+    schema_patch_date: "2026-07-30"
+    type: "validation"
+    scope: "."
+    status: "PASS"
+    status_log:
+      - at: "2026-07-30T10:39:13Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1785407953-cli-v3-final-f6555ef465dd56db.json"
+    summary: "Release-grade v3 six-host gate applied and fully validated."
+    l0_abstract: "Release-grade v3 six-host gate applied and fully validated."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1785407953-cli-v3-final-f6555ef465dd56db.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1785407953-cli-v3-final-f6555ef465dd56db.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1785407953-cli-v3-final-f6555ef465dd56db.json"
+      source_record_digest: "81a739890c47005f0844fdd0a47ebd03457134ac774efabde9226bcb46779331"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-07-30T10:39:13Z"
+
 metrics:
   sessions_total: 3
   scars_total: 0

@@ -370,11 +370,18 @@ def _candidate_binding_id(project_root: Path, host_id: str, config_path: Path) -
     return uuid.uuid4().hex
 
 
-def _host_environment(host_id: str, binding_id: str) -> dict[str, str]:
+def _host_environment(
+    host_id: str,
+    binding_id: str,
+    *,
+    project_root: Path | None = None,
+) -> dict[str, str]:
     return {
         "AGENT_MCP_HOST": host_id,
         "AGENT_MCP_BINDING_ID": binding_id,
-        "AGENT_SCRIBE_GRAPHIFY_ROOT": ".",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": (
+            str(project_root.resolve()) if project_root is not None else "."
+        ),
     }
 
 
@@ -454,15 +461,20 @@ def _toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _codex_block(binding_id: str) -> str:
-    environment = _host_environment("codex-cli", binding_id)
+def _codex_block(binding_id: str, project_root: Path) -> str:
+    resolved_root = project_root.resolve()
+    environment = _host_environment(
+        "codex-cli",
+        binding_id,
+        project_root=resolved_root,
+    )
     return "\n".join(
         [
             _MANAGED_TOML_START,
             f'[mcp_servers."{SERVER_NAME}"]',
             f"command = {_toml_string(_python_command())}",
             'args = [".agent/mcp/server_entry.py"]',
-            'cwd = "."',
+            f"cwd = {_toml_string(str(resolved_root))}",
             "enabled = true",
             "startup_timeout_sec = 20",
             "tool_timeout_sec = 60",
@@ -474,9 +486,13 @@ def _codex_block(binding_id: str) -> str:
     )
 
 
-def _configure_codex(path: Path, binding_id: str) -> bool:
+def _configure_codex(
+    path: Path,
+    binding_id: str,
+    project_root: Path,
+) -> bool:
     text = path.read_text(encoding="utf-8") if path.exists() else ""
-    block = _codex_block(binding_id)
+    block = _codex_block(binding_id, project_root)
     pattern = re.compile(re.escape(_MANAGED_TOML_START) + r".*?" + re.escape(_MANAGED_TOML_END), re.DOTALL)
     if pattern.search(text):
         updated = pattern.sub(block, text)
@@ -576,7 +592,7 @@ def configure_host(
         elif host_id == "claude-code":
             changed = _configure_claude(config_path, binding_id)
         else:
-            changed = _configure_codex(config_path, binding_id)
+            changed = _configure_codex(config_path, binding_id, root)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return {
             "ok": False,
@@ -638,8 +654,36 @@ def verify_host_process_binding(
     env = dict(os.environ if environ is None else environ)
     host_id = normalize_host_id(env.get("AGENT_MCP_HOST", ""))
     binding_id = str(env.get("AGENT_MCP_BINDING_ID") or "").strip()
+    configured_root = str(
+        env.get("AGENT_SCRIBE_GRAPHIFY_ROOT") or ""
+    ).strip()
     if host_id in {"auto", "unknown"} or not binding_id:
         return {"ok": False, "verdict": HOST_MCP_UNBOUND, "reason": "host process environment binding is absent"}
+    if not configured_root:
+        return {
+            "ok": False,
+            "verdict": HOST_MCP_UNBOUND,
+            "reason": "host process root binding is absent",
+        }
+    try:
+        bound_root = (
+            (root / configured_root).resolve()
+            if not Path(configured_root).is_absolute()
+            else Path(configured_root).resolve()
+        )
+    except (OSError, ValueError) as exc:
+        return {
+            "ok": False,
+            "verdict": "HOST_PROCESS_ROOT_INVALID",
+            "reason": str(exc),
+        }
+    if bound_root != root:
+        return {
+            "ok": False,
+            "verdict": "HOST_PROCESS_ROOT_MISMATCH",
+            "expected": str(root),
+            "actual": str(bound_root),
+        }
     requested = normalize_host_id(claimed_host)
     if requested not in {"auto", "unknown", host_id}:
         return {"ok": False, "verdict": "HOST_PROCESS_IDENTITY_MISMATCH", "host_id": host_id, "claimed_host": requested}
