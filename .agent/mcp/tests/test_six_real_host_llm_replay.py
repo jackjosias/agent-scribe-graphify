@@ -208,7 +208,10 @@ class SixRealHostReplayTest(unittest.TestCase):
         )
 
     def test_missing_activity_call_is_rejected(self) -> None:
-        with self.assertRaisesRegex(replay.ReplayFailure, "CALL_COUNT"):
+        with self.assertRaisesRegex(
+            replay.ReplayFailure,
+            r"TRACE_CALL_COUNT_INVALID participant=1 count=8",
+        ):
             replay.validate_call_sequence(
                 self.valid_calls()[:-1],
                 run_id="run-1",
@@ -389,7 +392,26 @@ class SixRealHostReplayTest(unittest.TestCase):
             prompt.count(
                 "mcp__agent_scribe_graphify_replay__tenor_activity("
             ),
-            8,
+            1,
+        )
+        self.assertEqual(
+            prompt.count(
+                "await tools.mcp__agent_scribe_graphify_replay__tenor_activity"
+            ),
+            1,
+        )
+        self.assertIn(
+            "for (let sequence = 1; sequence <= 8; sequence += 1) {",
+            prompt,
+        )
+        self.assertIn(
+            'phase:sequence <= 4 ? "ready" : "observed",sequence',
+            prompt,
+        )
+        self.assertIn(
+            'const activityBase = {"agent_session_id":"cli-1",'
+            '"participant_id":1,"run_id":"run-1"};',
+            prompt,
         )
         self.assertEqual(
             prompt.count(

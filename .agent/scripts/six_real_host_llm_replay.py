@@ -362,27 +362,34 @@ def _prompt(
         sort_keys=True,
         separators=(",", ":"),
     )
-    calls = [
+    program = [
         "await tools.mcp__agent_scribe_graphify_replay__tenor_init_bridge"
         f"({bridge_arguments});"
     ]
-    for sequence in range(1, EXPECTED_ACTIVITY_CALLS + 1):
-        phase = "ready" if sequence <= 4 else "observed"
-        arguments = json.dumps(
-            {
-                "run_id": run_id,
-                "participant_id": participant_id,
-                "agent_session_id": session_id,
-                "phase": phase,
-                "sequence": sequence,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        calls.append(
-            "await tools.mcp__agent_scribe_graphify_replay__tenor_activity"
-            f"({arguments});"
-        )
+    activity_base = json.dumps(
+        {
+            "run_id": run_id,
+            "participant_id": participant_id,
+            "agent_session_id": session_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    program.extend(
+        [
+            f"const activityBase = {activity_base};",
+            (
+                "for (let sequence = 1; sequence <= "
+                f"{EXPECTED_ACTIVITY_CALLS}; sequence += 1) {{"
+            ),
+            (
+                "await tools.mcp__agent_scribe_graphify_replay__tenor_activity"
+                "({...activityBase,phase:sequence <= 4 ? "
+                "\"ready\" : \"observed\",sequence});"
+            ),
+            "}",
+        ]
+    )
     return "\n".join(
         [
             "Release-grade six-host replay. The two authorized MCP tools are "
@@ -390,7 +397,7 @@ def _prompt(
             "Invoke Code Mode exactly once. Execute only the literal JavaScript "
             "between BEGIN and END, with no inspection or modification.",
             "BEGIN",
-            *calls,
+            *program,
             'text("SIX_REAL_HOST_PARTICIPANT_OK");',
             "END",
             "After the ninth successful result, answer only: "
@@ -489,7 +496,10 @@ def validate_call_sequence(
     model: str,
 ) -> None:
     if len(calls) != 9:
-        raise ReplayFailure(f"TRACE_CALL_COUNT_INVALID:{len(calls)}")
+        raise ReplayFailure(
+            f"TRACE_CALL_COUNT_INVALID participant={participant_id} "
+            f"count={len(calls)}"
+        )
     bridge = calls[0]
     if bridge != {
         "server": PROXY_SERVER,
