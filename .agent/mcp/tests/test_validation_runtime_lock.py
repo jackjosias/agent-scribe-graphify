@@ -17,6 +17,9 @@ HERE = Path(__file__).resolve().parent
 MCP_DIR = HERE.parent
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
+SCRIPTS_DIR = HERE.parents[1] / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from runtime.validation_lock import (
     ValidationRuntimeBusy,
@@ -25,6 +28,7 @@ from runtime.validation_lock import (
     validation_runtime_lock,
 )
 from runtime import db, patch_queue
+import validation_suite
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -117,6 +121,29 @@ class ValidationRuntimeLockTest(unittest.TestCase):
         redteam_pos = text.index("enforcement_redteam_smoke.py")
         self.assertLess(lock_pos, smoke_pos)
         self.assertLess(smoke_pos, redteam_pos)
+
+    def test_09b_validation_suite_scrubs_live_runtime_binding(self) -> None:
+        environment = validation_suite.isolated_test_environment(
+            {
+                "AGENT_MCP_BINDING_ID": "binding",
+                "AGENT_MCP_HOST": "codex-cli",
+                "AGENT_SCRIBE_GRAPHIFY_ROOT": "/live/project",
+                "AGENT_TENOR_JOB_WORKER": "1",
+                "SCRIBE_AGENT_ID": "live-agent",
+                "PATH": "/safe/bin",
+            }
+        )
+        self.assertEqual(environment, {"PATH": "/safe/bin"})
+
+    def test_09c_validation_suite_rejects_live_changeset_worker(self) -> None:
+        self.assertTrue(
+            validation_suite.live_runtime_worker_forbidden(
+                {"AGENT_TENOR_JOB_WORKER": "1"}
+            )
+        )
+        self.assertFalse(
+            validation_suite.live_runtime_worker_forbidden({})
+        )
 
     def test_10_reset_removes_valid_database_and_wal_sidecars(self) -> None:
         database = self.root / ".agent" / "state" / "runtime" / "coordination.sqlite"

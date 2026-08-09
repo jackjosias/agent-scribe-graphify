@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -43,6 +44,14 @@ def _load_readiness():
         sys.path.insert(0, str(mcp_root))
     from runtime import graphify_readiness
     return graphify_readiness
+
+
+def _load_graphify_runtime():
+    mcp_root = PROJECT_ROOT / ".agent" / "mcp"
+    if str(mcp_root) not in sys.path:
+        sys.path.insert(0, str(mcp_root))
+    from runtime import graphify_runtime
+    return graphify_runtime
 
 
 def should_skip_bundle_graph_path(path: Path) -> bool:
@@ -135,22 +144,62 @@ def _restore_project_graph(canonical: Path, previous: Path | None) -> None:
 
 
 def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int = PROJECT_BUILD_TIMEOUT) -> subprocess.CompletedProcess[str]:
-    command = ["graphify", "update", str(target)]
+    started = time.monotonic()
+    runtime = _load_graphify_runtime()
+    allow_external = os.environ.get("TENOR_GRAPHIFY_REQUIRE_LOCAL", "").strip() != "1"
+    resolved = runtime.graphify_command(
+        PROJECT_ROOT,
+        install_if_missing=True,
+        timeout_seconds=timeout,
+        allow_external=allow_external,
+    )
+    if not resolved.get("ok"):
+        returncode = int(resolved.get("returncode") or 70)
+        output = (
+            f"{resolved.get('verdict', 'GRAPHIFY_RUNTIME_UNAVAILABLE')}: "
+            f"{resolved.get('reason', 'project-local Graphify runtime unavailable')}\n"
+            f"{resolved.get('output', '')}"
+        ).rstrip()
+        return subprocess.CompletedProcess(["graphify"], returncode, stdout=output)
+    elapsed = time.monotonic() - started
+    remaining = int(timeout - elapsed)
+    if remaining < 1:
+        return subprocess.CompletedProcess(
+            ["graphify"],
+            124,
+            stdout=f"Graphify runtime provisioning exceeded the shared {timeout}s bound",
+        )
+    command = [*resolved["command"], "update", str(target)]
+    marker = (
+        "TENOR_GRAPHIFY_RUNTIME_READY "
+        f"source={resolved.get('source', 'unknown')} "
+        f"version={resolved.get('version') or 'unknown'} "
+        f"installed={str(bool(resolved.get('installed'))).lower()}"
+    )
     try:
-        return subprocess.run(
+        completed = subprocess.run(
             command,
             cwd=str(cwd or target.parent),
             check=False,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=timeout,
+            timeout=remaining,
+        )
+        return subprocess.CompletedProcess(
+            command,
+            completed.returncode,
+            stdout=f"{marker}\n{completed.stdout or ''}".rstrip(),
         )
     except FileNotFoundError as exc:
-        return subprocess.CompletedProcess(command, 127, stdout=str(exc))
+        return subprocess.CompletedProcess(command, 127, stdout=f"{marker}\n{exc}")
     except subprocess.TimeoutExpired as exc:
         output = exc.stdout if isinstance(exc.stdout, str) else ""
-        return subprocess.CompletedProcess(command, 124, stdout=output + f"\nGraphify timed out after {timeout}s")
+        return subprocess.CompletedProcess(
+            command,
+            124,
+            stdout=f"{marker}\n{output}\nGraphify timed out after {remaining}s",
+        )
 
 
 def bundle_command_hint() -> str:
@@ -235,8 +284,27 @@ def query_graph(text: str, budget: int) -> int:
     if not graph_path.exists():
         print(f"SCRIBE GRAPH: missing bundle graph; run `{bundle_command_hint()} graph --build` first.")
         return 2
+    runtime = _load_graphify_runtime()
+    resolved = runtime.graphify_command(
+        PROJECT_ROOT,
+        install_if_missing=False,
+    )
+    if not resolved.get("ok"):
+        print(
+            "SCRIBE GRAPH: project-local Graphify runtime unavailable; "
+            "rerun canonical TENOR INIT."
+        )
+        return int(resolved.get("returncode") or 70)
     result = subprocess.run(
-        ["graphify", "query", text, "--budget", str(budget), "--graph", str(graph_path)],
+        [
+            *resolved["command"],
+            "query",
+            text,
+            "--budget",
+            str(budget),
+            "--graph",
+            str(graph_path),
+        ],
         check=False,
         text=True,
         stdout=subprocess.PIPE,

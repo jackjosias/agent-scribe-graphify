@@ -12,7 +12,14 @@ This document is the architectural authority for V2.16. It distinguishes:
 
 No category substitutes for another.
 
-The current branch has already proved the local engine on Linux/macOS/Windows CI and on isolated projects, including a real codebase with more than 1,000 source files. The remaining global gate is the real host-LLM proof: tool visibility, root binding, session bridge, complete MCP micro-write and direct-write bypass test.
+V2.16 has proved the local engine on Linux/macOS/Windows CI and on isolated
+projects, including a real codebase with more than 1,000 source files. The
+Graphify zero-setup phase additionally implements and tests a pinned,
+verified, project-local runtime and has terrain-proved it on a fresh Linux
+project without a global Graphify command. Its CI proof requires the dedicated
+Ubuntu/macOS/Windows replay. The next independent global gate is six
+simultaneous real host-LLM processes; six manually launched MCP processes do
+not satisfy it.
 
 ## Canonical entry
 
@@ -220,6 +227,15 @@ Project build is bounded and single-flight. On the canonical init path,
 shared init lock is held. Concurrent terminals wait and recheck readiness, so
 only one build executes and no host model asks the user to run a command.
 
+If no global Graphify command exists, TENOR provisions the pinned
+`graphifyy==0.9.26` runtime under the platform-scoped
+`.agent/state/runtime/toolchains/graphify/` tree. It accepts only the exact
+policy and binary dependencies, verifies the official wheel SHA-256, probes
+the isolated module and publishes atomically with an integrity manifest.
+Concurrent installers share a separate owned lock and converge to one
+runtime. Policy, wheel, dependency, probe or integrity failure is fail-closed.
+The full contract and replay are in `.agent/docs/GRAPHIFY_ZERO_SETUP.md`.
+
 The explicit maintenance/CI primitive remains:
 
 ```bash
@@ -370,11 +386,12 @@ exact host id, so OpenCode must never try `--host auto` before the allowed
 
 Exit code `78` is a deterministic safety verdict, not a transient network error. Policy, import, JSON and argument failures surface immediately. Exponential retries are reserved for explicitly transient conditions and remain bounded.
 
-If the Graphify binary is missing but a valid, current, bound graph exists,
-structural reads may continue. The first source mutation is nevertheless blocked
-until a real Graphify CLI answers its probe, because that mutation would make the
-graph stale and could otherwise strand the next session. A stale graph always
-blocks writes until a real project build succeeds.
+If the Graphify runtime is missing but a valid, current, bound graph exists,
+structural reads may continue. The first source mutation is nevertheless
+blocked until the pinned project-local runtime is provisioned and answers its
+probe, because that mutation would make the graph stale and could otherwise
+strand the next session. A stale graph always blocks writes until a real
+project build succeeds.
 
 ## Portability
 

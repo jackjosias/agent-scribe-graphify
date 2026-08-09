@@ -24,7 +24,7 @@ The deterministic command is:
 
 ## Installation authority
 
-TENOR INIT resolves the current root, classifies the installation, purges only old project-bound state when relocation is proven, adopts or creates destination SCRIBE, verifies Graphify, finalizes the local manifest, registers a distinct session and emits machine proof.
+TENOR INIT resolves the current root, classifies the installation, purges only old project-bound state when relocation is proven, adopts or creates destination SCRIBE, provisions and verifies the pinned local Graphify runtime when required, verifies Graphify, finalizes the local manifest, registers a distinct session and emits machine proof.
 
 Classifications:
 
@@ -73,6 +73,11 @@ lock. Other terminals wait, recheck the fingerprint and reuse the result. They
 must not call `graphify_project_build`, ask the user to run a command or invent
 a larger retry during INIT. Never run standalone `graphify update .` in the
 product root.
+
+No global Graphify installation is required. The project-local runtime is
+versioned by Graphify release and platform, constrained to exact binary-wheel
+dependencies, published only after wheel SHA-256 and runtime integrity checks,
+and shared single-flight by concurrent INIT processes.
 
 The explicit maintenance/CI primitive outside host-driven INIT is:
 

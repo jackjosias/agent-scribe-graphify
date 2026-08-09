@@ -30,7 +30,7 @@ Session entry contract:
 1. Human/LLM trigger: `{CANONICAL_TENOR_TRIGGER}`.
 2. Read the project-local `.agent/skills/init-tenor/SKILL.md` before global host instructions.
 3. Mechanical command for this host: `{command}` from the current project root. Never substitute `--host auto` when this host id is known.
-4. TENOR INIT owns the bounded single-flight Graphify rebuild under its shared lock. Never ask the user to run the Graphify build, never retry it with a larger timeout, and never call `graphify_project_build` manually during init; never run `graphify update .` in the product root.
+4. TENOR INIT owns the bounded single-flight Graphify rebuild under its shared lock. When needed, it first provisions the pinned SHA-256-verified project-local `graphifyy==0.9.26` runtime. Never require a global Graphify install. Never ask the user to run the Graphify build, retry it with a larger timeout, call `graphify_project_build` manually during init, or run `graphify update .` in the product root.
 5. Let TENOR manage only the verified project-local MCP entry; reconnect and rerun when it reports `HOST_RECONNECT_REQUIRED`.
 6. A local success is explicitly non-terminal. On `TENOR_INIT_TERMINAL=false`, immediately call the host-visible `tenor_init_bridge` with the emitted session id; do not summarize, ask the user, wait, or stop between the CLI and bridge.
 7. The bridge verifies host visibility, project-local process binding, config hash, resolved root, one-time proof and independent session in one call. Local `--list-tools` or shell JSON-RPC is not host proof.

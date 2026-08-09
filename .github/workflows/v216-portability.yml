@@ -29,7 +29,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.12"]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,6 +55,7 @@ jobs:
           .agent/mcp/runtime/graphify_readiness.py
           .agent/mcp/runtime/graphify_build.py
           .agent/mcp/runtime/graphify_guard.py
+          .agent/mcp/runtime/graphify_runtime.py
           .agent/mcp/runtime/graphify_scribe_bridge.py
           .agent/mcp/runtime/_task_context_first_write_impl.py
           .agent/mcp/runtime/task_context.py
@@ -64,6 +65,7 @@ jobs:
           .agent/mcp/runtime/tenor_jobs.py
           .agent/mcp/runtime/tenor_job_worker.py
           .agent/mcp/runtime/tenor_public_api.py
+          .agent/mcp/runtime/six_host_rendezvous.py
           .agent/mcp/runtime/direct_fs_tripwire.py
           .agent/mcp/runtime/canonical_memory_gate.py
           .agent/mcp/_server_ext_impl.py
@@ -73,10 +75,14 @@ jobs:
           .agent/host_adapter/instructions.py
           .agent/host_adapter/host_config.py
           .agent/host_adapter/templates.py
+          .agent/scripts/six_host_mcp_proxy.py
+          .agent/scripts/six_host_pre_tool_hook.py
+          .agent/scripts/six_real_host_llm_replay.py
           .agent/workflow/scribe/sel/scripts/proof_signer.py
           .agent/workflow/scribe/sel/scripts/scribe_bootstrap.py
           .agent/workflow/scribe/sel/scripts/scribe_tenor_init_v216.py
           .agent/workflow/scribe/sel/scripts/scribe_bundle_graph.py
+          .agent/scripts/graphify_zero_setup_replay.py
 
       - name: Run portable core tests with structured logs
         shell: python
@@ -101,11 +107,15 @@ jobs:
               ("raw_copy_portability", ".agent/mcp/tests/test_raw_copy_portability.py"),
               ("installation_output_preservation", ".agent/mcp/tests/test_installation_output_preservation.py"),
               ("graphify_readiness", ".agent/mcp/tests/test_graphify_readiness.py"),
+              ("graphify_local_runtime", ".agent/mcp/tests/test_graphify_local_runtime.py"),
               ("scribe_bootstrap", ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"),
               ("host_adapter", ".agent/mcp/tests/test_host_adapter_autoguard.py"),
               ("tenor_task_prompt", ".agent/mcp/tests/test_tenor_task_prompt.py"),
               ("stable_agent_identity", ".agent/mcp/tests/test_stable_agent_identity.py"),
               ("tenor_agent_activity", ".agent/mcp/tests/test_tenor_agent_activity.py"),
+              ("six_host_rendezvous", ".agent/mcp/tests/test_six_host_rendezvous.py"),
+              ("six_real_host_llm_replay", ".agent/mcp/tests/test_six_real_host_llm_replay.py"),
+              ("sqlite_connection_policy", ".agent/mcp/tests/test_sqlite_connection_policy.py"),
               ("tenor_changeset_transaction", ".agent/mcp/tests/test_tenor_changeset_transaction.py"),
               ("tenor_jobs", ".agent/mcp/tests/test_tenor_jobs.py"),
               ("direct_fs_tripwire", ".agent/mcp/tests/test_direct_fs_tripwire.py"),
@@ -117,7 +127,12 @@ jobs:
           output_dir = Path(os.environ["V216_LOG_DIR"])
           output_dir.mkdir(parents=True, exist_ok=True)
           results_path = output_dir / "results.json"
-          results = []
+          expected_labels = [label for label, _script in tests]
+          result_document = {
+              "complete": False,
+              "expected_labels": expected_labels,
+              "results": [],
+          }
 
           def as_text(value):
               if isinstance(value, bytes):
@@ -126,7 +141,7 @@ jobs:
 
           def persist_results():
               results_path.write_text(
-                  json.dumps(results, indent=2, sort_keys=True) + "\n",
+                  json.dumps(result_document, indent=2, sort_keys=True) + "\n",
                   encoding="utf-8",
               )
 
@@ -157,12 +172,17 @@ jobs:
 
               combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
               (output_dir / f"{label}.log").write_text(combined, encoding="utf-8")
-              results.append({"label": label, "script": script, "returncode": returncode})
+              result_document["results"].append(
+                  {"label": label, "script": script, "returncode": returncode}
+              )
               persist_results()
               print(f"PORTABLE_TEST {label} rc={returncode}", flush=True)
               if returncode != 0:
                   lines = combined.splitlines()
                   print("\n".join(lines[-80:]), file=sys.stderr, flush=True)
+
+          result_document["complete"] = True
+          persist_results()
 
       - name: Upload portable test logs
         if: always()
@@ -186,17 +206,130 @@ jobs:
           results_path = Path(os.environ["V216_LOG_DIR"]) / "results.json"
           if not results_path.is_file():
               raise SystemExit("PORTABLE_RESULTS_MISSING")
-          results = json.loads(results_path.read_text(encoding="utf-8"))
+          document = json.loads(results_path.read_text(encoding="utf-8"))
+          if not isinstance(document, dict):
+              raise SystemExit("PORTABLE_RESULTS_SCHEMA_INVALID")
+          expected_labels = document.get("expected_labels")
+          results = document.get("results")
+          if not isinstance(expected_labels, list) or not isinstance(results, list):
+              raise SystemExit("PORTABLE_RESULTS_SCHEMA_INVALID")
+          actual_labels = [result.get("label") for result in results]
+          if document.get("complete") is not True:
+              raise SystemExit(
+                  f"PORTABLE_TEST_RUN_INCOMPLETE: expected={expected_labels} actual={actual_labels}"
+              )
+          if actual_labels != expected_labels:
+              raise SystemExit(
+                  f"PORTABLE_TEST_SET_MISMATCH: expected={expected_labels} actual={actual_labels}"
+              )
           failures = [result for result in results if result["returncode"] != 0]
           if failures:
               raise SystemExit(f"PORTABLE_TEST_FAILURES: {failures}")
           print("PORTABLE_CORE_ALL_OK")
 
+  graphify-zero-setup:
+    name: Graphify zero setup / ${{ matrix.os }} / Python ${{ matrix.python }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.12"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install SCRIBE runtime dependency
+        run: python -m pip install --upgrade pyyaml
+
+      - name: Verify Graphify is not globally installed
+        shell: python
+        run: |
+          import shutil
+
+          graphify = shutil.which("graphify")
+          if graphify is not None:
+              raise SystemExit(f"GLOBAL_GRAPHIFY_PRESENT: {graphify}")
+          print("GLOBAL_GRAPHIFY_ABSENT")
+
+      - name: Replay TENOR INIT from a fresh raw copy
+        shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/graphify-zero-setup-${{ matrix.os }}-py${{ matrix.python }}
+        run: |
+          import os
+          import subprocess
+          import sys
+          import traceback
+          from pathlib import Path
+
+          output_dir = Path(os.environ["V216_LOG_DIR"])
+          output_dir.mkdir(parents=True, exist_ok=True)
+          try:
+              completed = subprocess.run(
+                  [sys.executable, ".agent/scripts/graphify_zero_setup_replay.py"],
+                  text=True,
+                  encoding="utf-8",
+                  errors="replace",
+                  capture_output=True,
+                  timeout=900,
+                  check=False,
+              )
+              stdout = completed.stdout
+              stderr = completed.stderr
+              returncode = completed.returncode
+          except subprocess.TimeoutExpired as exc:
+              stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+              stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+              stderr += "\nGRAPHIFY_ZERO_SETUP_TIMEOUT_900S\n"
+              returncode = 124
+          except Exception:
+              stdout = ""
+              stderr = "GRAPHIFY_ZERO_SETUP_HARNESS_EXCEPTION\n" + traceback.format_exc()
+              returncode = 125
+
+          combined = f"STDOUT\n{stdout}\nSTDERR\n{stderr}"
+          (output_dir / "replay.log").write_text(combined, encoding="utf-8")
+          (output_dir / "exit.txt").write_text(f"{returncode}\n", encoding="utf-8")
+          print("\n".join(combined.splitlines()[-160:]), flush=True)
+
+      - name: Upload zero-setup replay logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphify-zero-setup-${{ matrix.os }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/graphify-zero-setup-${{ matrix.os }}-py${{ matrix.python }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce zero-setup replay result
+        shell: python
+        env:
+          V216_LOG_DIR: ${{ runner.temp }}/graphify-zero-setup-${{ matrix.os }}-py${{ matrix.python }}
+        run: |
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["V216_LOG_DIR"])
+          returncode = int((output_dir / "exit.txt").read_text(encoding="utf-8").strip())
+          replay = (output_dir / "replay.log").read_text(encoding="utf-8")
+          if returncode != 0:
+              raise SystemExit(f"GRAPHIFY_ZERO_SETUP_REPLAY_FAILED rc={returncode}")
+          if "GRAPHIFY_ZERO_SETUP_REPLAY_OK" not in replay:
+              raise SystemExit("GRAPHIFY_ZERO_SETUP_SUCCESS_MARKER_MISSING")
+          print("GRAPHIFY_ZERO_SETUP_REPLAY_OK")
+
   linux-deep-validation:
     name: Linux deep validation
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: portable-core
+    needs: [portable-core, graphify-zero-setup]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -39,6 +39,10 @@ missing/stale, serializes it with the shared init lock and continues without a
 new user turn. The explicit maintenance surfaces are
 `.agent/workflow/scribe/scribe graph --project-build --timeout 180` and MCP
 `graphify_project_build`; a host model must not orchestrate them during INIT.
+If Graphify is absent globally, TENOR provisions the pinned
+`graphifyy==0.9.26` runtime under
+`.agent/state/runtime/toolchains/graphify/`, verifies the official wheel
+SHA-256 and the published runtime integrity, then continues automatically.
 The build uses an isolated mirror. Root `graphify-out/`, `graphify update .` and
 `graphify watch` are legacy-only and forbidden in an application project.
 

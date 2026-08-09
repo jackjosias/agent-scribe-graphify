@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -25,6 +26,7 @@ STEPS = (
     ("v216_cross_platform", [sys.executable, ".agent/mcp/tests/test_v216_cross_platform.py"]),
     ("graphify_readiness", [sys.executable, ".agent/mcp/tests/test_graphify_readiness.py"]),
     ("graphify_guard", [sys.executable, ".agent/tests/test_graphify_guard.py"]),
+    ("graphify_local_runtime", [sys.executable, ".agent/mcp/tests/test_graphify_local_runtime.py"]),
     ("graphify_scribe_bridge", [sys.executable, ".agent/tests/test_graphify_scribe_bridge.py"]),
     ("scribe_bootstrap", [sys.executable, ".agent/workflow/scribe/sel/tests/test_scribe_bootstrap.py"]),
     ("generated_surface_parity", [sys.executable, ".agent/workflow/scribe/sel/tests/test_generated_surface_parity.py"]),
@@ -34,6 +36,9 @@ STEPS = (
     ("tenor_task_prompt", [sys.executable, ".agent/mcp/tests/test_tenor_task_prompt.py"]),
     ("stable_agent_identity", [sys.executable, ".agent/mcp/tests/test_stable_agent_identity.py"]),
     ("tenor_agent_activity", [sys.executable, ".agent/mcp/tests/test_tenor_agent_activity.py"]),
+    ("six_host_rendezvous", [sys.executable, ".agent/mcp/tests/test_six_host_rendezvous.py"]),
+    ("six_real_host_llm_replay", [sys.executable, ".agent/mcp/tests/test_six_real_host_llm_replay.py"]),
+    ("sqlite_connection_policy", [sys.executable, ".agent/mcp/tests/test_sqlite_connection_policy.py"]),
     ("tenor_changeset_transaction", [sys.executable, ".agent/mcp/tests/test_tenor_changeset_transaction.py"]),
     ("tenor_jobs", [sys.executable, ".agent/mcp/tests/test_tenor_jobs.py"]),
     ("public_mcp_performance", [sys.executable, ".agent/mcp/tests/test_performance.py"]),
@@ -64,6 +69,34 @@ _GRAPHIFY_SCOPED_STEPS = {
     "enforcement_redteam_smoke",
 }
 
+_SUBPROCESS_ENV_DENYLIST = frozenset(
+    {
+        "AGENT_MCP_BINDING_ID",
+        "AGENT_MCP_HOST",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT",
+        "AGENT_TENOR_JOB_WORKER",
+        "SCRIBE_AGENT_ID",
+    }
+)
+
+
+def isolated_test_environment(
+    environ: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Prevent validators from rebinding fixtures to the live TENOR runtime."""
+
+    isolated = dict(os.environ if environ is None else environ)
+    for key in _SUBPROCESS_ENV_DENYLIST:
+        isolated.pop(key, None)
+    return isolated
+
+
+def live_runtime_worker_forbidden(
+    environ: dict[str, str] | None = None,
+) -> bool:
+    environment = os.environ if environ is None else environ
+    return environment.get("AGENT_TENOR_JOB_WORKER") == "1"
+
 
 def run_step(label: str, command: list[str]) -> None:
     print(f"VALIDATION_SUITE_STEP_START {label}", flush=True)
@@ -73,13 +106,27 @@ def run_step(label: str, command: list[str]) -> None:
         else nullcontext()
     )
     with fixture_scope:
-        process = subprocess.run(command, cwd=str(ROOT), text=True, check=False)
+        process = subprocess.run(
+            command,
+            cwd=str(ROOT),
+            env=isolated_test_environment(),
+            text=True,
+            check=False,
+        )
     if process.returncode != 0:
         raise SystemExit(f"VALIDATION_SUITE_FAIL {label} rc={process.returncode}")
     print(f"VALIDATION_SUITE_STEP_OK {label}", flush=True)
 
 
 def main() -> int:
+    if live_runtime_worker_forbidden():
+        print(
+            "VALIDATION_SUITE_LIVE_RUNTIME_FORBIDDEN: run the canonical "
+            "suite in an isolated checkout, never inside an active TENOR "
+            "changeset worker.",
+            file=sys.stderr,
+        )
+        return 2
     for label, command in STEPS:
         run_step(label, command)
     print("VALIDATION_SUITE_OK")

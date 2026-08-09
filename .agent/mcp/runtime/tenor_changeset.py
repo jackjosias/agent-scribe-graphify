@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -521,12 +522,22 @@ def _fsync_parent(path: Path) -> None:
 
 def _replace_file(target: Path, content: bytes) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
+    target_mode = (
+        stat.S_IMODE(target.stat().st_mode)
+        if target.exists() and not target.is_symlink()
+        else 0o644
+    )
     fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tenor-tmp", dir=str(target.parent))
     try:
         with os.fdopen(fd, "wb") as handle:
+            fchmod = getattr(os, "fchmod", None)
+            if callable(fchmod):
+                fchmod(handle.fileno(), target_mode)
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
+        if not callable(fchmod):
+            os.chmod(tmp_name, target_mode)
         os.replace(tmp_name, target)
         _fsync_parent(target.parent)
     finally:

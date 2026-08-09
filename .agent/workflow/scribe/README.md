@@ -22,7 +22,7 @@ Windows:
 py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id|auto>
 ```
 
-`tenor-init` is the public authority for installation, relocation and recovery. It classifies the project before touching SCRIBE, verifies Graphify, finalizes the installation, configures the verified project-local host entry, records a session and prints a redacted machine receipt.
+`tenor-init` is the public authority for installation, relocation and recovery. It classifies the project before touching SCRIBE, provisions and verifies the pinned project-local Graphify runtime when required, verifies the graph, finalizes the installation, configures the verified project-local host entry, records a session and prints a redacted machine receipt.
 
 `bootstrap` remains an internal/legacy command. It must not be documented as the normal V2.16 start and must not be used to bypass `TENOR_INIT_REQUIRED`.
 
@@ -67,6 +67,12 @@ nodes + links
 ```
 
 Real Graphify currently produces NetworkX node-link data with `links`. Missing, stale, wrong-root, stub, invalid or contradictory graphs block writes.
+
+No global Graphify installation is required. TENOR pins
+`graphifyy==0.9.26`, verifies the official wheel SHA-256, installs exact
+binary-wheel dependencies into the platform-scoped
+`.agent/state/runtime/toolchains/graphify/` tree, probes the isolated runtime
+and verifies its integrity manifest. Publication is atomic and single-flight.
 
 Bounded project build:
 

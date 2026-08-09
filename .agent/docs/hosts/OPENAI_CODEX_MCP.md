@@ -18,16 +18,20 @@ The local project skill is read first. Mechanical initialization:
 
 ## Preferred project scope
 
-Prefer a trusted project-local `.codex/config.toml` rather than a global path to another checkout. TENOR owns one delimited managed block for this server, including project-relative cwd and binding environment:
-
-For this checkout, the binding was stabilized by using the absolute project root in the managed block during diagnosis. That removes ambiguity about whether Codex resolves relative paths from the repository root or from `.codex/`. Prefer the absolute-root form when proving the first working binding for a moved or freshly reloaded host, then keep the documented managed block in sync.
+Prefer a trusted project-local `.codex/config.toml` rather than a global path
+to another checkout. TENOR owns one delimited managed block for this server.
+Codex receives the resolved absolute project root for both `cwd` and
+`AGENT_SCRIBE_GRAPHIFY_ROOT`. A relative `cwd="."` was observed to resolve from
+an isolated `CODEX_HOME` instead of the repository and hid the MCP tools from
+the real host. The generated `.codex/` directory is therefore checkout-local
+runtime state and is ignored by Git.
 
 ```toml
 # agent-scribe-graphify:host-config:start
 [mcp_servers."agent-scribe-graphify"]
 command = "python3"
 args = [".agent/mcp/server_entry.py"]
-cwd = "."
+cwd = "<absolute-project-root-generated-by-TENOR>"
 enabled = true
 startup_timeout_sec = 20
 tool_timeout_sec = 60
@@ -36,11 +40,15 @@ default_tools_approval_mode = "approve"
 [mcp_servers."agent-scribe-graphify".env]
 AGENT_MCP_HOST = "codex-cli"
 AGENT_MCP_BINDING_ID = "<generated-by-TENOR>"
-AGENT_SCRIBE_GRAPHIFY_ROOT = "."
+AGENT_SCRIBE_GRAPHIFY_ROOT = "<absolute-project-root-generated-by-TENOR>"
 # agent-scribe-graphify:host-config:end
 ```
 
 Do not handcraft the binding id. TENOR records it with the config hash, returns `HOST_RECONNECT_REQUIRED` after a change, and issues no session proof until Codex is restarted/reconnected and TENOR is rerun. Do not point Codex at the source repository's `.agent`. Do not modify `~/.codex/config.toml` without explicit permission.
+
+Do not copy a generated `.codex/config.toml` to another checkout. Run TENOR
+INIT in the destination so the absolute root, binding id and configuration
+digest are regenerated together.
 
 `default_tools_approval_mode = "approve"` is deliberately scoped to this one
 project-local TENOR server. Without it, non-interactive `codex exec` can list the

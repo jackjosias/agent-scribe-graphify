@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from . import graphify_readiness
+    from . import graphify_readiness, graphify_runtime
 except ImportError:
     import graphify_readiness  # type: ignore
+    import graphify_runtime  # type: ignore
 
 GRAPHIFY_CLI_NAME = "graphify"
 GRAPHIFY_OUT_DIR = "graphify-out"
@@ -85,15 +86,21 @@ def _graphify_on_path() -> Path | None:
         return None
 
 
-def detect_graphify_binary() -> bool:
-    return _graphify_on_path() is not None
+def detect_graphify_binary(workspace_root: Path | str | None = None) -> bool:
+    root = Path(workspace_root or Path.cwd()).resolve()
+    return bool(graphify_runtime.resolve_graphify_runtime(root).get("ok"))
 
 
-def get_graphify_version() -> str | None:
-    binary = _graphify_on_path()
-    if binary is None:
+def get_graphify_version(workspace_root: Path | str | None = None) -> str | None:
+    root = Path(workspace_root or Path.cwd()).resolve()
+    resolved = graphify_runtime.resolve_graphify_runtime(root)
+    if not resolved.get("ok"):
         return None
-    for args in ([str(binary), "--version"], [str(binary), "--help"]):
+    version = resolved.get("version")
+    if isinstance(version, str) and version.strip():
+        return version
+    command = list(resolved.get("command") or [])
+    for args in ([*command, "--version"], [*command, "--help"]):
         result = _safe_subprocess(args)
         if result["ok"]:
             value = (result["stdout"] or result["stderr"]).strip()
@@ -101,20 +108,43 @@ def get_graphify_version() -> str | None:
     return None
 
 
-def validate_graphify_installation() -> dict[str, Any]:
-    binary = _graphify_on_path()
+def validate_graphify_installation(
+    workspace_root: Path | str | None = None,
+) -> dict[str, Any]:
+    root = Path(workspace_root or Path.cwd()).resolve()
+    resolved = graphify_runtime.resolve_graphify_runtime(root)
+    command = list(resolved.get("command") or [])
+    binary = Path(command[0]).resolve() if command else None
     base = {
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
         "python_ok": sys.version_info >= _MIN_PYTHON,
         "platform": _detect_os(),
         "binary_path": str(binary) if binary else None,
+        "runtime_source": resolved.get("source"),
+        "runtime_dir": str(resolved.get("runtime_dir") or ""),
+        "supply_chain_verified": resolved.get("source") == "project_local",
     }
-    if binary is None:
-        return {"ok": False, "verdict": VERDICT_BINARY_MISSING, "version": None, **base}
-    probe = _safe_subprocess([str(binary), "--version"])
+    if not resolved.get("ok"):
+        external_failed = resolved.get("source") == "external_legacy"
+        return {
+            "ok": False,
+            "verdict": VERDICT_BINARY_FAILED if external_failed else VERDICT_BINARY_MISSING,
+            "version": None,
+            "reason": resolved.get("output") or resolved.get("reason"),
+            **base,
+        }
+    pinned_version = resolved.get("version")
+    if isinstance(pinned_version, str) and pinned_version.strip():
+        return {
+            "ok": True,
+            "verdict": VERDICT_BINARY_FOUND,
+            "version": pinned_version,
+            **base,
+        }
+    probe = _safe_subprocess([*command, "--version"])
     successful_probe = probe
     if not probe["ok"]:
-        help_probe = _safe_subprocess([str(binary), "--help"])
+        help_probe = _safe_subprocess([*command, "--help"])
         if not help_probe["ok"]:
             return {"ok": False, "verdict": VERDICT_BINARY_FAILED, "version": None, "reason": probe.get("error") or probe.get("stderr") or "binary did not respond", **base}
         successful_probe = help_probe
@@ -176,12 +206,6 @@ def _write_doc_atomic(path: Path, content: str) -> dict[str, Any]:
 def render_graphify_install_guide(host_type: str = "unknown", os_name: str | None = None) -> str:
     os_name = (os_name or _detect_os()).lower().strip()
     host = (host_type or "unknown").lower().strip()
-    if os_name == "windows":
-        install = "winget install astral-sh.uv\nuv tool install graphifyy"
-    elif os_name == "darwin":
-        install = "brew install uv\nuv tool install graphifyy"
-    else:
-        install = "python3 -m pip install --user pipx\npipx install graphifyy"
     return f"""# Graphify Installation Required
 
 Graphify is structural context compression for the LLM workflow. A write is
@@ -193,13 +217,12 @@ current for the workspace.
 - OS: `{os_name}`
 - Host: `{host}`
 - Python required: `{_MIN_PYTHON[0]}.{_MIN_PYTHON[1]}+`
+- Runtime policy: project-local `graphifyy==0.9.26`
 
-```text
-{install}
-```
-
-Then, from the project root, rerun canonical TENOR INIT. It owns the bounded
-Graphify rebuild and continues without a second user turn:
+No global Graphify or package-manager setup is required. From the project root,
+rerun canonical TENOR INIT. It provisions the pinned runtime under
+`.agent/state/runtime/toolchains/`, verifies the Graphify wheel SHA-256, builds
+the graph under the shared bound and continues without a second user turn:
 
 ```text
 .agent/workflow/scribe/scribe tenor-init --type cli --host <host-id>
@@ -241,7 +264,7 @@ def check_graphify_required(workspace_root: Path | str | None = None, host_type:
                 },
                 "outputs": readiness.to_dict(),
             }
-        installation = validate_graphify_installation()
+        installation = validate_graphify_installation(root)
         if not installation.get("ok"):
             guide = str(root / INSTALL_GUIDE_REL_PATH)
             if auto_write_guide and not Path(guide).is_file():
@@ -254,15 +277,13 @@ def check_graphify_required(workspace_root: Path | str | None = None, host_type:
                 "write_allowed": False,
                 "reason": (
                     "The current graph can still serve read-only retrieval, but a real Graphify "
-                    "CLI is required before the first source mutation so the next session can "
-                    "rebuild a stale graph."
+                    "runtime is required before the first source mutation so the next session can "
+                    "rebuild a stale graph. Rerun TENOR INIT to provision the pinned local runtime."
                 ),
                 "binary": installation,
                 "outputs": readiness.to_dict(),
                 "guide": guide,
                 "next_actions": [
-                    "install_graphify",
-                    graphify_readiness.PROJECT_BUILD_ACTION,
                     "rerun_tenor_init",
                 ],
             }
@@ -275,7 +296,7 @@ def check_graphify_required(workspace_root: Path | str | None = None, host_type:
             "outputs": readiness.to_dict(),
         }
 
-    installation = validate_graphify_installation()
+    installation = validate_graphify_installation(root)
 
     guide = str(root / INSTALL_GUIDE_REL_PATH)
     if auto_write_guide and not Path(guide).is_file():

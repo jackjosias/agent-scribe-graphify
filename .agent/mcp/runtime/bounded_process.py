@@ -48,13 +48,21 @@ class _TailBuffer:
 def _drain(stream: BinaryIO, target: _TailBuffer) -> None:
     try:
         while True:
-            chunk = stream.read(64 * 1024)
+            try:
+                chunk = stream.read(64 * 1024)
+            except (OSError, ValueError):
+                return
             if not chunk:
                 return
             target.append(chunk)
     finally:
         with contextlib.suppress(OSError):
             stream.close()
+
+
+def _close_stream(stream: BinaryIO) -> None:
+    with contextlib.suppress(OSError, ValueError):
+        stream.close()
 
 
 def terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -155,8 +163,24 @@ def run_bounded(
     finally:
         if process.poll() is None:
             terminate_process_tree(process)
+        # Normal readers reach EOF immediately. A descendant can retain a pipe
+        # write handle after the direct child exits on Windows, so close only
+        # the exceptional streams and do it asynchronously: BufferedReader
+        # close may otherwise wait on the concurrent read lock.
         for reader in readers:
-            reader.join(timeout=5)
+            reader.join(timeout=0.5)
+        if any(reader.is_alive() for reader in readers):
+            streams = (process.stdout, None if merge_stderr else process.stderr)
+            for stream in streams:
+                if stream is not None:
+                    threading.Thread(
+                        target=_close_stream,
+                        args=(stream,),
+                        daemon=True,
+                    ).start()
+            for reader in readers:
+                if reader.is_alive():
+                    reader.join(timeout=4.5)
         with _ACTIVE_PROCESSES_LOCK:
             _ACTIVE_PROCESSES.discard(process)
         if any(reader.is_alive() for reader in readers):

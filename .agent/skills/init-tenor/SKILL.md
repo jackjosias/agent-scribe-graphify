@@ -136,10 +136,24 @@ une borne de 180 secondes sous `.agent/.tenor-init.lock`, revalide le
 fingerprint puis poursuit l'init. Les autres terminaux attendent ce verrou et
 réutilisent le résultat après recontrôle ; ils ne lancent pas un second build.
 
+L'absence de commande `graphify` globale n'est pas un prérequis utilisateur.
+Avant le build, TENOR provisionne automatiquement le runtime project-local
+épinglé `graphifyy==0.9.26` sous
+`.agent/state/runtime/toolchains/graphify/<version>/<plateforme>/`. Il
+télécharge le wheel officiel depuis l'index déclaré par
+`.agent/mcp/runtime/graphify_runtime_policy.json`, vérifie son SHA-256, impose
+les dépendances exactes et les wheels binaires, sonde le module isolé, puis
+publie atomiquement un manifeste d'intégrité. Le verrou d'installation est
+interprocessus ; un runtime partiel, altéré ou destiné à une autre plateforme
+n'est jamais accepté.
+
 Le modèle ne doit jamais demander à l'utilisateur de lancer Graphify, appeler
 `graphify_project_build` pendant INIT, ni inventer un retry avec une borne plus
 grande. Un échec réel se termine par
 `TENOR_INIT_GRAPHIFY_RECOVERY_FAILED` avec un verdict machine explicite.
+Un échec de politique, téléchargement, SHA-256, dépendance, probe ou intégrité
+du runtime est également fail-closed ; une installation globale manuelle n'est
+pas un fallback autorisé.
 La commande `scribe graph --project-build` reste une primitive explicite pour
 la maintenance humaine/CI hors du parcours canonique, jamais une étape à
 orchestrer par le LLM hôte.

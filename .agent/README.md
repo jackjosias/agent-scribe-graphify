@@ -32,14 +32,15 @@ Le skill project-local conduit l’hôte dans cet ordre :
 1. résolution du root courant ;
 2. classification de l’installation ou de la relocation ;
 3. adoption ou création de la mémoire SCRIBE du projet ;
-4. validation ou reconstruction Graphify bornée et single-flight ;
-5. finalisation de l’installation locale ;
-6. détection et configuration project-local du host pris en charge ;
-7. reconnexion du host si sa configuration vient de changer ;
-8. preuve que le MCP est réellement visible depuis le processus du host ;
-9. preuve du root binding ;
-10. bridge de la session indépendante ;
-11. verdict `TENOR_INIT_READY`.
+4. provisioning atomique du runtime Graphify project-local épinglé et vérifié si nécessaire ;
+5. validation ou reconstruction Graphify bornée et single-flight ;
+6. finalisation de l’installation locale ;
+7. détection et configuration project-local du host pris en charge ;
+8. reconnexion du host si sa configuration vient de changer ;
+9. preuve que le MCP est réellement visible depuis le processus du host ;
+10. preuve du root binding ;
+11. bridge de la session indépendante ;
+12. verdict `TENOR_INIT_READY`.
 
 Une simple liste locale des tools MCP ne prouve ni leur visibilité dans le host ni le bon root.
 
@@ -71,6 +72,20 @@ Après `TENOR_INIT_READY`, `tenor_task_start` récupère de manière ciblée :
 Ces preuves sont liées à la tâche et doivent modifier le plan. Une requête exécutée puis ignorée ne constitue pas une utilisation de la mémoire.
 
 Les mutations passent par un changeset atomique avec validateurs. La clôture produit un verdict explicite d’admission mémoire : promotion canonique, runtime-only motivé, décision utilisateur ou conflit. Il n’existe pas de clôture silencieuse.
+
+## Graphify sans installation globale
+
+Une copie brute de `.agent/` contient la politique suffisante pour obtenir
+Graphify automatiquement. TENOR INIT épingle `graphifyy==0.9.26`, télécharge
+son wheel officiel depuis PyPI, vérifie le SHA-256 déclaré, installe uniquement
+des wheels binaires sous `.agent/state/runtime/toolchains/graphify/` et publie
+le runtime de façon atomique après probe et manifeste d'intégrité.
+
+Le runtime est séparé par version Python, OS, architecture et ABI. Plusieurs
+INIT concurrents convergent vers une seule installation. Aucun fichier suivi
+n'est modifié par une réutilisation saine. Une erreur de supply chain ou
+d'intégrité produit un verdict fail-closed ; elle ne déclenche jamais une
+installation globale ni la publication d'un runtime partiel.
 
 ## Multi-agent
 

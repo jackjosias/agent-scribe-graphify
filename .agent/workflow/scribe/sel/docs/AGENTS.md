@@ -24,6 +24,7 @@ Mechanical command:
 - SCRIBE bundle graph: `.agent/state/outputs/scribe-out/bundle-graph/`.
 - Root `graphify-out/` is legacy-only.
 - Never run `graphify update .` or `graphify watch` in a portable application project. Canonical TENOR INIT owns a required bounded single-flight rebuild; `graphify_project_build` and the SCRIBE project-build command are explicit maintenance surfaces outside that init choreography.
+- Never require a global Graphify install. TENOR provisions the pinned and SHA-256-verified project-local `graphifyy==0.9.26` runtime atomically under `.agent/state/runtime/toolchains/graphify/`.
 - Do not mix application and bundle graphs.
 - `.agent/`, `.agents/`, `.codex/`, generated outputs, SCRIBE memory and host-rule surfaces must remain excluded from the application graph where appropriate.
 

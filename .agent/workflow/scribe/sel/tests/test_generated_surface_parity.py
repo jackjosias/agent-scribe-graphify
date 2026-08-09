@@ -26,6 +26,8 @@ class GeneratedSurfaceParityTest(unittest.TestCase):
         self.assertEqual(actual, expected)
         self.assertIn("TENOR_INIT_SAME_PROJECT` never repairs the bundle", expected)
         self.assertIn("complete raw copy of `.agent/` is a mandatory supported installation path", expected)
+        self.assertIn("graphifyy==0.9.26", expected)
+        self.assertIn("never publishes a partial runtime", expected)
         self.assertIn("Default commit/push scope is the host product source", expected)
         self.assertIn(
             "keep `.agent/state/outputs/graphify-out/` and `.agent/state/outputs/scribe-out/` out of commits",
@@ -44,6 +46,7 @@ class GeneratedSurfaceParityTest(unittest.TestCase):
         self.assertIn("Invariant SAME_PROJECT", expected)
         self.assertIn("Invariant purge/migration sans perte", expected)
         self.assertIn("scribe install --force", expected)
+        self.assertIn("graphifyy==0.9.26", expected)
         self.assertIn(".agent/workflow/scribe/sel/docs/scribe.md", expected)
 
     def test_generated_python_adapters_compile(self) -> None:

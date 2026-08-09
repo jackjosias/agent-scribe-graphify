@@ -153,7 +153,33 @@ class GeneratedOutputHygieneTest(unittest.TestCase):
         )
         self.assertEqual(ignored.returncode, 0)
 
-    def test_20_smoke_workspaces_are_ignored_by_git(self) -> None:
+    def test_20_project_local_toolchains_are_ignored_by_git(self) -> None:
+        ignore_source = Path(__file__).resolve().parents[2] / ".gitignore"
+        shutil.copy2(ignore_source, self.root / ".agent" / ".gitignore")
+        toolchain = (
+            self.root
+            / ".agent"
+            / "state"
+            / "runtime"
+            / "toolchains"
+            / "graphify"
+            / "0.9.26"
+            / "platform"
+            / "site"
+            / "graphify"
+            / "__init__.py"
+        )
+        toolchain.parent.mkdir(parents=True, exist_ok=True)
+        toolchain.write_text("__version__ = '0.9.26'\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=str(self.root), check=True, capture_output=True)
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", str(toolchain.relative_to(self.root))],
+            cwd=str(self.root),
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
+    def test_21_smoke_workspaces_are_ignored_by_git(self) -> None:
         ignore_source = Path(__file__).resolve().parents[2] / ".gitignore"
         shutil.copy2(ignore_source, self.root / ".agent" / ".gitignore")
         artifact = self.root / ".agent" / "state" / "smoke" / "auth" / "file.txt"
