@@ -380,6 +380,44 @@ def _canonical_validators(root: Path, validators: list[dict[str, Any]]) -> list[
     return result
 
 
+def prevalidate_changeset(
+    *,
+    project_root: Path,
+    changes: list[dict[str, Any]],
+    validators: list[dict[str, Any]],
+    allowed_resources: list[str],
+    confirm_deletions: list[str] | None = None,
+    confirm_full_replacements: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Validate a changeset completely without creating a worker or writing files."""
+
+    root = project_root.resolve()
+    try:
+        canonical = _canonical_changes(
+            root,
+            changes,
+            allowed_resources,
+            confirm_deletions or [],
+            confirm_full_replacements or [],
+        )
+        canonical_validators = _canonical_validators(root, validators)
+    except ChangesetError as exc:
+        return {"ok": False, "verdict": exc.verdict, **exc.details}
+    return {
+        "ok": True,
+        "verdict": "TENOR_CHANGESET_PREFLIGHT_OK",
+        "resources": [item["path"] for item in canonical],
+        "validators": [
+            {
+                "argv": list(item["argv"]),
+                "cwd": str(item["cwd_display"]),
+                "timeout_seconds": int(item["timeout_seconds"]),
+            }
+            for item in canonical_validators
+        ],
+    }
+
+
 def ensure_schema(project_root: Path) -> None:
     db.init_db(project_root)
     with db.connect(project_root) as con:

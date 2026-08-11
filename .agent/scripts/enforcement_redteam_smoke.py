@@ -21,6 +21,7 @@ from runtime.validation_lock import (
     validation_runtime_busy_message,
     validation_runtime_lock,
 )
+from runtime import graphify_readiness, installation_state
 
 ROOT = Path(__file__).resolve().parents[2]
 ENTRY = ROOT / ".agent" / "mcp" / "server_entry.py"
@@ -174,6 +175,20 @@ ACTIVE_CLIENT: PersistentMcpClient | None = None
 
 def clean_runtime(root: Path = ROOT) -> None:
     reset_validation_runtime_database(root)
+
+
+def prepare_tenor_gate(root: Path = ROOT) -> None:
+    """Prepare this disposable fixture without weakening the startup gate."""
+
+    prepared = installation_state.ensure_fresh_installation_state(root)
+    if not prepared.get("ok"):
+        fail(f"TENOR fixture prepare failed for {root}: {prepared}")
+    finalized = installation_state.finalize_installation_state(root)
+    if not finalized.get("ok"):
+        fail(f"TENOR fixture finalize failed for {root}: {finalized}")
+    gate = installation_state.inspect_installation_state(root)
+    if not gate.get("ready"):
+        fail(f"TENOR fixture gate not ready for {root}: {gate}")
 
 
 def clean_redteam() -> None:
@@ -475,20 +490,22 @@ def main() -> int:
     clean_runtime()
     clean_redteam()
     try:
-        with PersistentMcpClient(ROOT, ENTRY) as client:
-            ACTIVE_CLIENT = client
-            test_positive_context_path()
-            test_claim_requires_scribe_and_graphify()
-            test_fake_token_and_read_intent_refused_at_claim()
-            test_propose_apply_and_delete_guards()
-            test_resource_mismatch_refused_at_claim()
-            context_bypass = test_context_bypass()
-            direct_fs = test_direct_fs_write()
-            tripwire = test_direct_fs_bypass_detection()
-            print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs} direct_fs_tripwire={tripwire}")
-            if args.strict_context and context_bypass == "OPEN":
-                return 2
-            return 0
+        prepare_tenor_gate()
+        with graphify_readiness.smoke_fixture_scope(ROOT):
+            with PersistentMcpClient(ROOT, ENTRY) as client:
+                ACTIVE_CLIENT = client
+                test_positive_context_path()
+                test_claim_requires_scribe_and_graphify()
+                test_fake_token_and_read_intent_refused_at_claim()
+                test_propose_apply_and_delete_guards()
+                test_resource_mismatch_refused_at_claim()
+                context_bypass = test_context_bypass()
+                direct_fs = test_direct_fs_write()
+                tripwire = test_direct_fs_bypass_detection()
+                print(f"MCP_ENFORCEMENT_REDTEAM_OK context_bypass={context_bypass} direct_fs_outside_sandbox={direct_fs} direct_fs_tripwire={tripwire}")
+                if args.strict_context and context_bypass == "OPEN":
+                    return 2
+                return 0
     finally:
         ACTIVE_CLIENT = None
         clean_redteam()

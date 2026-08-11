@@ -29,6 +29,8 @@ MIN_LEASE_SECONDS = 3
 MAX_LEASE_SECONDS = 300
 
 _LAUNCH_LOCK = threading.RLock()
+_CHILD_PROCESS_LOCK = threading.RLock()
+_CHILD_PROCESSES: dict[str, dict[str, subprocess.Popen[bytes]]] = {}
 
 
 @dataclass(frozen=True)
@@ -872,13 +874,72 @@ def _secure_log(project_root: Path, job_id: str) -> tuple[int, Path]:
     return descriptor, path
 
 
-def _reap_process(process: subprocess.Popen[bytes], project_root: Path) -> None:
+def _register_child_process(
+    project_root: Path,
+    job_id: str,
+    process: subprocess.Popen[bytes],
+) -> None:
+    key = str(project_root.resolve())
+    with _CHILD_PROCESS_LOCK:
+        _CHILD_PROCESSES.setdefault(key, {})[job_id] = process
+
+
+def _unregister_child_process(project_root: Path, job_id: str) -> None:
+    key = str(project_root.resolve())
+    with _CHILD_PROCESS_LOCK:
+        children = _CHILD_PROCESSES.get(key)
+        if not children:
+            return
+        children.pop(job_id, None)
+        if not children:
+            _CHILD_PROCESSES.pop(key, None)
+
+
+def wait_for_worker_processes(
+    project_root: Path | str,
+    *,
+    timeout_seconds: float = 10.0,
+) -> dict[str, Any]:
+    """Wait until every worker spawned by this MCP process has exited."""
+
+    key = str(Path(project_root).resolve())
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        with _CHILD_PROCESS_LOCK:
+            children = dict(_CHILD_PROCESSES.get(key, {}))
+        if not children:
+            return {
+                "ok": True,
+                "verdict": "TENOR_WORKER_PROCESSES_EXITED",
+                "active_job_ids": [],
+            }
+        if time.monotonic() >= deadline:
+            return {
+                "ok": False,
+                "verdict": "TENOR_WORKER_PROCESS_EXIT_TIMEOUT",
+                "active_job_ids": sorted(children),
+                "active_pids": sorted(
+                    process.pid
+                    for process in children.values()
+                    if process.poll() is None
+                ),
+            }
+        time.sleep(0.025)
+
+
+def _reap_process(
+    process: subprocess.Popen[bytes],
+    project_root: Path,
+    job_id: str,
+) -> None:
     process.wait()
     try:
         recover_stale_jobs(project_root)
         launch_queued_jobs(project_root)
     except Exception:
-        return
+        pass
+    finally:
+        _unregister_child_process(project_root, job_id)
 
 
 def _spawn_worker(
@@ -934,9 +995,10 @@ def _spawn_worker(
         process.terminate()
         process.wait(timeout=5)
         raise RuntimeError("TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION")
+    _register_child_process(project_root, job_id, process)
     threading.Thread(
         target=_reap_process,
-        args=(process, project_root),
+        args=(process, project_root, job_id),
         name=f"tenor-job-reaper-{job_id}",
         daemon=True,
     ).start()

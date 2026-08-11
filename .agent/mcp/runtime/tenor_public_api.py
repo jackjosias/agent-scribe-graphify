@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -781,6 +782,49 @@ def _execute_changeset_bound_sync(
     if not capsule.get("ok"):
         _advance(task_id, status="blocked", current_action="decision_capsule_stale", last_action="ready", next_action="tenor_task_start:same_objective_refresh")
         return _ok(capsule)
+    preflight = tenor_changeset.prevalidate_changeset(
+        project_root=_root(),
+        changes=changes or [],
+        validators=validators or [],
+        allowed_resources=activity["resources"],
+        confirm_deletions=confirm_deletions or [],
+        confirm_full_replacements=confirm_full_replacements or [],
+    )
+    if not preflight.get("ok"):
+        _advance(
+            task_id,
+            status="active",
+            current_action="changeset_preflight_rejected",
+            last_action="decision_capsule_verified",
+            next_action="tenor_apply_changeset",
+        )
+        return _ok({**preflight, "task_id": task_id, "terminal": False})
+    scoped_audit = direct_fs_tripwire.detect_unauthorized_mutations(
+        _root(),
+        task_id,
+        agent_id,
+        resources=list(preflight["resources"]),
+    )
+    if scoped_audit.get("verdict") == direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED:
+        _advance(
+            task_id,
+            status="blocked",
+            current_action="unauthorized_mutation_detected",
+            last_action="changeset_preflight_rejected",
+            next_action="inspect_declared_resources",
+        )
+        return _ok({
+            "ok": False,
+            "verdict": "TENOR_CHANGESET_UNAUTHORIZED_MUTATION_REJECTED",
+            "task_id": task_id,
+            "workspace_audit": scoped_audit,
+            "terminal": False,
+            "next_action": "inspect_declared_resources",
+        })
+    execution_audit_id = f"{task_id}::execution::{uuid.uuid4().hex}"
+    direct_fs_tripwire.workspace_snapshot(
+        _root(), execution_audit_id, agent_id
+    )
     _advance(task_id, status="active", current_action="apply_changeset", last_action="decision_capsule_verified", next_action="validate_and_record")
     def precommit_guard(provisional: dict[str, Any]) -> dict[str, Any]:
         for item in provisional.get("files", []):
@@ -795,7 +839,7 @@ def _execute_changeset_bound_sync(
                 project_root=_root(),
             )
         workspace_audit = direct_fs_tripwire.detect_unauthorized_mutations(
-            _root(), task_id, agent_id
+            _root(), execution_audit_id, agent_id
         )
         clean = workspace_audit.get("verdict") != direct_fs_tripwire.DIRECT_WRITE_BYPASS_DETECTED
         return {
@@ -808,19 +852,24 @@ def _execute_changeset_bound_sync(
             "workspace_audit": workspace_audit,
         }
 
-    result = tenor_changeset.apply_changeset(
-        project_root=_root(),
-        agent_id=agent_id,
-        task_id=task_id,
-        changes=changes or [],
-        validators=validators or [],
-        allowed_resources=activity["resources"],
-        confirm_deletions=confirm_deletions or [],
-        confirm_full_replacements=confirm_full_replacements or [],
-        request_id=request_id,
-        precommit_guard=precommit_guard,
-        execution_fence=execution_fence,
-    )
+    try:
+        result = tenor_changeset.apply_changeset(
+            project_root=_root(),
+            agent_id=agent_id,
+            task_id=task_id,
+            changes=changes or [],
+            validators=validators or [],
+            allowed_resources=activity["resources"],
+            confirm_deletions=confirm_deletions or [],
+            confirm_full_replacements=confirm_full_replacements or [],
+            request_id=request_id,
+            precommit_guard=precommit_guard,
+            execution_fence=execution_fence,
+        )
+    finally:
+        direct_fs_tripwire.discard_snapshot(
+            _root(), execution_audit_id, agent_id
+        )
     if not result.get("ok"):
         guard = result.get("guard") if isinstance(result.get("guard"), dict) else {}
         workspace_audit = guard.get("workspace_audit") if isinstance(guard, dict) else None
@@ -1044,6 +1093,24 @@ def tenor_apply_changeset(
             next_action="tenor_task_start:same_objective_refresh",
         )
         return _ok(capsule)
+
+    preflight = tenor_changeset.prevalidate_changeset(
+        project_root=_root(),
+        changes=changes or [],
+        validators=validators or [],
+        allowed_resources=activity["resources"],
+        confirm_deletions=confirm_deletions or [],
+        confirm_full_replacements=confirm_full_replacements or [],
+    )
+    if not preflight.get("ok"):
+        _advance(
+            task_id,
+            status="active",
+            current_action="changeset_preflight_rejected",
+            last_action="decision_capsule_verified",
+            next_action="tenor_apply_changeset",
+        )
+        return _ok({**preflight, "task_id": task_id, "terminal": False})
 
     normalized_validators = validators or []
     validator_budget = sum(

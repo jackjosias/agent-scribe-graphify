@@ -111,7 +111,9 @@ tenor_task_start(objective, intent, resources, scope)
   -> targeted SCRIBE + Graphify inside TENOR
   -> decision capsule bound to memory/graph evidence and exact resources
 tenor_apply_changeset(task_id, changes[], validators[])
-  -> all-file preflight + deterministic locks + atomic commit/rollback
+  -> synchronous path/hash/scope/cwd/argv preflight before worker launch
+  -> exact-resource audit + deterministic locks + base-hash recheck
+  -> short global execution-window audit + atomic commit/conditional rollback
   -> mandatory validation + explicit SCRIBE memory admission + terminal closure
 ```
 
@@ -125,6 +127,9 @@ Machine invariants:
 - cross-agent task control is forbidden;
 - daemon heartbeat and rolling TTL preserve live work but expire dead work;
 - a multi-file changeset commits all files or restores all files;
+- a stale changeset is rejected before a worker exists and cannot regress a newer fix;
+- rollback restores only hashes still owned by that changeset, never a later writer's bytes;
+- disjoint fixes present before execution are preserved, while unreceipted validator-time writes remain globally detectable;
 - normal text mutations use exact structured edits; a fragment is never a full-file replace;
 - every mutating changeset has at least one successful validator;
 - a runtime SCRIBE receipt requires a validated committed changeset;
