@@ -279,8 +279,11 @@ tenor_task_start(objective, intent, resources, scope)
   -> internal targeted SCRIBE and Graphify
   -> hash-bound decision capsule
 tenor_apply_changeset(task_id, changes[], validators[])
-  -> preflight all paths, hashes and locks before any write
-  -> commit every file or rollback every file
+  -> synchronously prevalidate paths, hashes, scope, validator cwd and argv
+  -> audit only declared changeset resources before worker launch
+  -> lock exact files and recheck every base hash before each write
+  -> audit the short validator execution window across the checkout
+  -> commit every file or conditionally rollback only owned bytes
   -> mandatory validation + memory admission + terminal closure
 ```
 
@@ -299,6 +302,14 @@ fichier en interne. La transaction refuse traversal/symlinks/scope escape,
 acquiert des locks ordonnés et exige au moins un validateur argv borné sans
 shell. Toute erreur restaure tous les fichiers. Un record runtime n'est émis
 qu'après commit et validation, puis il est filtré/promu avant la clôture.
+
+La préservation cumulative est un invariant : un changeset obsolète est rejeté
+avant lancement du worker et aucun rollback ne restaure un fichier dont le hash
+n'est plus celui publié par ce changeset. Les modifications disjointes déjà
+présentes au début de la fenêtre d'exécution sont conservées. Les mutations
+non reçues qui apparaissent pendant les validateurs sont néanmoins détectées
+sur tout le checkout, ce qui ferme le contournement sans recréer un faux
+conflit entre tâches indépendantes.
 
 Un payload invalide ou une ancre ambiguë se corrige dans la même tâche. Une
 tâche non commitée peut être annulée directement, sans changeset factice. Aucun

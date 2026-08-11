@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
-from contextlib import nullcontext
+import tempfile
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from typing import Iterator
 
 ROOT = Path(__file__).resolve().parents[2]
 MCP_DIR = ROOT / ".agent" / "mcp"
@@ -69,6 +72,11 @@ _GRAPHIFY_SCOPED_STEPS = {
     "enforcement_redteam_smoke",
 }
 
+_ISOLATED_PROJECT_STEPS = {
+    "mcp_smoke",
+    "enforcement_redteam_smoke",
+}
+
 _SUBPROCESS_ENV_DENYLIST = frozenset(
     {
         "AGENT_MCP_BINDING_ID",
@@ -98,21 +106,43 @@ def live_runtime_worker_forbidden(
     return environment.get("AGENT_TENOR_JOB_WORKER") == "1"
 
 
+def _isolated_copy_ignore(directory: str, names: list[str]) -> set[str]:
+    """Exclude mutable/runtime-only files from a smoke project copy."""
+
+    ignored = {name for name in names if name in {".git", "__pycache__"} or name.endswith(".pyc")}
+    directory_path = Path(directory).resolve()
+    if directory_path == (ROOT / ".agent" / "state").resolve():
+        ignored.update(name for name in names if name in {"runtime", "smoke", "redteam"})
+    return ignored
+
+
+@contextmanager
+def isolated_smoke_project() -> Iterator[Path]:
+    """Run destructive MCP smoke checks against an independent project state."""
+
+    with tempfile.TemporaryDirectory(prefix="tenor-validation-") as temporary:
+        project_root = Path(temporary) / "project"
+        shutil.copytree(ROOT, project_root, ignore=_isolated_copy_ignore)
+        yield project_root
+
+
 def run_step(label: str, command: list[str]) -> None:
     print(f"VALIDATION_SUITE_STEP_START {label}", flush=True)
+    project_scope = isolated_smoke_project() if label in _ISOLATED_PROJECT_STEPS else nullcontext(ROOT)
     fixture_scope = (
         graphify_readiness.smoke_fixture_scope(ROOT)
-        if label in _GRAPHIFY_SCOPED_STEPS
+        if label in _GRAPHIFY_SCOPED_STEPS and label not in _ISOLATED_PROJECT_STEPS
         else nullcontext()
     )
-    with fixture_scope:
-        process = subprocess.run(
-            command,
-            cwd=str(ROOT),
-            env=isolated_test_environment(),
-            text=True,
-            check=False,
-        )
+    with project_scope as project_root:
+        with fixture_scope:
+            process = subprocess.run(
+                command,
+                cwd=str(project_root),
+                env=isolated_test_environment(),
+                text=True,
+                check=False,
+            )
     if process.returncode != 0:
         raise SystemExit(f"VALIDATION_SUITE_FAIL {label} rc={process.returncode}")
     print(f"VALIDATION_SUITE_STEP_OK {label}", flush=True)

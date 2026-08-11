@@ -71,7 +71,7 @@ Après `TENOR_INIT_READY`, `tenor_task_start` récupère de manière ciblée :
 
 Ces preuves sont liées à la tâche et doivent modifier le plan. Une requête exécutée puis ignorée ne constitue pas une utilisation de la mémoire.
 
-Les mutations passent par un changeset atomique avec validateurs. La clôture produit un verdict explicite d’admission mémoire : promotion canonique, runtime-only motivé, décision utilisateur ou conflit. Il n’existe pas de clôture silencieuse.
+Les mutations passent par un changeset atomique avec validateurs. Les hashes, chemins, scopes, `cwd` et argv sont prévalidés avant worker ; un patch obsolète est rejeté sans écriture et un rollback ne peut jamais restaurer par-dessus les bytes plus récents d’un autre agent. La clôture produit un verdict explicite d’admission mémoire : promotion canonique, runtime-only motivé, décision utilisateur ou conflit. Il n’existe pas de clôture silencieuse.
 
 ## Graphify sans installation globale
 

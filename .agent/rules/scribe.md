@@ -75,11 +75,15 @@ tenor_task_start(objective, intent, resources, scope)
   -> SCRIBE cible + Graphify cible, executes en interne
   -> capsule decisionnelle liee aux preuves et ressources
 tenor_apply_changeset(task_id, changes[], validators[])
-  -> preflight complet + locks ordonnes + commit atomique ou rollback total
+  -> preflight synchrone hashes/paths/scope/cwd/argv avant worker
+  -> audit des ressources du changeset + locks ordonnes
+  -> audit court de la fenetre d'execution + commit atomique ou rollback conditionnel
   -> validateurs obligatoires + admission memoire + cloture terminale
 ```
 
 Les mutations texte utilisent `operation=edit` avec des ancres exactes. `replace` signifie le fichier complet et une reduction destructive exige la confirmation chemin/hash avant/hash apres. `create` derive le sentinel nouveau fichier en interne. Une erreur recuperable reste dans le meme task id ; une tache non commitee peut etre annulee sans changeset factice. Aucun fallback ne demande a l'utilisateur d'appliquer un patch manuel.
+
+Un patch dont le `base_hash` n'est plus courant est rejete avant creation du worker. Une modification disjointe deja presente au debut de la fenetre d'execution appartient a l'etat courant et ne peut provoquer un rollback etranger. Une nouvelle mutation sans recu TENOR pendant les validateurs reste detectee globalement. Chaque integration doit donc preserver tous les correctifs deja presents ; le dernier agent ne peut pas reecrire silencieusement un ancien etat.
 
 Chaque tache terminee persiste exactement un verdict memoire : promotion canonique, runtime-only motive, decision utilisateur requise ou conflit. Une capsule stale apres une ecriture concurrente est rafraichie par le meme `tenor_task_start`, sans tache ni identite de remplacement.
 

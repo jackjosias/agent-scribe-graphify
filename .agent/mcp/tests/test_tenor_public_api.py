@@ -28,6 +28,11 @@ class TenorPublicApiTest(unittest.TestCase):
         (self.root / ".agent" / "state" / "runtime").mkdir(parents=True)
         (self.root / "src").mkdir()
         (self.root / "src" / "feature.txt").write_bytes(b"before\n")
+        (self.root / "src" / "other-agent.txt").write_bytes(b"other-before\n")
+        for index in range(4):
+            (self.root / "src" / f"parallel-{index}.txt").write_bytes(
+                f"before-{index}\n".encode("utf-8")
+            )
         self.old_cwd = Path.cwd()
         self.old_root = mcp.server.ROOT
         self.old_bound = getattr(mcp.server, "_MCP_BOUND_AGENT_ID", "")
@@ -125,6 +130,11 @@ class TenorPublicApiTest(unittest.TestCase):
             snapshot = tenor_jobs.job_snapshot(self.root, job_id=job_id, limit=1)
             current = snapshot["jobs"][0]
             if current["status"] in tenor_jobs.TERMINAL_STATUSES:
+                exited = tenor_jobs.wait_for_worker_processes(
+                    self.root,
+                    timeout_seconds=10.0,
+                )
+                self.assertTrue(exited["ok"], exited)
                 return dict(current.get("result") or {})
             time.sleep(0.05)
         self.fail(f"changeset job did not terminate: {current}")
@@ -258,6 +268,122 @@ class TenorPublicApiTest(unittest.TestCase):
         self.assertEqual(result["memory_admission"]["decision"], "runtime_only")
         self.assertEqual(result["decision_capsule"]["verdict"], "TENOR_DECISION_CAPSULE_RESOLVED")
 
+    def test_disjoint_agent_fix_is_preserved_and_does_not_trigger_foreign_rollback(self) -> None:
+        started = self.call(
+            "tenor_task_start",
+            objective="apply feature fix without regressing another agent",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        (self.root / "src" / "other-agent.txt").write_bytes(b"other-agent-fixed\n")
+
+        accepted = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "edit",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "edits": [{"old_text": "before", "new_text": "after", "expected_occurrences": 1}],
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "from pathlib import Path; assert Path('src/feature.txt').read_text() == 'after\\n'; assert Path('src/other-agent.txt').read_text() == 'other-agent-fixed\\n'"],
+                "timeout_seconds": 20,
+            }],
+            request_id="preserve-disjoint-agent-fix",
+        )
+        result = self.wait_changeset(accepted)
+
+        self.assertEqual(result["verdict"], "TENOR_CHANGESET_COMMITTED_TASK_FINISHED", result)
+        self.assertEqual((self.root / "src" / "feature.txt").read_bytes(), b"after\n")
+        self.assertEqual((self.root / "src" / "other-agent.txt").read_bytes(), b"other-agent-fixed\n")
+
+    def test_stale_agent_patch_is_rejected_before_worker_and_preserves_newer_fix(self) -> None:
+        started = self.call(
+            "tenor_task_start",
+            objective="reject an obsolete agent patch",
+            intent="write",
+            resources=["src/feature.txt"],
+        )
+        (self.root / "src" / "feature.txt").write_bytes(b"newer-agent-fix\n")
+
+        rejected = self.call(
+            "tenor_apply_changeset",
+            task_id=started["task_id"],
+            changes=[{
+                "path": "src/feature.txt",
+                "operation": "replace",
+                "base_hash": hashlib.sha256(b"before\n").hexdigest(),
+                "content": "obsolete-agent-result\n",
+            }],
+            validators=[{
+                "argv": [sys.executable, "-c", "raise SystemExit(0)"],
+                "timeout_seconds": 20,
+            }],
+            request_id="reject-stale-agent-patch",
+        )
+
+        self.assertEqual(rejected["verdict"], "TENOR_CHANGESET_BASE_STALE", rejected)
+        self.assertFalse(rejected["terminal"], rejected)
+        self.assertNotIn("job", rejected)
+        self.assertEqual((self.root / "src" / "feature.txt").read_bytes(), b"newer-agent-fix\n")
+
+    def test_four_agents_commit_disjoint_fixes_without_lost_updates(self) -> None:
+        accepted_jobs: list[dict[str, object]] = []
+        for index in range(4):
+            agent_id = f"parallel-agent-{index}"
+            resource = f"src/parallel-{index}.txt"
+            db.register_agent("test", "unit", agent_id)
+            mcp.server._MCP_BOUND_AGENT_ID = agent_id
+            started = self.call(
+                "tenor_task_start",
+                objective=f"parallel cumulative fix {index}",
+                intent="write",
+                resources=[resource],
+            )
+            self.assertEqual(started["verdict"], "TENOR_TASK_READY", started)
+            accepted = self.call(
+                "tenor_apply_changeset",
+                task_id=started["task_id"],
+                changes=[{
+                    "path": resource,
+                    "operation": "edit",
+                    "base_hash": hashlib.sha256(f"before-{index}\n".encode("utf-8")).hexdigest(),
+                    "edits": [{
+                        "old_text": f"before-{index}",
+                        "new_text": f"fixed-by-agent-{index}",
+                        "expected_occurrences": 1,
+                    }],
+                }],
+                validators=[{
+                    "argv": [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import time; from pathlib import Path; time.sleep(0.5); "
+                            f"assert Path('{resource}').read_text() == 'fixed-by-agent-{index}\\n'"
+                        ),
+                    ],
+                    "timeout_seconds": 20,
+                }],
+                request_id=f"four-agent-cumulative-{index}",
+            )
+            self.assertEqual(accepted["verdict"], "TENOR_CHANGESET_ACCEPTED", accepted)
+            accepted_jobs.append(accepted)
+
+        results = [self.wait_changeset(accepted, timeout_seconds=30) for accepted in accepted_jobs]
+        for index, result in enumerate(results):
+            self.assertEqual(
+                result["verdict"],
+                "TENOR_CHANGESET_COMMITTED_TASK_FINISHED",
+                result,
+            )
+            self.assertEqual(
+                (self.root / "src" / f"parallel-{index}.txt").read_bytes(),
+                f"fixed-by-agent-{index}\n".encode("utf-8"),
+            )
+        mcp.server._MCP_BOUND_AGENT_ID = "agent-a"
+
     def test_slow_changeset_does_not_starve_other_public_tools(self) -> None:
         started = self.call(
             "tenor_task_start",
@@ -368,7 +494,7 @@ class TenorPublicApiTest(unittest.TestCase):
             intent="write",
             resources=["src/feature.txt"],
         )
-        failed_accepted = self.call(
+        failed = self.call(
             "tenor_apply_changeset",
             task_id=started["task_id"],
             changes=[{
@@ -382,8 +508,9 @@ class TenorPublicApiTest(unittest.TestCase):
                 "timeout_seconds": 20,
             }],
         )
-        failed = self.wait_changeset(failed_accepted)
         self.assertEqual(failed["verdict"], "TENOR_CHANGESET_EDIT_ANCHOR_MISMATCH")
+        self.assertFalse(failed["terminal"], failed)
+        self.assertNotIn("job", failed)
         cancelled = self.call("tenor_task_control", task_id=started["task_id"], action="cancel")
         self.assertTrue(cancelled["ok"], cancelled)
         self.assertEqual(cancelled["verdict"], "TENOR_TASK_CANCELLED")

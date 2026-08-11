@@ -48,6 +48,8 @@ TENOR_INIT_READY
 - The public task surface is exactly `tenor_task_start`, `tenor_apply_changeset`, `tenor_activity`, `tenor_task_control`; bootstrap retains the five bounded init tools.
 - `tenor_task_start` performs targeted SCRIBE and Graphify retrieval server-side and returns a hash-bound decision capsule. The host model must not replay the legacy internal choreography.
 - Every mutation is submitted as one atomic multi-file `tenor_apply_changeset` with exact structured edits, fresh hashes and mandatory bounded validator argv arrays; TENOR owns locks, conditional non-destructive rollback, SCRIBE admission and closure.
+- TENOR prevalidates hashes, paths, scope, validator `cwd` and argv before worker launch. A stale patch is rejected before write; a changeset may never overwrite, rollback or silently regress bytes produced by another agent.
+- Shared-checkout auditing is changeset-scoped before launch, then execution-window scoped while validators run. Disjoint prior fixes are preserved, while new unreceipted writes anywhere in the execution window remain fail-closed.
 - `TENOR_CHANGESET_ACCEPTED` and `GRAPHIFY_BUILD_ACCEPTED` are durable non-terminal acknowledgements. Poll `tenor_activity` or `graphify_required_check`; only the terminal job result proves commit, rollback or build completion.
 - Long validators and Graphify builds run in bounded isolated workers so the MCP stdio loop remains available. Never resubmit an active job or control its task concurrently.
 - A worker is authoritative only while its SQLite lease is live and its exact `(job_id, worker_instance_id, fence_token)` matches. PIDs are diagnostic only; recovery transfers a monotone fence and an older worker may not heartbeat, publish, rollback or release locks.

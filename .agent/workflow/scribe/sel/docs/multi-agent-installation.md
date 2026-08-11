@@ -180,6 +180,40 @@ Rules:
 - no agent reverts files it did not intentionally own;
 - closing an agent must leave no claim, lock or pending patch owned by it.
 
+### Cumulative integration safety
+
+Parallel work is accepted only when every integration preserves the current
+workspace state. TENOR performs a synchronous, side-effect-free preflight of
+all paths, `base_hash` values, task scope, validator `cwd`, argv and budgets
+before it creates a worker. A stale file yields `TENOR_CHANGESET_BASE_STALE`
+immediately; it is never applied optimistically.
+
+The direct-write guard has two distinct scopes:
+
+1. before launch it audits exactly the files in the changeset against the
+   task-start snapshot;
+2. immediately before applying, it captures a short execution snapshot and
+   audits the whole checkout after validation.
+
+This preserves a disjoint fix that another agent completed before the worker
+started, while still rejecting an unreceipted file created or modified by a
+validator during the execution window. Concurrent TENOR writers are accepted
+only with exact live SQLite lease, lock and fence proof.
+
+Rollback is conditional: a file is restored only while its current hash still
+equals the `new_hash` published by the failing changeset. Otherwise TENOR emits
+`TENOR_CHANGESET_ROLLBACK_CONFLICT` and preserves the later writer's bytes.
+
+Required regression gates:
+
+```text
+FOUR_AGENTS_DISJOINT_COMMITS=PASS
+STALE_PATCH_REJECTED_BEFORE_WORKER=PASS
+DISJOINT_PRIOR_FIX_PRESERVED=PASS
+FOREIGN_ROLLBACK_FORBIDDEN=PASS
+UNSCOPED_VALIDATOR_WRITE_DETECTED=PASS
+```
+
 ## Direct-write protection
 
 Native host shell/edit/write paths are not valid substitutes for MCP.

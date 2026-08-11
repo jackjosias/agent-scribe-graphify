@@ -458,6 +458,22 @@ def workspace_snapshot(
     return {"verdict": "DIRECT_FS_TRIPWIRE_SNAPSHOT_CREATED", "task_id": task_id, "agent_id": agent_id, "baseline": baseline}
 
 
+def discard_snapshot(
+    project_root: Path | None,
+    task_id: str,
+    agent_id: str,
+) -> None:
+    """Remove an execution-scoped snapshot after its guard has terminated."""
+
+    root = _project_root(project_root)
+    _ensure_schema(root)
+    with db.connect(root) as con:
+        con.execute(
+            "DELETE FROM direct_fs_tripwire_snapshots_v1 WHERE task_id=? AND agent_id=?",
+            (task_id, agent_id),
+        )
+
+
 def record_authorized_mutation(
     task_id: str,
     agent_id: str,
@@ -508,7 +524,14 @@ def _is_authorized_change(entry: dict[str, str], baseline_entry: dict[str, str] 
     return False
 
 
-def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent_id: str, resource: str = "") -> dict[str, Any]:
+def detect_unauthorized_mutations(
+    project_root: Path | None,
+    task_id: str,
+    agent_id: str,
+    resource: str = "",
+    *,
+    resources: list[str] | None = None,
+) -> dict[str, Any]:
     root = _project_root(project_root)
     _ensure_schema(root)
     with db.connect(root) as con:
@@ -534,10 +557,18 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         )
     verified_authorized.extend(active_tenor_writes)
     suspects: list[dict[str, str]] = []
-    wanted_resource = _safe_resource(resource)
+    wanted_resources: list[str] = []
+    for raw in [resource, *(resources or [])]:
+        if not raw:
+            continue
+        safe = _safe_resource(raw)
+        if safe and safe not in wanted_resources:
+            wanted_resources.append(safe)
+    wanted_resource = wanted_resources[0] if len(wanted_resources) == 1 else ""
+    wanted_resource_set = set(wanted_resources)
     for entry in current:
         path = entry["path"]
-        if wanted_resource and path != wanted_resource:
+        if wanted_resource_set and path not in wanted_resource_set:
             continue
         base = baseline_map.get(path)
         if base and base.get("status") == entry.get("status") and base.get("hash") == entry.get("hash"):
@@ -547,7 +578,7 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         suspects.append(entry)
     for entry in current:
         if entry["path"] == MEMOIRE_FILE and entry not in suspects:
-            if wanted_resource and entry["path"] != wanted_resource:
+            if wanted_resource_set and entry["path"] not in wanted_resource_set:
                 continue
             if not _changed_since_baseline(entry, baseline_map):
                 continue
@@ -564,6 +595,7 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
             {
                 "task_id": task_id,
                 "resource": wanted_resource,
+                "resources": wanted_resources,
                 "suspects": suspects,
                 "authorized": verified_authorized,
                 "proof_warnings": proof_warnings,
@@ -575,6 +607,7 @@ def detect_unauthorized_mutations(project_root: Path | None, task_id: str, agent
         "task_id": task_id,
         "agent_id": agent_id,
         "resource": wanted_resource,
+        "resources": wanted_resources,
         "suspects": suspects,
         "git_status": current,
         "authorized_mutations": verified_authorized,
