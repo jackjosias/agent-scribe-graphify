@@ -19,6 +19,11 @@ TENOR_INIT_READY
   -> tenor_apply_changeset | tenor_task_control
      -> COMMITTED_AND_FINISHED | ROLLED_BACK_AND_RETRYABLE
         | ROLLBACK_CONFLICT_PRESERVED | TERMINAL
+  -> tenor_task_control(action=reclaim)
+     -> TENOR_TASK_RECLAIMED | TENOR_TASK_ALREADY_OWNED
+        | TENOR_TASK_OWNER_ALIVE | TENOR_TASK_OWNER_CHANGED
+        | TENOR_TASK_TERMINAL | TENOR_TASK_ACTIVE_PUBLICATION
+        | TENOR_TASK_RECLAIM_FORBIDDEN
 ```
 
 `tenor_activity` is read-only and may be called at any point after bridge.
@@ -47,7 +52,13 @@ TENOR_INIT_READY
 
 - The successful bridge binds one agent identity to one MCP process.
 - Task tools derive that identity server-side.
-- Cross-agent task control and changeset application are refused.
+- Cross-agent task control and changeset application are refused unless the
+  caller uses the explicit dead-owner reclaim transition with the expected
+  owner id and a successful process-bound bridge.
+- Reclaim is a single SQLite compare-and-swap transaction: it requires a dead
+  owner, an expired heartbeat grace period, no active publication/lease/claim,
+  and compatible host identity; it preserves task id/history, rotates context
+  fencing and emits `tenor.task_reclaimed`.
 - A daemon heartbeat reports process presence independently of model turns.
 - Valid task activity renews a rolling TTL.
 - Job authority is a non-expired SQLite lease plus the exact

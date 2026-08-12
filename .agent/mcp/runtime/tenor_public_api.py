@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 import time
 import uuid
 from pathlib import Path
@@ -82,6 +84,11 @@ def _graphify_write_preflight() -> dict[str, Any] | None:
 def ensure_schema(project_root: Path | None = None) -> None:
     root = (project_root or _root()).resolve()
     db.init_db(root)
+    task_context.ensure_schema()
+    with db.connect(root) as context_con:
+        context_columns = {str(row["name"]) for row in context_con.execute("PRAGMA table_info(task_context_v2)").fetchall()}
+        if "recovery_epoch" not in context_columns:
+            context_con.execute("ALTER TABLE task_context_v2 ADD COLUMN recovery_epoch INTEGER NOT NULL DEFAULT 0")
     with db.connect(root) as con:
         con.executescript(
             f"""
@@ -100,6 +107,7 @@ def ensure_schema(project_root: Path | None = None) -> None:
               decision_capsule_hash TEXT NOT NULL DEFAULT '',
               memory_decision TEXT NOT NULL DEFAULT '',
               memory_reason TEXT NOT NULL DEFAULT '',
+              recovery_epoch INTEGER NOT NULL DEFAULT 0,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL,
               finished_at INTEGER
@@ -113,6 +121,7 @@ def ensure_schema(project_root: Path | None = None) -> None:
             ("decision_capsule_hash", "TEXT NOT NULL DEFAULT ''"),
             ("memory_decision", "TEXT NOT NULL DEFAULT ''"),
             ("memory_reason", "TEXT NOT NULL DEFAULT ''"),
+            ("recovery_epoch", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in columns:
                 con.execute(f"ALTER TABLE {ACTIVITY_TABLE} ADD COLUMN {column} {declaration}")
@@ -337,6 +346,185 @@ def _token(agent_id: str, task_id: str) -> str:
     token = str(resumed["context_token"])
     _TASK_TOKENS[task_id] = token
     return token
+
+
+def _reclaim_task(
+    *,
+    agent_id: str,
+    task_id: str,
+    expected_owner_agent_id: str,
+) -> dict[str, Any]:
+    """Atomically transfer an orphaned task to the bound live session."""
+    ensure_schema()
+    tenor_changeset.ensure_schema(_root())
+    tenor_jobs.ensure_schema(_root())
+    expected_owner = (expected_owner_agent_id or "").strip()
+    if not expected_owner:
+        return {"ok": False, "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN", "task_id": task_id}
+    now = int(time.time())
+    terminal_statuses = ("finished", "cancelled", "committed", "rolled_back")
+    publication_statuses = ("staging", "applying", "validating")
+    job_statuses = tuple(sorted(tenor_jobs.ACTIVE_STATUSES))
+    with db.connect(_root()) as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            activity = con.execute(
+                f"SELECT * FROM {ACTIVITY_TABLE} WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if not activity:
+                return {"ok": False, "verdict": "TENOR_TASK_UNKNOWN", "task_id": task_id}
+            current_owner = str(activity["agent_id"] or "")
+            if str(activity["status"] or "") in terminal_statuses:
+                return {"ok": False, "verdict": "TENOR_TASK_TERMINAL", "task_id": task_id}
+            if current_owner == agent_id:
+                return {
+                    "ok": True,
+                    "verdict": "TENOR_TASK_ALREADY_OWNED",
+                    "task_id": task_id,
+                    "recovery_epoch": int(activity["recovery_epoch"] or 0),
+                }
+            if current_owner != expected_owner:
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_TASK_OWNER_CHANGED",
+                    "task_id": task_id,
+                    "owner_agent_id": current_owner,
+                }
+            owner = con.execute("SELECT * FROM agents WHERE agent_id=?", (current_owner,)).fetchone()
+            caller = con.execute("SELECT * FROM agents WHERE agent_id=?", (agent_id,)).fetchone()
+            if not owner or not caller or owner["host_tool"] != caller["host_tool"]:
+                return {"ok": False, "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN", "task_id": task_id}
+            if db.process_is_alive(owner["pid"]):
+                return {"ok": False, "verdict": "TENOR_TASK_OWNER_ALIVE", "task_id": task_id}
+            if now - int(owner["last_seen"] or 0) <= db._agent_idle_timeout_seconds():
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN",
+                    "task_id": task_id,
+                    "reason": "heartbeat_not_expired",
+                }
+            replacement = con.execute(
+                "SELECT task_id FROM task_context_v2 WHERE agent_id=? AND task_id<>? "
+                "AND status='active' AND expires_at>=? LIMIT 1",
+                (agent_id, task_id, now),
+            ).fetchone()
+            if replacement:
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN",
+                    "task_id": task_id,
+                    "replacement_task_id": replacement["task_id"],
+                }
+            transaction = con.execute(
+                f"SELECT changeset_id FROM {tenor_changeset.TRANSACTION_TABLE} "
+                f"WHERE task_id=? AND agent_id=? AND status IN (?,?,?) LIMIT 1",
+                (task_id, current_owner, *publication_statuses),
+            ).fetchone()
+            job = con.execute(
+                f"SELECT job_id FROM {tenor_jobs.JOB_TABLE} "
+                f"WHERE task_id=? AND agent_id=? AND status IN ({','.join('?' for _ in job_statuses)}) LIMIT 1",
+                (task_id, current_owner, *job_statuses),
+            ).fetchone()
+            claim = con.execute(
+                "SELECT claim_id FROM claims WHERE agent_id=? AND status='active' "
+                "AND expires_at>=? LIMIT 1",
+                (current_owner, now),
+            ).fetchone()
+            lock = None
+            for table in ("resource_exclusive_locks", tenor_changeset.LOCK_TABLE):
+                try:
+                    lock = con.execute(
+                        f"SELECT 1 FROM {table} WHERE agent_id=? AND expires_at>=? LIMIT 1",
+                        (current_owner, now),
+                    ).fetchone()
+                except Exception:
+                    lock = None
+                if lock:
+                    break
+            if transaction or job or claim or lock:
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_TASK_ACTIVE_PUBLICATION",
+                    "task_id": task_id,
+                }
+            context = con.execute(
+                "SELECT * FROM task_context_v2 WHERE task_id=? AND agent_id=? AND status='active'",
+                (task_id, current_owner),
+            ).fetchone()
+            if not context:
+                return {
+                    "ok": False,
+                    "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN",
+                    "task_id": task_id,
+                    "reason": "task_context_not_reclaimable",
+                }
+            token = secrets.token_urlsafe(32)
+            expires_at = now + task_context.ttl_seconds()
+            recovery_epoch = int(activity["recovery_epoch"] or 0) + 1
+            context_update = con.execute(
+                "UPDATE task_context_v2 SET agent_id=?,token_hash=?,expires_at=?,recovery_epoch=? "
+                "WHERE task_id=? AND agent_id=? AND status='active'",
+                (
+                    agent_id,
+                    hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    expires_at,
+                    recovery_epoch,
+                    task_id,
+                    current_owner,
+                ),
+            )
+            next_action = (
+                "tenor_apply_changeset"
+                if str(activity["intent"]) != "read"
+                else "tenor_task_control:finish"
+            )
+            activity_update = con.execute(
+                f"UPDATE {ACTIVITY_TABLE} SET agent_id=?,status='active',"
+                f"current_action='recovered',last_action='reclaim',next_action=?,"
+                f"recovery_epoch=?,updated_at=? WHERE task_id=? AND agent_id=? "
+                f"AND status NOT IN ({','.join('?' for _ in terminal_statuses)})",
+                (
+                    agent_id,
+                    next_action,
+                    recovery_epoch,
+                    now,
+                    task_id,
+                    current_owner,
+                    *terminal_statuses,
+                ),
+            )
+            if context_update.rowcount != 1 or activity_update.rowcount != 1:
+                return {"ok": False, "verdict": "TENOR_TASK_OWNER_CHANGED", "task_id": task_id}
+            db.add_event(
+                con,
+                "tenor.task_reclaimed",
+                {
+                    "task_id": task_id,
+                    "previous_owner": current_owner,
+                    "new_owner": agent_id,
+                    "recovery_epoch": recovery_epoch,
+                },
+                agent_id,
+            )
+            con.commit()
+        except Exception:
+            if con.in_transaction:
+                con.rollback()
+            raise
+        finally:
+            if con.in_transaction:
+                con.rollback()
+    _TASK_TOKENS[task_id] = token
+    return {
+        "ok": True,
+        "verdict": "TENOR_TASK_RECLAIMED",
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "previous_owner": current_owner,
+        "recovery_epoch": recovery_epoch,
+        "next_action": next_action,
+    }
 
 
 def _targeted_scribe_query(objective: str, intent: str, scope: str, resources: list[str]) -> str:
@@ -1232,16 +1420,20 @@ def tenor_activity(include_history: int = 20) -> dict[str, Any]:
         return _ok({"ok": False, "verdict": "TENOR_ACTIVITY_LIMIT_INVALID"})
 
 
-def tenor_task_control(task_id: str = "", action: str = "", summary: str = "") -> dict[str, Any]:
+def tenor_task_control(task_id: str = "", action: str = "", summary: str = "", expected_owner_agent_id: str = "") -> dict[str, Any]:
     agent_id, blocked = _bound_agent()
     if blocked:
         return _ok(blocked)
     activity = _activity_row(task_id)
     if not activity:
         return _ok({"ok": False, "verdict": "TENOR_TASK_UNKNOWN", "task_id": task_id})
+    normalized = (action or "").strip().lower()
+    if normalized == "reclaim":
+        if not expected_owner_agent_id:
+            return _ok({"ok": False, "verdict": "TENOR_TASK_RECLAIM_FORBIDDEN", "task_id": task_id})
+        return _ok(_reclaim_task(agent_id=agent_id, task_id=task_id, expected_owner_agent_id=expected_owner_agent_id))
     if activity["agent_id"] != agent_id:
         return _ok({"ok": False, "verdict": "TENOR_TASK_OWNER_MISMATCH", "task_id": task_id})
-    normalized = (action or "").strip().lower()
     if normalized not in {"pause", "resume", "cancel", "finish", "memory_promote", "memory_skip"}:
         return _ok({"ok": False, "verdict": "TENOR_TASK_CONTROL_ACTION_INVALID"})
     tenor_jobs.recover_and_launch(_root())
@@ -1548,8 +1740,9 @@ def tool_schema(name: str) -> dict[str, Any]:
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
-                "action": {"type": "string", "enum": ["pause", "resume", "cancel", "finish", "memory_promote", "memory_skip"]},
+                "action": {"type": "string", "enum": ["pause", "resume", "cancel", "finish", "memory_promote", "memory_skip", "reclaim"]},
                 "summary": {"type": "string"},
+                "expected_owner_agent_id": {"type": "string"},
             },
             "required": ["task_id", "action"],
             "additionalProperties": False,

@@ -63,6 +63,16 @@ backups remain available for diagnosis when rollback cannot be proven safe.
 Use `tenor_task_control(action="finish")` to close a read task. The same tool
 supports owner-only pause, resume and cancel, but returns
 `TENOR_TASK_CONTROL_JOB_ACTIVE` while a changeset worker is active.
+A process-bound replacement session may call
+`tenor_task_control(action="reclaim", task_id, expected_owner_agent_id)` for a
+non-terminal task whose recorded owner is proven dead and whose heartbeat grace
+period, publication leases, claims and locks have all expired. The CAS keeps
+the original task id and history, rotates the context token and monotone
+`recovery_epoch`, invalidates the old owner, and emits `tenor.task_reclaimed`.
+It is idempotent for the new owner and fails closed with
+`TENOR_TASK_OWNER_ALIVE`, `TENOR_TASK_OWNER_CHANGED`,
+`TENOR_TASK_TERMINAL`, `TENOR_TASK_ACTIVE_PUBLICATION` or
+`TENOR_TASK_RECLAIM_FORBIDDEN` when its invariants are not met.
 `tenor_activity` recovers dead workers, launches queued work and returns tasks,
 presence and redacted durable job states/results.
 

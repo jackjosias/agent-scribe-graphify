@@ -280,6 +280,48 @@ canonical:
       source_record_digest: "44a51c2575bddd3ce3fd0f28f10631b519efcc1f231e30caab2b69f6c40830a8"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-03T20:50:00Z"
+  - id: "CANON-1E162024FBEB563D"
+    date: "2026-08-12"
+    schema_patch_date: "2026-08-12"
+    type: "validation"
+    scope: "Correctif bootstrap TENOR de récupération sûre des tâches orphelines sur la branche fix/v217-fair-writer-scheduler; API, registre agents, leases, fencing, audit et tests."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-12T10:03:16Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+    summary: "Recreate the red reclaim tests for the production bootstrap implementation."
+    l0_abstract: "Recreate the red reclaim tests for the production bootstrap implementation."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786528995-cli-46830-te-383d72aaee548fec.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+      source_record_digest: "f5b311980ce1fa70c524cb64c613f0297104e7de56a0bb61e9c8dffc055fb228"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-12T10:03:16Z"
+  - id: "CANON-018AE45DAFB96703"
+    date: "2026-08-12"
+    schema_patch_date: "2026-08-12"
+    type: "validation"
+    scope: "Correctif bootstrap TENOR de récupération sûre des tâches orphelines sur la branche fix/v217-fair-writer-scheduler; API, registre agents, leases, fencing, audit et tests."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-12T10:04:58Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+    summary: "Implement the atomic orphan-task reclaim transition with liveness, publication, token and fencing checks."
+    l0_abstract: "Implement the atomic orphan-task reclaim transition with liveness, publication, token and fencing checks."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786529098-cli-46830-te-80aa1a0412f916b1.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+      source_record_digest: "b7c7c955f296dfc726aa1594482073dc390138824f7ffd9ff353ea01d31acbf4"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-12T10:04:58Z"
 
 metrics:
   sessions_total: 3
