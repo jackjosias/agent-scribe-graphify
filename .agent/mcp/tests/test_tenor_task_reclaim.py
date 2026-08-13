@@ -15,7 +15,7 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 import server_ext as mcp
-from runtime import db, task_context, tenor_changeset, tenor_jobs, tenor_public_api
+from runtime import db, task_context, tenor_changeset, tenor_decision, tenor_jobs, tenor_public_api
 from _strict_cleanup import remove_tree_strict
 
 
@@ -214,6 +214,36 @@ class TenorTaskReclaimTest(unittest.TestCase):
         result = self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
         self.assertEqual(result["verdict"], "TENOR_TASK_RECLAIMED")
         self.assertEqual(int(result["recovery_epoch"]), before + 1)
+
+    def test_reclaim_migrates_active_decision_capsule_atomically(self) -> None:
+        task_id, _ = self.task()
+        tenor_decision.ensure_schema(self.root)
+        payload = {
+            "schema": "tenor_decision_capsule_v1",
+            "task_id": task_id,
+            "agent_id": "owner",
+            "objective": "orphan task",
+            "intent": "write",
+            "scope": "test",
+            "resources": ["src/feature.txt"],
+            "recovery_epoch": 0,
+        }
+        payload_json = tenor_decision._json(payload)
+        capsule_hash = tenor_decision._sha256_bytes(payload_json.encode("utf-8"))
+        with db.connect(self.root) as con:
+            con.execute(
+                f"INSERT INTO {tenor_decision.CAPSULE_TABLE}(task_id,agent_id,capsule_hash,payload_json,status,created_at) VALUES(?,?,?,?,?,?)",
+                (task_id, "owner", capsule_hash, payload_json, "active", int(time.time())),
+            )
+        self.mark_owner(pid=2_000_000_000, last_seen=int(time.time()) - 3600)
+        result = self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
+        self.assertEqual(result["verdict"], "TENOR_TASK_RECLAIMED")
+        capsule = tenor_decision.load_capsule(self.root, task_id)
+        self.assertIsNotNone(capsule)
+        self.assertEqual(capsule["agent_id"], "new-owner")
+        self.assertEqual(capsule["payload"]["agent_id"], "new-owner")
+        self.assertEqual(capsule["payload"]["recovery_epoch"], result["recovery_epoch"])
+        self.assertEqual(capsule["capsule_hash"], tenor_decision._sha256_bytes(tenor_decision._json(capsule["payload"]).encode("utf-8")))
 
     def test_existing_control_actions_remain_advertised(self) -> None:
         schema = tenor_public_api.tool_schema("tenor_task_control")

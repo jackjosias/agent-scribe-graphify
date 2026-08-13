@@ -322,6 +322,69 @@ canonical:
       source_record_digest: "b7c7c955f296dfc726aa1594482073dc390138824f7ffd9ff353ea01d31acbf4"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-12T10:04:58Z"
+  - id: "CANON-E6C06677EEF2F80F"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:04:33Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+    summary: "TDD red test for atomic decision capsule reclaim migration."
+    l0_abstract: "TDD red test for atomic decision capsule reclaim migration."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786629873-cli-455730-t-a78028440970a231.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+      source_record_digest: "a773920fc6869f6d7a4fc9034de3a69a2502ee01d16c8546bf6c9ae1ed0103d0"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:04:33Z"
+  - id: "CANON-071DC2ADF69DDBDA"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:08:11Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+    summary: "Fix atomic capsule migration initialization and test import."
+    l0_abstract: "Fix atomic capsule migration initialization and test import."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+      source_record_digest: "27fb5b875fa02a46fa906a1412bafa10e7d5bfe509ef8d961bdf6bdd15eb66a8"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:08:11Z"
+  - id: "CANON-0CBF9AE5038CED03"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:09:08Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+    summary: "Preserve BEGIN IMMEDIATE atomicity by removing executescript from capsule reclaim."
+    l0_abstract: "Preserve BEGIN IMMEDIATE atomicity by removing executescript from capsule reclaim."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+      source_record_digest: "a3be9d2bd583dc480a622877d871314dc81111c1fd0314b30188cb2d80b9a041"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:09:08Z"
 
 metrics:
   sessions_total: 3

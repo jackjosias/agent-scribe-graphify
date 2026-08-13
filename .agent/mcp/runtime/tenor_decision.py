@@ -85,6 +85,55 @@ def load_capsule(project_root: Path, task_id: str) -> dict[str, Any] | None:
     return data
 
 
+def reclaim_capsule_in_transaction(
+    con: Any,
+    *,
+    task_id: str,
+    expected_owner_agent_id: str,
+    new_owner_agent_id: str,
+    recovery_epoch: int,
+) -> dict[str, Any]:
+    """Transfer a capsule while the caller holds the reclaim transaction lock."""
+    if not task_id or not expected_owner_agent_id or not new_owner_agent_id:
+        return {"ok": False, "verdict": "TENOR_DECISION_CAPSULE_INPUT_INVALID", "task_id": task_id}
+    con.execute(
+        f"""CREATE TABLE IF NOT EXISTS {CAPSULE_TABLE}(
+          task_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, capsule_hash TEXT NOT NULL,
+          payload_json TEXT NOT NULL, status TEXT NOT NULL,
+          resolution_ref TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL, resolved_at INTEGER
+        )"""
+    )
+    row = con.execute(f"SELECT * FROM {CAPSULE_TABLE} WHERE task_id=?", (task_id,)).fetchone()
+    if not row:
+        return {"ok": True, "verdict": "TENOR_DECISION_CAPSULE_ABSENT", "task_id": task_id, "capsule_hash": ""}
+    if str(row["status"] or "") != "active":
+        return {"ok": False, "verdict": "TENOR_DECISION_CAPSULE_NOT_ACTIVE", "task_id": task_id}
+    payload = json.loads(row["payload_json"] or "{}")
+    if payload.get("task_id") != task_id:
+        return {"ok": False, "verdict": "TENOR_DECISION_CAPSULE_TASK_MISMATCH", "task_id": task_id}
+    if str(row["agent_id"] or "") == new_owner_agent_id and payload.get("agent_id") == new_owner_agent_id and int(payload.get("recovery_epoch", -1)) == recovery_epoch:
+        return {"ok": True, "verdict": "TENOR_DECISION_CAPSULE_ALREADY_RECLAIMED", "task_id": task_id, "capsule_hash": row["capsule_hash"]}
+    if str(row["agent_id"] or "") != expected_owner_agent_id or payload.get("agent_id") != expected_owner_agent_id:
+        return {"ok": False, "verdict": "TENOR_DECISION_OWNER_MISMATCH", "task_id": task_id}
+    payload["agent_id"] = new_owner_agent_id
+    payload["recovery_epoch"] = recovery_epoch
+    payload_json = _json(payload)
+    capsule_hash = _sha256_bytes(payload_json.encode("utf-8"))
+    con.execute(
+        f"UPDATE {CAPSULE_TABLE} SET agent_id=?,capsule_hash=?,payload_json=?,created_at=? WHERE task_id=? AND agent_id=? AND status='active'",
+        (new_owner_agent_id, capsule_hash, payload_json, _now(), task_id, expected_owner_agent_id),
+    )
+    if con.execute("SELECT changes() AS count").fetchone()["count"] != 1:
+        return {"ok": False, "verdict": "TENOR_DECISION_OWNER_CHANGED", "task_id": task_id}
+    db.add_event(
+        con,
+        "tenor.decision_capsule_reclaimed",
+        {"task_id": task_id, "previous_owner": expected_owner_agent_id, "new_owner": new_owner_agent_id, "recovery_epoch": recovery_epoch, "capsule_hash": capsule_hash},
+        new_owner_agent_id,
+    )
+    return {"ok": True, "verdict": "TENOR_DECISION_CAPSULE_RECLAIMED", "task_id": task_id, "capsule_hash": capsule_hash, "recovery_epoch": recovery_epoch}
+
+
 def build_capsule(
     *,
     project_root: Path,

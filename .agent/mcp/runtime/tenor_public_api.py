@@ -474,20 +474,26 @@ def _reclaim_task(
                     current_owner,
                 ),
             )
-            next_action = (
-                "tenor_apply_changeset"
-                if str(activity["intent"]) != "read"
-                else "tenor_task_control:finish"
+            capsule = tenor_decision.reclaim_capsule_in_transaction(
+                con,
+                task_id=task_id,
+                expected_owner_agent_id=current_owner,
+                new_owner_agent_id=agent_id,
+                recovery_epoch=recovery_epoch,
             )
+            if not capsule.get("ok"):
+                return {**capsule, "task_id": task_id}
+            next_action = "tenor_task_start:same_objective_refresh"
             activity_update = con.execute(
                 f"UPDATE {ACTIVITY_TABLE} SET agent_id=?,status='active',"
                 f"current_action='recovered',last_action='reclaim',next_action=?,"
-                f"recovery_epoch=?,updated_at=? WHERE task_id=? AND agent_id=? "
+                f"recovery_epoch=?,decision_capsule_hash=?,updated_at=? WHERE task_id=? AND agent_id=? "
                 f"AND status NOT IN ({','.join('?' for _ in terminal_statuses)})",
                 (
                     agent_id,
                     next_action,
                     recovery_epoch,
+                    str(capsule.get("capsule_hash") or ""),
                     now,
                     task_id,
                     current_owner,
@@ -523,6 +529,7 @@ def _reclaim_task(
         "agent_id": agent_id,
         "previous_owner": current_owner,
         "recovery_epoch": recovery_epoch,
+        "decision_capsule": capsule,
         "next_action": next_action,
     }
 
