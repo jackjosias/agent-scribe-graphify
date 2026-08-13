@@ -262,7 +262,11 @@ Executing a query and ignoring it is not memory use. `tenor_task_start` binds
 the targeted SCRIBE and Graphify evidence, canonical-memory hash, Graphify
 manifest hash and exact resources into a decision capsule. A write cannot use
 the capsule after those authorities drift; the identical start call refreshes
-it inside the same task id.
+it inside the same task id. A reclaim transfers the capsule atomically with
+task and context ownership, marks it `refresh_required`, and sets
+`next_action=tenor_task_start:same_objective_refresh`. Verification refuses a
+marked capsule until the same-objective refresh publishes a new hash-bound
+capsule, preserving `recovery_epoch`; only then may a changeset proceed.
 
 A runtime `scribe_record` receipt is not automatically canonical memory. Every
 completed task is classified as `promote`, `runtime_only` with an auditable

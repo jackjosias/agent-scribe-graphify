@@ -385,6 +385,48 @@ canonical:
       source_record_digest: "a3be9d2bd583dc480a622877d871314dc81111c1fd0314b30188cb2d80b9a041"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-13T14:09:08Z"
+  - id: "CANON-B7548FD05EDE88E1"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap post-commit 0d141903 uniquement. Ne pas modifier file_hash, ne pas redémarrer MCP, ne pas reclaim ni modifier task-9f6bb6ba4e2440c7. Ajouter TDD rouge prouvé, implémentation, validations, documentation et mise à jour PR #21."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T15:20:53Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+    summary: "Force fresh capsules after reclaim."
+    l0_abstract: "Force fresh capsules after reclaim."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786634453-cli-455730-t-0062ae34a14c3c71.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+      source_record_digest: "b61726e5f958367b2b04a2ceb54f051fca260c9ec037f7236e3ca962213c8bbe"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T15:20:53Z"
+  - id: "CANON-E97DBEC60F8C2DB9"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap post-commit 0d141903 uniquement. Ne pas modifier file_hash, ne pas redémarrer MCP, ne pas reclaim ni modifier task-9f6bb6ba4e2440c7. Ajouter TDD rouge prouvé, implémentation, validations, documentation et mise à jour PR #21."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T15:24:10Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+    summary: "Add capsule hash, owner fencing and absent capsule coverage."
+    l0_abstract: "Add capsule hash, owner fencing and absent capsule coverage."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786634649-cli-455730-t-4b0a88a10239a902.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+      source_record_digest: "25c13565323c988585a145c2aac5851fe11bf42ae1db50114bd3023bbf4b0fb8"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T15:24:10Z"
 
 metrics:
   sessions_total: 3

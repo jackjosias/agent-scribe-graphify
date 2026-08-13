@@ -714,7 +714,7 @@ def tenor_task_start(
                 capsule_state = tenor_decision.verify_capsule(
                     _root(), active["task_id"], agent_id, normalized_resources
                 )
-                force_refresh = capsule_state.get("verdict") == "TENOR_DECISION_CAPSULE_STALE"
+                force_refresh = capsule_state.get("verdict") in {"TENOR_DECISION_CAPSULE_STALE", "TENOR_DECISION_CAPSULE_REFRESH_REQUIRED"}
             scribe_result, graphify_result, context_error = _hydrate_task_context(
                 agent_id,
                 active["task_id"],

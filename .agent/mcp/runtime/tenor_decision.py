@@ -117,6 +117,7 @@ def reclaim_capsule_in_transaction(
         return {"ok": False, "verdict": "TENOR_DECISION_OWNER_MISMATCH", "task_id": task_id}
     payload["agent_id"] = new_owner_agent_id
     payload["recovery_epoch"] = recovery_epoch
+    payload["refresh_required"] = True
     payload_json = _json(payload)
     capsule_hash = _sha256_bytes(payload_json.encode("utf-8"))
     con.execute(
@@ -158,6 +159,9 @@ def build_capsule(
     if graphify_required and (not graphify["verdict"] or not graphify["ok"]):
         return {"ok": False, "verdict": "TENOR_DECISION_GRAPHIFY_EVIDENCE_REQUIRED", "task_id": task_id}
     normalized_resources = sorted(dict.fromkeys(str(item).strip().replace("\\", "/") for item in resources if str(item).strip()))
+    ensure_schema(root)
+    existing_capsule = load_capsule(root, task_id)
+    existing_epoch = int((existing_capsule or {}).get("payload", {}).get("recovery_epoch", 0))
     payload = {
         "schema": "tenor_decision_capsule_v1",
         "task_id": task_id,
@@ -170,9 +174,10 @@ def build_capsule(
         "graphify": graphify,
         "graphify_required": bool(graphify_required),
         "snapshots": _snapshot_hashes(root),
+        "recovery_epoch": existing_epoch,
+        "refresh_required": False,
     }
     capsule_hash = _sha256_bytes(_json(payload).encode("utf-8"))
-    ensure_schema(root)
     with db.connect(root) as con:
         existing = con.execute(f"SELECT * FROM {CAPSULE_TABLE} WHERE task_id=?", (task_id,)).fetchone()
         if existing:
@@ -247,6 +252,8 @@ def verify_capsule(
     if capsule["status"] != "active":
         return {"ok": False, "verdict": "TENOR_DECISION_CAPSULE_NOT_ACTIVE", "task_id": task_id}
     payload = capsule["payload"]
+    if payload.get("refresh_required"):
+        return {"ok": False, "verdict": "TENOR_DECISION_CAPSULE_REFRESH_REQUIRED", "task_id": task_id, "next_action": "tenor_task_start:same_objective_refresh"}
     normalized_resources = sorted(dict.fromkeys(str(item).strip().replace("\\", "/") for item in resources if str(item).strip()))
     if normalized_resources != payload.get("resources"):
         return {

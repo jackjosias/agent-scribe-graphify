@@ -245,6 +245,52 @@ class TenorTaskReclaimTest(unittest.TestCase):
         self.assertEqual(capsule["payload"]["recovery_epoch"], result["recovery_epoch"])
         self.assertEqual(capsule["capsule_hash"], tenor_decision._sha256_bytes(tenor_decision._json(capsule["payload"]).encode("utf-8")))
 
+    def test_reclaim_marks_capsule_refresh_required_without_snapshot_change(self) -> None:
+        task_id, _ = self.task()
+        tenor_decision.ensure_schema(self.root)
+        payload = {"task_id": task_id, "agent_id": "owner", "resources": ["src/feature.txt"], "snapshots": {}}
+        payload_json = tenor_decision._json(payload)
+        with db.connect(self.root) as con:
+            con.execute(f"INSERT INTO {tenor_decision.CAPSULE_TABLE}(task_id,agent_id,capsule_hash,payload_json,status,created_at) VALUES(?,?,?,?,?,?)", (task_id, "owner", tenor_decision._sha256_bytes(payload_json.encode()), payload_json, "active", int(time.time())))
+        self.mark_owner(pid=2_000_000_000, last_seen=int(time.time()) - 3600)
+        result = self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
+        capsule = tenor_decision.load_capsule(self.root, task_id)
+        self.assertEqual(result["next_action"], "tenor_task_start:same_objective_refresh")
+        self.assertTrue(capsule["payload"]["refresh_required"])
+        self.assertEqual(tenor_decision.verify_capsule(self.root, task_id, "new-owner", ["src/feature.txt"])["verdict"], "TENOR_DECISION_CAPSULE_REFRESH_REQUIRED")
+
+    def test_reclaim_capsule_hash_and_epoch_are_consistent(self) -> None:
+        task_id, _ = self.task()
+        tenor_decision.ensure_schema(self.root)
+        payload = {"task_id": task_id, "agent_id": "owner", "resources": ["src/feature.txt"], "snapshots": {}}
+        raw = tenor_decision._json(payload)
+        with db.connect(self.root) as con:
+            con.execute(f"INSERT INTO {tenor_decision.CAPSULE_TABLE}(task_id,agent_id,capsule_hash,payload_json,status,created_at) VALUES(?,?,?,?,?,?)", (task_id, "owner", tenor_decision._sha256_bytes(raw.encode()), raw, "active", int(time.time())))
+        self.mark_owner(pid=2_000_000_000, last_seen=int(time.time()) - 3600)
+        result = self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
+        capsule = tenor_decision.load_capsule(self.root, task_id)
+        self.assertEqual(capsule["capsule_hash"], tenor_decision._sha256_bytes(tenor_decision._json(capsule["payload"]).encode()))
+        self.assertEqual(capsule["payload"]["recovery_epoch"], result["recovery_epoch"])
+
+    def test_old_owner_resolve_is_refused_after_capsule_reclaim(self) -> None:
+        task_id, _ = self.task()
+        tenor_decision.ensure_schema(self.root)
+        payload = {"task_id": task_id, "agent_id": "owner", "resources": ["src/feature.txt"], "snapshots": {}}
+        raw = tenor_decision._json(payload)
+        with db.connect(self.root) as con:
+            con.execute(f"INSERT INTO {tenor_decision.CAPSULE_TABLE}(task_id,agent_id,capsule_hash,payload_json,status,created_at) VALUES(?,?,?,?,?,?)", (task_id, "owner", tenor_decision._sha256_bytes(raw.encode()), raw, "active", int(time.time())))
+        self.mark_owner(pid=2_000_000_000, last_seen=int(time.time()) - 3600)
+        self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
+        self.assertEqual(tenor_decision.resolve_capsule(self.root, task_id, "owner", "old")["verdict"], "TENOR_DECISION_OWNER_MISMATCH")
+
+    def test_absent_capsule_can_be_rebuilt_without_duplicate_task(self) -> None:
+        task_id, _ = self.task()
+        self.mark_owner(pid=2_000_000_000, last_seen=int(time.time()) - 3600)
+        self.call(task_id=task_id, action="reclaim", expected_owner_agent_id="owner")
+        rebuilt = tenor_decision.build_capsule(project_root=self.root, task_id=task_id, agent_id="new-owner", objective="orphan task", intent="write", scope="src/feature.txt", resources=["src/feature.txt"], scribe_result={"ok": True, "verdict": "SCRIBE_QUERY_DONE"}, graphify_result={"ok": True, "verdict": "GRAPHIFY_QUERY_DONE"}, graphify_required=False, refresh_existing=False)
+        self.assertTrue(rebuilt["ok"], rebuilt)
+        self.assertEqual(task_context.list_tasks()["count"], 1)
+
     def test_existing_control_actions_remain_advertised(self) -> None:
         schema = tenor_public_api.tool_schema("tenor_task_control")
         actions = schema["properties"]["action"]["enum"]
