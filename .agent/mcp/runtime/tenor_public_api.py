@@ -1387,6 +1387,14 @@ def tenor_apply_changeset(
     launch = tenor_jobs.launch_queued_jobs(_root())
     snapshot = tenor_jobs.job_snapshot(_root(), job_id=str(job.get("job_id") or ""), limit=1)
     current = snapshot["jobs"][0] if snapshot["jobs"] else job
+    poll_after_ms = 250
+    if str(current.get("status") or "") == "queued" and str(
+        current.get("blocked_by") or ""
+    ).startswith("graphify_build:"):
+        poll_after_ms = max(
+            250,
+            min(5000, tenor_jobs.graphify_rebuild_debounce_seconds() * 1000),
+        )
     return _ok({
         "ok": True,
         "verdict": "TENOR_CHANGESET_ACCEPTED",
@@ -1395,7 +1403,7 @@ def tenor_apply_changeset(
         "launch": launch,
         "terminal": False,
         "next_action": "tenor_activity",
-        "poll_after_ms": int(job.get("poll_after_ms") or 250),
+        "poll_after_ms": poll_after_ms,
     })
 
 

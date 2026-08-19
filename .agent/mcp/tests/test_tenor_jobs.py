@@ -27,12 +27,20 @@ class TenorJobsTest(unittest.TestCase):
         db.init_db(self.root)
         self.previous_lease = os.environ.get("AGENT_TENOR_JOB_LEASE_SECONDS")
         os.environ["AGENT_TENOR_JOB_LEASE_SECONDS"] = "3"
+        self.previous_debounce = os.environ.get(
+            "AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"
+        )
+        os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = "0"
 
     def tearDown(self) -> None:
         if self.previous_lease is None:
             os.environ.pop("AGENT_TENOR_JOB_LEASE_SECONDS", None)
         else:
             os.environ["AGENT_TENOR_JOB_LEASE_SECONDS"] = self.previous_lease
+        if self.previous_debounce is None:
+            os.environ.pop("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS", None)
+        else:
+            os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = self.previous_debounce
         remove_tree_strict(self.tmp.name)
         self.tmp.cleanup()
 
@@ -256,19 +264,137 @@ class TenorJobsTest(unittest.TestCase):
         self.assertEqual(snapshot["count"], 1, snapshot)
         self.assertEqual(snapshot["jobs"][0]["status"], "queued")
 
-    def test_pending_graphify_rebuild_fences_new_changeset_launch(self) -> None:
-        changeset = self.submit(request_id="changeset-before-rebuild")
+    def test_running_graphify_rebuild_fences_new_changeset_launch(self) -> None:
+        changeset = self.submit(request_id="changeset-before-running-rebuild")
         graphify = tenor_jobs.submit_graphify_rebuild(
             self.root,
             auto_launch=False,
         )
-        blocked = tenor_jobs.claim_job(self.root, str(changeset["job_id"]))
-        self.assertEqual(blocked["verdict"], "TENOR_JOB_NOT_CLAIMABLE", blocked)
         claimed_graphify = tenor_jobs.claim_job(
             self.root,
             str(graphify["job_id"]),
         )
         self.assertTrue(claimed_graphify["ok"], claimed_graphify)
+        blocked = tenor_jobs.claim_job(self.root, str(changeset["job_id"]))
+        self.assertEqual(blocked["verdict"], "TENOR_JOB_NOT_CLAIMABLE", blocked)
+
+    def test_queued_graphify_rebuild_does_not_fence_changeset_launch(self) -> None:
+        changeset = self.submit(request_id="changeset-during-debounce")
+        graphify = tenor_jobs.submit_graphify_rebuild(
+            self.root,
+            auto_launch=False,
+        )
+        self.assertEqual(graphify["status"], "queued", graphify)
+        claimed = tenor_jobs.claim_job(self.root, str(changeset["job_id"]))
+        self.assertTrue(claimed["ok"], claimed)
+
+    def test_rebuild_coalescing_extends_debounce_window(self) -> None:
+        previous = os.environ.get("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS")
+        os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = "5"
+        try:
+            first = tenor_jobs.submit_job(
+                self.root,
+                kind="graphify_build",
+                agent_id="",
+                task_id="",
+                request_id="graphify-debounce-window",
+                payload={},
+                max_runtime_seconds=30,
+                auto_launch=False,
+            )
+            with db.connect(self.root) as con:
+                first_created = con.execute(
+                    f"SELECT created_at FROM {tenor_jobs.JOB_TABLE} WHERE job_id=?",
+                    (str(first["job_id"]),),
+                ).fetchone()["created_at"]
+            time.sleep(1.1)
+            second = tenor_jobs.submit_job(
+                self.root,
+                kind="graphify_build",
+                agent_id="",
+                task_id="",
+                request_id="graphify-debounce-window-bis",
+                payload={},
+                max_runtime_seconds=30,
+                auto_launch=False,
+            )
+            self.assertEqual(
+                second["verdict"],
+                "TENOR_GRAPHIFY_REBUILD_ALREADY_PENDING",
+                second,
+            )
+            self.assertEqual(second["job_id"], first["job_id"])
+            with db.connect(self.root) as con:
+                bumped = con.execute(
+                    f"SELECT created_at FROM {tenor_jobs.JOB_TABLE} WHERE job_id=?",
+                    (str(first["job_id"]),),
+                ).fetchone()["created_at"]
+            self.assertGreaterEqual(
+                int(bumped),
+                int(first_created) + 1,
+                "coalescing must extend the debounce window",
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS", None)
+            else:
+                os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = previous
+
+    def test_graphify_launch_gated_by_debounce_window(self) -> None:
+        previous = os.environ.get("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS")
+        os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = "3"
+        try:
+            submitted = tenor_jobs.submit_graphify_rebuild(
+                self.root,
+                auto_launch=True,
+            )
+            snapshot = tenor_jobs.job_snapshot(
+                self.root,
+                job_id=str(submitted["job_id"]),
+                limit=1,
+            )
+            self.assertEqual(snapshot["jobs"][0]["status"], "queued", snapshot)
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS", None)
+            else:
+                os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = previous
+
+    def test_snapshot_reports_blocked_by_and_queue_position(self) -> None:
+        graphify = tenor_jobs.submit_job(
+            self.root,
+            kind="graphify_build",
+            agent_id="",
+            task_id="",
+            request_id="graphify-snapshot-observability",
+            payload={},
+            max_runtime_seconds=30,
+            auto_launch=False,
+        )
+        first = self.submit(request_id="changeset-snap-first")
+        second = tenor_jobs.submit_job(
+            self.root,
+            kind="changeset",
+            agent_id="agent-a",
+            task_id="task-b",
+            request_id="changeset-snap-second",
+            payload={"task_id": "task-b", "changes": [], "validators": []},
+            max_runtime_seconds=30,
+            auto_launch=False,
+        )
+        claimed = tenor_jobs.claim_job(self.root, str(graphify["job_id"]))
+        self.assertTrue(claimed["ok"], claimed)
+        snapshot = tenor_jobs.job_snapshot(self.root, limit=10)
+        by_id = {str(job["job_id"]): job for job in snapshot["jobs"]}
+        first_row = by_id[str(first["job_id"])]
+        second_row = by_id[str(second["job_id"])]
+        self.assertEqual(first_row["status"], "queued")
+        self.assertTrue(
+            str(first_row.get("blocked_by") or "").startswith("graphify_build:"),
+            first_row,
+        )
+        self.assertEqual(first_row["queue_position"], 1, first_row)
+        self.assertEqual(second_row["queue_position"], 2, second_row)
 
     def test_committed_changeset_schedules_one_graphify_rebuild(self) -> None:
         submitted = self.submit(request_id="committed-with-rebuild")
