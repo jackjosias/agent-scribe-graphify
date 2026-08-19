@@ -65,7 +65,7 @@ class ScribeBootstrapTests(unittest.TestCase):
                 ),
             )
 
-    def test_bootstrap_initializes_empty_project_with_bound_graph_placeholder(self) -> None:
+    def test_bootstrap_initializes_new_project_with_bundle_requires_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report = self.run_bootstrap(
@@ -78,8 +78,9 @@ class ScribeBootstrapTests(unittest.TestCase):
 
             self.assertTrue(report.new_project)
             self.assertEqual(report.scribe_status, "created")
-            self.assertEqual(report.graphify_status, "placeholder")
-            self.assertEqual(report.errors, [])
+            self.assertEqual(report.graphify_status, "build_required")
+            self.assertTrue(any("Graphify not ready" in error for error in report.errors))
+            self.assertTrue(any("graph --project-build --timeout 180" in error for error in report.errors))
             self.assertEqual(report.doctor_code, 0)
             self.assertTrue(report.sync_repaired)
             self.assertTrue((root / ".agent" / "workflow" / "scribe" / "scribe").exists())
@@ -92,7 +93,7 @@ class ScribeBootstrapTests(unittest.TestCase):
             self.assertTrue((root / ".graphifyignore").exists())
             graph_dir = root / ".agent" / "state" / "outputs" / "graphify-out"
             for name in ("GRAPH_REPORT.md", "graph.json", "graph.html", "GRAPHIFY_READY.json"):
-                self.assertTrue((graph_dir / name).is_file(), name)
+                self.assertFalse((graph_dir / name).exists(), name)
 
     def test_bootstrap_detects_package_stack_when_memory_creation_is_authorized(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

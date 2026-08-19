@@ -118,6 +118,8 @@ def _rebind_graphify_output(source_graph: Path, mirror: Path) -> None:
             text = text.replace(old, new)
         if name == "graph.json":
             text = text.replace('"source_file": "', '"source_file": ".agent/')
+        elif name == "manifest.json":
+            text = text.replace(f"{PROJECT_ROOT}{os.sep}agent{os.sep}", f"{PROJECT_ROOT}{os.sep}.agent{os.sep}")
         path.write_text(text, encoding="utf-8")
     (source_graph / ".graphify_root").write_text(str(PROJECT_ROOT), encoding="utf-8")
 

@@ -469,6 +469,69 @@ canonical:
       source_record_digest: "a3a15f8bcc15f470bf852fe0c0525d37ea29c11050fc75252245ad98ff763900"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T15:47:07Z"
+  - id: "CANON-900D2BE63C87E933"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "graphify-output-location-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:06:06Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+    summary: "Rebind graphify's file manifest.json source paths from the mirror's agent/ dir back to .agent/ so published output references the real source locations"
+    l0_abstract: "Rebind graphify's file manifest.json source paths from the mirror's agent/ dir back to .agent/ so published output references the real source locations"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787155566-cli-734859-t-23dd89a217215294.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+      source_record_digest: "1751dc6c71c0d447b00c2ce2104a444cba3ee3fbe3f5e148dfbbc2df9ca787a6"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:06:06Z"
+  - id: "CANON-B8A0C1F3E3D24291"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "tripwire-reclaim-transfer"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:26:58Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+    summary: "workspace_snapshot(refresh=True) now transfers an existing task snapshot across owners (reclaimed tasks) instead of colliding on the task_id UNIQUE constraint, unblocking task_start capsule refresh after reclaim"
+    l0_abstract: "workspace_snapshot(refresh=True) now transfers an existing task snapshot across owners (reclaimed tasks) instead of colliding on the task_id UNIQUE constraint, unblocking task_start capsule refresh after reclaim"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787156818-cli-744992-t-6495451dcc4796b1.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+      source_record_digest: "af473461086a68b79692559da11f76888eedeacf4d0e671e92386f706e6a5b6c"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:26:58Z"
+  - id: "CANON-38FE06C968A97EB8"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "bootstrap-test-semantics"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:46:24Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+    summary: "Update stale bootstrap test: a fresh project with the installed .agent bundle now counts as application code, so bootstrap reports build_required with explicit graph-build guidance; no graph artifacts exist until the build runs"
+    l0_abstract: "Update stale bootstrap test: a fresh project with the installed .agent bundle now counts as application code, so bootstrap reports build_required with explicit graph-build guidance; no graph artifacts exist until the build runs"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787157984-cli-754883-t-c54fce6df4c00049.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+      source_record_digest: "c633db3134f15152f404a70300a0ed4af48334ec6e0a48af27bfc81b5b908ed2"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:46:24Z"
 
 metrics:
   sessions_total: 3

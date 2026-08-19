@@ -443,6 +443,34 @@ def workspace_snapshot(
                     "baseline": baseline,
                 }
             return {"verdict": "DIRECT_FS_TRIPWIRE_SNAPSHOT_EXISTS", "task_id": task_id, "agent_id": agent_id, "baseline": json.loads(existing["baseline_status_json"])}
+        stale = con.execute(
+            "SELECT task_id FROM direct_fs_tripwire_snapshots_v1 WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        if stale and refresh:
+            con.execute(
+                "UPDATE direct_fs_tripwire_snapshots_v1 SET agent_id=?,resource=?,baseline_status_json=?,authorization_cutoff_rowid=?,created_at=? WHERE task_id=?",
+                (
+                    agent_id,
+                    safe_resource,
+                    json.dumps(baseline, ensure_ascii=False, sort_keys=True),
+                    authorization_cutoff,
+                    _now(),
+                    task_id,
+                ),
+            )
+            db.add_event(
+                con,
+                "direct_fs_tripwire.snapshot_transferred",
+                {"task_id": task_id, "resource": safe_resource, "count": len(baseline)},
+                agent_id,
+            )
+            return {
+                "verdict": "DIRECT_FS_TRIPWIRE_SNAPSHOT_TRANSFERRED",
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "baseline": baseline,
+            }
         con.execute(
             "INSERT INTO direct_fs_tripwire_snapshots_v1(task_id,agent_id,resource,baseline_status_json,authorization_cutoff_rowid,created_at) VALUES(?,?,?,?,?,?)",
             (
