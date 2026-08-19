@@ -595,6 +595,27 @@ canonical:
       source_record_digest: "413a89d16474cd7196f3bbc5bdde5f562c90fe1537bfb90479237f6068a78349"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T19:46:51Z"
+  - id: "CANON-B38510322C32798F"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "graphify_readiness fingerprint consistency"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T20:28:41Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787171321-cli-10860-te-804a5296c5fd61c6.json"
+    summary: "Exclude .agent/state/** from workspace_fingerprint so a cold first build that provisions the pinned Graphify runtime under .agent/state/runtime/toolchains/** during the build window no longer triggers GRAPHIFY_WORKSPACE_CHANGED_DURING_BUILD. Aligns _iter_source_files with discover_sources and adds a regression test."
+    l0_abstract: "Exclude .agent/state/** from workspace_fingerprint so a cold first build that provisions the pinned Graphify runtime under .agent/state/runtime/toolchains/** during the build window no longer triggers GRAPHIFY_WORKSPACE_CHANGED_DURING_BUILD. Aligns _iter_source_files with discover_sources and adds a regression test."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787171321-cli-10860-te-804a5296c5fd61c6.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787171321-cli-10860-te-804a5296c5fd61c6.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787171321-cli-10860-te-804a5296c5fd61c6.json"
+      source_record_digest: "db5e500361ae9e42c60c03c34dd885848f8f291605bac64f2938abfceb53b12f"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T20:28:41Z"
 
 metrics:
   sessions_total: 3
