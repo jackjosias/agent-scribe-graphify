@@ -27,6 +27,7 @@ LAUNCH_STALE_SECONDS = 30
 DEFAULT_LEASE_SECONDS = 15
 MIN_LEASE_SECONDS = 3
 MAX_LEASE_SECONDS = 300
+DEFAULT_REBUILD_DEBOUNCE_SECONDS = 8
 
 _LAUNCH_LOCK = threading.RLock()
 _CHILD_PROCESS_LOCK = threading.RLock()
@@ -46,6 +47,15 @@ class WorkerFence:
 
 def _now() -> int:
     return int(time.time())
+
+
+def graphify_rebuild_debounce_seconds() -> int:
+    raw = os.environ.get("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS", "")
+    try:
+        value = int(raw or DEFAULT_REBUILD_DEBOUNCE_SECONDS)
+    except (TypeError, ValueError):
+        value = DEFAULT_REBUILD_DEBOUNCE_SECONDS
+    return max(0, min(int(value), 3600))
 
 
 def _json(value: Any) -> str:
@@ -309,6 +319,16 @@ def submit_job(
                     """
                 ).fetchone()
                 if active_graphify:
+                    if str(active_graphify["status"]) == "queued":
+                        con.execute(
+                            f"UPDATE {JOB_TABLE} SET created_at=?,updated_at=? "
+                            "WHERE job_id=? AND status='queued'",
+                            (now, now, str(active_graphify["job_id"])),
+                        )
+                        active_graphify = con.execute(
+                            f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                            (str(active_graphify["job_id"]),),
+                        ).fetchone()
                     con.execute("COMMIT")
                     current = _public_row(active_graphify)
                     if auto_launch and current["status"] == "queued":
@@ -723,7 +743,40 @@ def job_snapshot(
             f"SELECT * FROM {JOB_TABLE} {where} ORDER BY created_at DESC,job_id DESC LIMIT ?",
             (*params, bound),
         ).fetchall()
+        queued_order = con.execute(
+            f"""
+            SELECT job_id FROM {JOB_TABLE}
+            WHERE status='queued' AND fence_token<=?
+            ORDER BY CASE WHEN kind='graphify_build' THEN 0 ELSE 1 END,
+                     created_at,job_id
+            """,
+            (MAX_JOB_ATTEMPTS,),
+        ).fetchall()
+        positions = {
+            str(row["job_id"]): index for index, row in enumerate(queued_order)
+        }
+        running_build = con.execute(
+            f"""
+            SELECT job_id FROM {JOB_TABLE}
+            WHERE kind='graphify_build'
+              AND status IN ('recovering','launching','running')
+            ORDER BY created_at,job_id
+            LIMIT 1
+            """
+        ).fetchone()
     jobs = [_public_row(row) for row in rows]
+    for job in jobs:
+        if job["status"] == "queued":
+            position = positions.get(str(job["job_id"]))
+            job["queue_position"] = position + 1 if position is not None else None
+            job["blocked_by"] = (
+                f"graphify_build:{str(running_build['job_id'])}"
+                if running_build and job["kind"] != "graphify_build"
+                else None
+            )
+        else:
+            job["queue_position"] = None
+            job["blocked_by"] = None
     return {
         "ok": True,
         "verdict": "TENOR_JOB_SNAPSHOT",
@@ -764,7 +817,7 @@ def _reserve_launch(project_root: Path, job_id: str) -> WorkerFence | None:
                     f"""
                     SELECT 1 FROM {JOB_TABLE}
                     WHERE kind='graphify_build'
-                      AND status IN ('queued','recovering','launching','running')
+                      AND status IN ('recovering','launching','running')
                     LIMIT 1
                     """
                 ).fetchone()
@@ -1027,11 +1080,16 @@ def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
                 f"""
                 SELECT job_id FROM {JOB_TABLE}
                 WHERE status='queued' AND fence_token<=?
+                  AND (kind != 'graphify_build' OR created_at <= ?)
                 ORDER BY CASE WHEN kind='graphify_build' THEN 0 ELSE 1 END,
                          created_at,job_id
                 LIMIT ?
                 """,
-                (MAX_JOB_ATTEMPTS, capacity),
+                (
+                    MAX_JOB_ATTEMPTS,
+                    _now() - graphify_rebuild_debounce_seconds(),
+                    capacity,
+                ),
             ).fetchall()
         for row in rows:
             job_id = str(row["job_id"])
