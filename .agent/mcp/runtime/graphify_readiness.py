@@ -53,10 +53,12 @@ _STUB_MARKERS = (
     "fixture-only graph",
 )
 _IGNORED_DIRS = {
-    ".agent", ".git", ".hg", ".svn", ".next", ".venv", "node_modules",
+    ".git", ".hg", ".svn", ".next", ".venv", "node_modules",
     "vendor", "dist", "build", "coverage", "target", "__pycache__",
     "graphify-out", "scribe-out",
 }
+_INTERNAL_AGENT_DIRS = {".agent/state", ".agent/state/outputs", ".agent/state/runtime"}
+
 _SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cs", ".go", ".h", ".hpp", ".java", ".js",
     ".jsx", ".kt", ".kts", ".php", ".py", ".rb", ".rs", ".scala",
@@ -255,6 +257,65 @@ def _iter_source_files(
                 ) from exc
     rows.sort(key=lambda item: item.relative)
     return rows, False, total_bytes
+
+
+def discover_sources(
+    project_root: Path | str,
+    *,
+    required_resources: list[str] | None = None,
+    max_files: int = 200_000,
+    max_bytes: int = DEFAULT_MAX_FINGERPRINT_BYTES,
+) -> dict[str, Any]:
+    """Discover only supported sources under explicitly requested bounded roots."""
+    root = Path(project_root).resolve()
+    requested = sorted({str(item).strip().replace("\\", "/").strip("/") for item in required_resources or [] if str(item).strip()})
+    indexed: list[str] = []
+    excluded: list[dict[str, str]] = []
+    candidates = 0
+    total_bytes = 0
+    for resource in requested:
+        base = (root / resource).resolve()
+        try:
+            base.relative_to(root)
+        except ValueError:
+            excluded.append({"path": resource, "reason": "resource escapes project root"})
+            continue
+        if not base.exists():
+            excluded.append({"path": resource, "reason": "resource missing"})
+            continue
+        for path in sorted(base.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                excluded.append({"path": relative, "reason": "symlink refused"})
+                continue
+            if not path.is_file():
+                continue
+            if any(relative == item or relative.startswith(item + "/") for item in _INTERNAL_AGENT_DIRS):
+                excluded.append({"path": relative, "reason": "internal state excluded"})
+                continue
+            if path.name not in _MARKER_FILES and path.suffix.lower() not in _SOURCE_SUFFIXES:
+                continue
+            candidates += 1
+            try:
+                size = path.stat().st_size
+            except OSError:
+                excluded.append({"path": relative, "reason": "stat failed"})
+                continue
+            if len(indexed) >= max_files or total_bytes + size > max_bytes:
+                excluded.append({"path": relative, "reason": "bounded discovery limit"})
+                continue
+            indexed.append(relative)
+            total_bytes += size
+    return {
+        "project_root": str(root),
+        "requested_resources": requested,
+        "discovered_candidate_count": candidates,
+        "indexed_source_count": len(indexed),
+        "indexed_paths": indexed,
+        "excluded_count": len(excluded),
+        "excluded_paths": excluded,
+        "source_total_bytes": total_bytes,
+    }
 
 
 def _stable_content_digest(

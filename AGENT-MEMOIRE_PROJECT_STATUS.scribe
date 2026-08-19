@@ -427,6 +427,48 @@ canonical:
       source_record_digest: "25c13565323c988585a145c2aac5851fe11bf42ae1db50114bd3023bbf4b0fb8"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-13T15:24:10Z"
+  - id: "CANON-D1157E28A8BDBBAC"
+    date: "2026-08-14"
+    schema_patch_date: "2026-08-14"
+    type: "validation"
+    scope: "Bootstrap structurel Graphify/TENOR : couverture bornée des ressources cachées requises, verdicts fail-closed, unicité logique transactionnelle et tests déterministes ; sans modification du scheduler V2.17."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-14T09:44:20Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+    summary: "Enforce bounded hidden-resource Graphify coverage and prevent silent logical TENOR task duplication."
+    l0_abstract: "Enforce bounded hidden-resource Graphify coverage and prevent silent logical TENOR task duplication."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786700659-cli-90140-te-ad94eb0b14455c64.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+      source_record_digest: "b33a49ca72b7d93f60e450b6d408307b6d7cd437d5ec0cb54ff4425db574c3a1"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-14T09:44:20Z"
+  - id: "CANON-2ADD183475E6C05C"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "bootstrap-graphify-root-fix-reapply"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T15:47:07Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+    summary: "Root-cause fix for the project Graphify build: mirror renames .agent to agent so the isolated build indexes the 214 analysable sources, rebinds source paths back to .agent, bootstrap counts .agent as application code, .graphifyignore excludes only .agent/state, and real unit tests replace the placeholders."
+    l0_abstract: "Root-cause fix for the project Graphify build: mirror renames .agent to agent so the isolated build indexes the 214 analysable sources, rebinds source paths back to .agent, bootstrap counts .agent as application code, .graphifyignore excludes only .agent/state, and real unit tests replace the placeholders."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+      source_record_digest: "a3a15f8bcc15f470bf852fe0c0525d37ea29c11050fc75252245ad98ff763900"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T15:47:07Z"
 
 metrics:
   sessions_total: 3

@@ -65,11 +65,12 @@ def _root() -> Path:
     return Path(_SERVER.ROOT).resolve()
 
 
-def _graphify_write_preflight() -> dict[str, Any] | None:
+def _graphify_write_preflight(required_resources: list[str] | None = None) -> dict[str, Any] | None:
     result = graphify_guard.check_graphify_required(
         workspace_root=_root(),
         host_type=str(os.environ.get("AGENT_MCP_HOST") or "unknown"),
         auto_write_guide=True,
+        required_resources=required_resources,
     )
     if result.get("ok") and result.get("write_allowed"):
         return None
@@ -666,6 +667,31 @@ def _prepare_decision_capsule(
     )
 
 
+def _logical_task_key(objective: str, intent: str, scope: str, resources: list[str]) -> str:
+    payload = {
+        "objective": objective.strip(),
+        "intent": intent,
+        "scope": scope,
+        "resources": sorted(dict.fromkeys(resources)),
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _existing_logical_task(objective: str, intent: str, scope: str, resources: list[str]) -> dict[str, Any] | None:
+    key = _logical_task_key(objective, intent, scope, resources)
+    with db.connect(_root()) as con:
+        rows = con.execute(
+            f"SELECT * FROM {ACTIVITY_TABLE} WHERE status IN ('active','blocked','paused','recovering','ready','awaiting_memory') ORDER BY created_at",
+        ).fetchall()
+    for row in rows:
+        candidate = dict(row)
+        candidate_resources = json.loads(candidate.pop("resources_json") or "[]")
+        if _logical_task_key(str(candidate["objective"]), str(candidate["intent"]), str(candidate["scope"]), candidate_resources) == key:
+            candidate["resources"] = candidate_resources
+            return candidate
+    return None
+
+
 def tenor_task_start(
     objective: str = "",
     intent: str = "write",
@@ -683,10 +709,20 @@ def tenor_task_start(
     except ValueError as exc:
         return _ok({"ok": False, "verdict": str(exc)})
     if canonical_intent != "read":
-        graphify_block = _graphify_write_preflight()
+        graphify_block = _graphify_write_preflight(normalized_resources)
         if graphify_block is not None:
             return _ok(graphify_block)
     active = _active_activity(agent_id)
+    if not active:
+        existing = _existing_logical_task(objective.strip(), canonical_intent, normalized_scope, normalized_resources)
+        if existing and str(existing["agent_id"]) != agent_id:
+            return _ok({
+                "ok": False,
+                "verdict": "TENOR_EXISTING_TASK_REQUIRES_RECLAIM",
+                "task_id": existing["task_id"],
+                "owner_agent_id": existing["agent_id"],
+                "logical_task_key": _logical_task_key(objective.strip(), canonical_intent, normalized_scope, normalized_resources),
+            })
     if active:
         if active["status"] == "awaiting_memory":
             admission = tenor_memory_admission.get_admission(_root(), active["task_id"], agent_id)
