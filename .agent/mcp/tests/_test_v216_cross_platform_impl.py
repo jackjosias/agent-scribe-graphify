@@ -123,7 +123,6 @@ class V216CrossPlatformTest(unittest.TestCase):
     def test_empty_project_graph_is_bound_without_application_sources(self) -> None:
         root = self.base / "empty graph"
         root.mkdir()
-        make_project(root)
         output = graphify_readiness.canonical_output_dir(root)
         output.mkdir(parents=True, exist_ok=True)
         (output / "graph.json").write_text('{"nodes":[],"edges":[]}\n', encoding="utf-8")

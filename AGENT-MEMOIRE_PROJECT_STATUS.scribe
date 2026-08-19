@@ -574,6 +574,27 @@ canonical:
       source_record_digest: "2b02babc7b8a1b8a25f60817291241e38d96230592ca8fdf1833d54fe218d879"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T17:59:17Z"
+  - id: "CANON-DAA16BCBE502958D"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "cross-platform-empty-project-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T19:46:51Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+    summary: "Align the cross-platform empty-project test with V2.17 semantics: the empty-project placeholder binds only for a truly empty workspace (zero source files); a project with the installed .agent bundle is application code and requires a real build."
+    l0_abstract: "Align the cross-platform empty-project test with V2.17 semantics: the empty-project placeholder binds only for a truly empty workspace (zero source files); a project with the installed .agent bundle is application code and requires a real build."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787168811-cli-10860-te-206857fecc1807ed.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+      source_record_digest: "413a89d16474cd7196f3bbc5bdde5f562c90fe1537bfb90479237f6068a78349"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T19:46:51Z"
 
 metrics:
   sessions_total: 3
