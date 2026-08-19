@@ -616,6 +616,27 @@ canonical:
       source_record_digest: "db5e500361ae9e42c60c03c34dd885848f8f291605bac64f2938abfceb53b12f"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T20:28:41Z"
+  - id: "CANON-DC5614DA246C2D2F"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "tenor scheduler ergonomics (debounce + launch gating + queue observability)"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T21:49:33Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787176173-cli-164356-t-45b4a30ae0286e3c.json"
+    summary: "Scheduler ergonomics (fix from 0002): the queued_order query added to job_snapshot omitted its fence_token<=? binding parameter, raising sqlite3.ProgrammingError in test_concurrent_recovery_transfers_fence_once. Now passes (MAX_JOB_ATTEMPTS,). Same debounce + launch gating + queue observability as 0002."
+    l0_abstract: "Scheduler ergonomics (fix from 0002): the queued_order query added to job_snapshot omitted its fence_token<=? binding parameter, raising sqlite3.ProgrammingError in test_concurrent_recovery_transfers_fence_once. Now passes (MAX_JOB_ATTEMPTS,). Same debounce + launch gating + queue observability as 0002."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787176173-cli-164356-t-45b4a30ae0286e3c.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787176173-cli-164356-t-45b4a30ae0286e3c.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787176173-cli-164356-t-45b4a30ae0286e3c.json"
+      source_record_digest: "38e3e1adc25e76a8745bc26d4866fc5180096544a36f4f4b4381d6d6589cefc5"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T21:49:33Z"
 
 metrics:
   sessions_total: 3
