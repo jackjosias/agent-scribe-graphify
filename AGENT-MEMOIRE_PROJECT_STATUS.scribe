@@ -532,6 +532,27 @@ canonical:
       source_record_digest: "c633db3134f15152f404a70300a0ed4af48334ec6e0a48af27bfc81b5b908ed2"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T16:46:24Z"
+  - id: "CANON-3BFDC5C736583FCB"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "perf-warmup-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T17:06:40Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+    summary: "Warm the MCP tool once before measuring warm latency so the cold-start of the first tool call (module imports, handler init) is excluded from the measured window, eliminating the intermittent p99/max latency spike"
+    l0_abstract: "Warm the MCP tool once before measuring warm latency so the cold-start of the first tool call (module imports, handler init) is excluded from the measured window, eliminating the intermittent p99/max latency spike"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787159200-cli-765786-t-7744f67871d64f5d.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+      source_record_digest: "c001f2e65c9d8171d0d6ce767e91356057586a6c65327fa64807ff79620c50e5"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T17:06:40Z"
 
 metrics:
   sessions_total: 3
