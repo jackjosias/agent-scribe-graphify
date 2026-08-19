@@ -243,9 +243,26 @@ def write_graphify_install_guide(workspace_root: Path | str | None = None, host_
     return _write_doc_atomic(root / INSTALL_GUIDE_REL_PATH, render_graphify_install_guide(host_type=host_type))
 
 
-def check_graphify_required(workspace_root: Path | str | None = None, host_type: str = "unknown", auto_write_guide: bool = True) -> dict[str, Any]:
+def check_graphify_required(
+    workspace_root: Path | str | None = None,
+    host_type: str = "unknown",
+    auto_write_guide: bool = True,
+    required_resources: list[str] | None = None,
+) -> dict[str, Any]:
     root = Path(workspace_root or Path.cwd()).resolve()
+    coverage = graphify_readiness.discover_sources(root, required_resources=required_resources)
     readiness = graphify_readiness.inspect_graphify_readiness(root)
+    if required_resources and coverage["discovered_candidate_count"] > 0:
+        if not readiness.ok or readiness.manifest_kind in {"empty_project", "smoke_fixture"}:
+            return {
+                "ok": False,
+                "verdict": "GRAPHIFY_REQUIRED_RESOURCES_UNINDEXED",
+                "blocking": True,
+                "write_allowed": False,
+                "reason": "required analysable resources are not represented by a non-empty project graph",
+                "outputs": {**readiness.to_dict(), **coverage},
+                "next_actions": [graphify_readiness.PROJECT_BUILD_ACTION],
+            }
     if readiness.ok:
         fixture_authorized = (
             readiness.manifest_kind == "smoke_fixture"

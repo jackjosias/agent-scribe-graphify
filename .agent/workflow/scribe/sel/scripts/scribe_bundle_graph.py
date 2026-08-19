@@ -32,7 +32,7 @@ PROJECT_BUILD_TIMEOUT = 180
 GRAPH_SKIP_DIRS = {"adapters", "graphify-out", "__pycache__", ".pytest_cache", ".mypy_cache", "vendor"}
 GRAPH_SKIP_PATTERNS = {"*.pyc", "*.pyo", "*.min.js", "*.min.css", "*.map"}
 PROJECT_GRAPH_SKIP_DIRS = {
-    ".agent", ".git", ".hg", ".svn", ".next", ".venv", "venv",
+    ".git", ".hg", ".svn", ".next", ".venv", "venv",
     "node_modules", "vendor", "dist", "build", "coverage", "target",
     "__pycache__", ".pytest_cache", ".mypy_cache", "graphify-out", "scribe-out",
 }
@@ -66,12 +66,22 @@ def copy_bundle_without_graph(target: Path) -> None:
     shutil.copytree(BUNDLE_ROOT, target, ignore=bundle_graph_ignore)
 
 
+INTERNAL_AGENT_GRAPH_DIRS = {".agent/state", ".agent/state/outputs", ".agent/state/runtime"}
+
+
 def project_graph_ignore(directory: str, names: list[str]) -> set[str]:
     base = Path(directory)
     ignored: set[str] = set()
     for name in names:
         candidate = base / name
         if name in PROJECT_GRAPH_SKIP_DIRS or candidate.is_symlink():
+            ignored.add(name)
+            continue
+        try:
+            rel = candidate.resolve().relative_to(PROJECT_ROOT).as_posix()
+        except (ValueError, OSError):
+            continue
+        if any(rel == item or rel.startswith(item + "/") for item in INTERNAL_AGENT_GRAPH_DIRS):
             ignored.add(name)
     return ignored
 
@@ -86,6 +96,10 @@ def copy_project_for_graph(target: Path) -> None:
         copy_function=shutil.copy2,
         symlinks=True,
     )
+    agent_src = target / ".agent"
+    renamed = target / "agent"
+    if agent_src.exists() and not renamed.exists():
+        shutil.move(str(agent_src), str(renamed))
 
 
 def _rebind_graphify_output(source_graph: Path, mirror: Path) -> None:
@@ -102,6 +116,11 @@ def _rebind_graphify_output(source_graph: Path, mirror: Path) -> None:
         text = path.read_text(encoding="utf-8")
         for old, new in replacements:
             text = text.replace(old, new)
+        if name == "graph.json":
+            text = text.replace('"source_file": "', '"source_file": ".agent/')
+        elif name == "manifest.json":
+            text = text.replace(f"{PROJECT_ROOT}{os.sep}agent{os.sep}", f"{PROJECT_ROOT}{os.sep}.agent{os.sep}")
+            text = text.replace('"agent/', '".agent/').replace('"agent\\', '".agent\\')
         path.write_text(text, encoding="utf-8")
     (source_graph / ".graphify_root").write_text(str(PROJECT_ROOT), encoding="utf-8")
 
@@ -170,6 +189,9 @@ def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int =
             stdout=f"Graphify runtime provisioning exceeded the shared {timeout}s bound",
         )
     command = [*resolved["command"], "update", str(target)]
+    viz_limit = os.environ.get("GRAPHIFY_VIZ_NODE_LIMIT", "20000")
+    build_env = dict(os.environ)
+    build_env["GRAPHIFY_VIZ_NODE_LIMIT"] = viz_limit
     marker = (
         "TENOR_GRAPHIFY_RUNTIME_READY "
         f"source={resolved.get('source', 'unknown')} "
@@ -180,6 +202,7 @@ def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int =
         completed = subprocess.run(
             command,
             cwd=str(cwd or target.parent),
+            env=build_env,
             check=False,
             text=True,
             stdout=subprocess.PIPE,

@@ -3,10 +3,30 @@
   "mcp": {
     "agent-scribe-graphify": {
       "type": "local",
-      "command": ["python3", ".agent/mcp/server_entry.py"],
+      "command": [
+        "python3",
+        ".agent/mcp/server_entry.py"
+      ],
       "cwd": ".",
+      "environment": {
+        "AGENT_MCP_HOST": "opencode",
+        "AGENT_MCP_BINDING_ID": "5f76bba014ec4deabed738a6596cdc41",
+        "AGENT_SCRIBE_GRAPHIFY_ROOT": "."
+      },
       "enabled": true,
       "timeout": 20000
+    }
+  }
+,
+  "permission": {
+    "edit": "deny"
+  ,
+    "bash": {
+      "*": "deny",
+      ".agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "python3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow",
+      "py -3 .agent/workflow/scribe/scribe tenor-init --type cli --host opencode": "allow"
     }
   }
 }

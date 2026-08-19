@@ -280,6 +280,321 @@ canonical:
       source_record_digest: "44a51c2575bddd3ce3fd0f28f10631b519efcc1f231e30caab2b69f6c40830a8"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-03T20:50:00Z"
+  - id: "CANON-1E162024FBEB563D"
+    date: "2026-08-12"
+    schema_patch_date: "2026-08-12"
+    type: "validation"
+    scope: "Correctif bootstrap TENOR de récupération sûre des tâches orphelines sur la branche fix/v217-fair-writer-scheduler; API, registre agents, leases, fencing, audit et tests."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-12T10:03:16Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+    summary: "Recreate the red reclaim tests for the production bootstrap implementation."
+    l0_abstract: "Recreate the red reclaim tests for the production bootstrap implementation."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786528995-cli-46830-te-383d72aaee548fec.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786528995-cli-46830-te-383d72aaee548fec.json"
+      source_record_digest: "f5b311980ce1fa70c524cb64c613f0297104e7de56a0bb61e9c8dffc055fb228"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-12T10:03:16Z"
+  - id: "CANON-018AE45DAFB96703"
+    date: "2026-08-12"
+    schema_patch_date: "2026-08-12"
+    type: "validation"
+    scope: "Correctif bootstrap TENOR de récupération sûre des tâches orphelines sur la branche fix/v217-fair-writer-scheduler; API, registre agents, leases, fencing, audit et tests."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-12T10:04:58Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+    summary: "Implement the atomic orphan-task reclaim transition with liveness, publication, token and fencing checks."
+    l0_abstract: "Implement the atomic orphan-task reclaim transition with liveness, publication, token and fencing checks."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786529098-cli-46830-te-80aa1a0412f916b1.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786529098-cli-46830-te-80aa1a0412f916b1.json"
+      source_record_digest: "b7c7c955f296dfc726aa1594482073dc390138824f7ffd9ff353ea01d31acbf4"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-12T10:04:58Z"
+  - id: "CANON-E6C06677EEF2F80F"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:04:33Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+    summary: "TDD red test for atomic decision capsule reclaim migration."
+    l0_abstract: "TDD red test for atomic decision capsule reclaim migration."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786629873-cli-455730-t-a78028440970a231.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786629873-cli-455730-t-a78028440970a231.json"
+      source_record_digest: "a773920fc6869f6d7a4fc9034de3a69a2502ee01d16c8546bf6c9ae1ed0103d0"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:04:33Z"
+  - id: "CANON-071DC2ADF69DDBDA"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:08:11Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+    summary: "Fix atomic capsule migration initialization and test import."
+    l0_abstract: "Fix atomic capsule migration initialization and test import."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786630090-cli-455730-t-cb4e00e7cf6219d0.json"
+      source_record_digest: "27fb5b875fa02a46fa906a1412bafa10e7d5bfe509ef8d961bdf6bdd15eb66a8"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:08:11Z"
+  - id: "CANON-0CBF9AE5038CED03"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap TENOR limité au transfert atomique des capsules de décision lors du reclaim ; tests TDD, audit et documentation synchronisée. Ne pas modifier ni annuler task-9f6bb6ba4e2440c7."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T14:09:08Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+    summary: "Preserve BEGIN IMMEDIATE atomicity by removing executescript from capsule reclaim."
+    l0_abstract: "Preserve BEGIN IMMEDIATE atomicity by removing executescript from capsule reclaim."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786630148-cli-455730-t-9c9610ea4256c6b4.json"
+      source_record_digest: "a3be9d2bd583dc480a622877d871314dc81111c1fd0314b30188cb2d80b9a041"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T14:09:08Z"
+  - id: "CANON-B7548FD05EDE88E1"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap post-commit 0d141903 uniquement. Ne pas modifier file_hash, ne pas redémarrer MCP, ne pas reclaim ni modifier task-9f6bb6ba4e2440c7. Ajouter TDD rouge prouvé, implémentation, validations, documentation et mise à jour PR #21."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T15:20:53Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+    summary: "Force fresh capsules after reclaim."
+    l0_abstract: "Force fresh capsules after reclaim."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786634453-cli-455730-t-0062ae34a14c3c71.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786634453-cli-455730-t-0062ae34a14c3c71.json"
+      source_record_digest: "b61726e5f958367b2b04a2ceb54f051fca260c9ec037f7236e3ca962213c8bbe"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T15:20:53Z"
+  - id: "CANON-E97DBEC60F8C2DB9"
+    date: "2026-08-13"
+    schema_patch_date: "2026-08-13"
+    type: "validation"
+    scope: "Bootstrap post-commit 0d141903 uniquement. Ne pas modifier file_hash, ne pas redémarrer MCP, ne pas reclaim ni modifier task-9f6bb6ba4e2440c7. Ajouter TDD rouge prouvé, implémentation, validations, documentation et mise à jour PR #21."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-13T15:24:10Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+    summary: "Add capsule hash, owner fencing and absent capsule coverage."
+    l0_abstract: "Add capsule hash, owner fencing and absent capsule coverage."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786634649-cli-455730-t-4b0a88a10239a902.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786634649-cli-455730-t-4b0a88a10239a902.json"
+      source_record_digest: "25c13565323c988585a145c2aac5851fe11bf42ae1db50114bd3023bbf4b0fb8"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-13T15:24:10Z"
+  - id: "CANON-D1157E28A8BDBBAC"
+    date: "2026-08-14"
+    schema_patch_date: "2026-08-14"
+    type: "validation"
+    scope: "Bootstrap structurel Graphify/TENOR : couverture bornée des ressources cachées requises, verdicts fail-closed, unicité logique transactionnelle et tests déterministes ; sans modification du scheduler V2.17."
+    status: "PASS"
+    status_log:
+      - at: "2026-08-14T09:44:20Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+    summary: "Enforce bounded hidden-resource Graphify coverage and prevent silent logical TENOR task duplication."
+    l0_abstract: "Enforce bounded hidden-resource Graphify coverage and prevent silent logical TENOR task duplication."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1786700659-cli-90140-te-ad94eb0b14455c64.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1786700659-cli-90140-te-ad94eb0b14455c64.json"
+      source_record_digest: "b33a49ca72b7d93f60e450b6d408307b6d7cd437d5ec0cb54ff4425db574c3a1"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-14T09:44:20Z"
+  - id: "CANON-2ADD183475E6C05C"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "bootstrap-graphify-root-fix-reapply"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T15:47:07Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+    summary: "Root-cause fix for the project Graphify build: mirror renames .agent to agent so the isolated build indexes the 214 analysable sources, rebinds source paths back to .agent, bootstrap counts .agent as application code, .graphifyignore excludes only .agent/state, and real unit tests replace the placeholders."
+    l0_abstract: "Root-cause fix for the project Graphify build: mirror renames .agent to agent so the isolated build indexes the 214 analysable sources, rebinds source paths back to .agent, bootstrap counts .agent as application code, .graphifyignore excludes only .agent/state, and real unit tests replace the placeholders."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787154427-cli-722261-t-a4f3bbd7b93783b6.json"
+      source_record_digest: "a3a15f8bcc15f470bf852fe0c0525d37ea29c11050fc75252245ad98ff763900"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T15:47:07Z"
+  - id: "CANON-900D2BE63C87E933"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "graphify-output-location-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:06:06Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+    summary: "Rebind graphify's file manifest.json source paths from the mirror's agent/ dir back to .agent/ so published output references the real source locations"
+    l0_abstract: "Rebind graphify's file manifest.json source paths from the mirror's agent/ dir back to .agent/ so published output references the real source locations"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787155566-cli-734859-t-23dd89a217215294.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787155566-cli-734859-t-23dd89a217215294.json"
+      source_record_digest: "1751dc6c71c0d447b00c2ce2104a444cba3ee3fbe3f5e148dfbbc2df9ca787a6"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:06:06Z"
+  - id: "CANON-B8A0C1F3E3D24291"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "tripwire-reclaim-transfer"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:26:58Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+    summary: "workspace_snapshot(refresh=True) now transfers an existing task snapshot across owners (reclaimed tasks) instead of colliding on the task_id UNIQUE constraint, unblocking task_start capsule refresh after reclaim"
+    l0_abstract: "workspace_snapshot(refresh=True) now transfers an existing task snapshot across owners (reclaimed tasks) instead of colliding on the task_id UNIQUE constraint, unblocking task_start capsule refresh after reclaim"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787156818-cli-744992-t-6495451dcc4796b1.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787156818-cli-744992-t-6495451dcc4796b1.json"
+      source_record_digest: "af473461086a68b79692559da11f76888eedeacf4d0e671e92386f706e6a5b6c"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:26:58Z"
+  - id: "CANON-38FE06C968A97EB8"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "bootstrap-test-semantics"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T16:46:24Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+    summary: "Update stale bootstrap test: a fresh project with the installed .agent bundle now counts as application code, so bootstrap reports build_required with explicit graph-build guidance; no graph artifacts exist until the build runs"
+    l0_abstract: "Update stale bootstrap test: a fresh project with the installed .agent bundle now counts as application code, so bootstrap reports build_required with explicit graph-build guidance; no graph artifacts exist until the build runs"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787157984-cli-754883-t-c54fce6df4c00049.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787157984-cli-754883-t-c54fce6df4c00049.json"
+      source_record_digest: "c633db3134f15152f404a70300a0ed4af48334ec6e0a48af27bfc81b5b908ed2"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T16:46:24Z"
+  - id: "CANON-3BFDC5C736583FCB"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "perf-warmup-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T17:06:40Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+    summary: "Warm the MCP tool once before measuring warm latency so the cold-start of the first tool call (module imports, handler init) is excluded from the measured window, eliminating the intermittent p99/max latency spike"
+    l0_abstract: "Warm the MCP tool once before measuring warm latency so the cold-start of the first tool call (module imports, handler init) is excluded from the measured window, eliminating the intermittent p99/max latency spike"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787159200-cli-765786-t-7744f67871d64f5d.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787159200-cli-765786-t-7744f67871d64f5d.json"
+      source_record_digest: "c001f2e65c9d8171d0d6ce767e91356057586a6c65327fa64807ff79620c50e5"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T17:06:40Z"
+  - id: "CANON-DDA385C1E7CA0201"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "viz-limit-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T17:59:17Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+    summary: "Guarantee graph.html for canonical builds (GRAPHIFY_VIZ_NODE_LIMIT) and rebind relative agent/ manifest keys to .agent/ so the pinned graphifyy 0.9.26 runtime output satisfies the readiness contract."
+    l0_abstract: "Guarantee graph.html for canonical builds (GRAPHIFY_VIZ_NODE_LIMIT) and rebind relative agent/ manifest keys to .agent/ so the pinned graphifyy 0.9.26 runtime output satisfies the readiness contract."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787162357-cli-794105-t-334624ea618cdc5f.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+      source_record_digest: "2b02babc7b8a1b8a25f60817291241e38d96230592ca8fdf1833d54fe218d879"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T17:59:17Z"
+  - id: "CANON-DAA16BCBE502958D"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "cross-platform-empty-project-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T19:46:51Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+    summary: "Align the cross-platform empty-project test with V2.17 semantics: the empty-project placeholder binds only for a truly empty workspace (zero source files); a project with the installed .agent bundle is application code and requires a real build."
+    l0_abstract: "Align the cross-platform empty-project test with V2.17 semantics: the empty-project placeholder binds only for a truly empty workspace (zero source files); a project with the installed .agent bundle is application code and requires a real build."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787168811-cli-10860-te-206857fecc1807ed.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787168811-cli-10860-te-206857fecc1807ed.json"
+      source_record_digest: "413a89d16474cd7196f3bbc5bdde5f562c90fe1537bfb90479237f6068a78349"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T19:46:51Z"
 
 metrics:
   sessions_total: 3

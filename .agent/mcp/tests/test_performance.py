@@ -255,6 +255,8 @@ class TestPublicWarmLatency(PerformanceAssertions):
         remove_workspace(cls.workspace)
 
     def measure(self, tool: str, **arguments: Any) -> list[float]:
+        payload = self.client.call(tool, **arguments)
+        self.assertIsInstance(payload, dict)
         durations: list[float] = []
         for _ in range(MEASURE_REPEAT):
             started = time.perf_counter()

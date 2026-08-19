@@ -1,6 +1,6 @@
 # SCRIBE-PORTABLE-WORKFLOW:START
 # Keep the application graph focused on product code.
-.agent/
+.agent/state/
 .agents/
 .codex/
 .vscode/

@@ -45,7 +45,7 @@ APP_CODE_EXTENSIONS = {
     ".py", ".rs", ".swift", ".ts", ".tsx", ".vue", ".svelte",
 }
 IGNORED_APP_CODE_PARTS = {
-    ".agent", ".git", ".next", ".venv", "build", "coverage", "dist",
+    ".git", ".next", ".venv", "build", "coverage", "dist",
     "graphify-out", "node_modules", "scribe-out", "outputs", "target", "vendor",
 }
 
