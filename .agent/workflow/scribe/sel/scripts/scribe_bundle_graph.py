@@ -120,6 +120,7 @@ def _rebind_graphify_output(source_graph: Path, mirror: Path) -> None:
             text = text.replace('"source_file": "', '"source_file": ".agent/')
         elif name == "manifest.json":
             text = text.replace(f"{PROJECT_ROOT}{os.sep}agent{os.sep}", f"{PROJECT_ROOT}{os.sep}.agent{os.sep}")
+            text = text.replace('"agent/', '".agent/').replace('"agent\\', '".agent\\')
         path.write_text(text, encoding="utf-8")
     (source_graph / ".graphify_root").write_text(str(PROJECT_ROOT), encoding="utf-8")
 
@@ -188,6 +189,9 @@ def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int =
             stdout=f"Graphify runtime provisioning exceeded the shared {timeout}s bound",
         )
     command = [*resolved["command"], "update", str(target)]
+    viz_limit = os.environ.get("GRAPHIFY_VIZ_NODE_LIMIT", "20000")
+    build_env = dict(os.environ)
+    build_env["GRAPHIFY_VIZ_NODE_LIMIT"] = viz_limit
     marker = (
         "TENOR_GRAPHIFY_RUNTIME_READY "
         f"source={resolved.get('source', 'unknown')} "
@@ -198,6 +202,7 @@ def run_graphify_update(target: Path, *, cwd: Path | None = None, timeout: int =
         completed = subprocess.run(
             command,
             cwd=str(cwd or target.parent),
+            env=build_env,
             check=False,
             text=True,
             stdout=subprocess.PIPE,

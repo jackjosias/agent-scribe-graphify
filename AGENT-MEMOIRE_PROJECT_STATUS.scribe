@@ -553,6 +553,27 @@ canonical:
       source_record_digest: "c001f2e65c9d8171d0d6ce767e91356057586a6c65327fa64807ff79620c50e5"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T17:06:40Z"
+  - id: "CANON-DDA385C1E7CA0201"
+    date: "2026-08-19"
+    schema_patch_date: "2026-08-19"
+    type: "validation"
+    scope: "viz-limit-fix"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-19T17:59:17Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+    summary: "Guarantee graph.html for canonical builds (GRAPHIFY_VIZ_NODE_LIMIT) and rebind relative agent/ manifest keys to .agent/ so the pinned graphifyy 0.9.26 runtime output satisfies the readiness contract."
+    l0_abstract: "Guarantee graph.html for canonical builds (GRAPHIFY_VIZ_NODE_LIMIT) and rebind relative agent/ manifest keys to .agent/ so the pinned graphifyy 0.9.26 runtime output satisfies the readiness contract."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787162357-cli-794105-t-334624ea618cdc5f.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787162357-cli-794105-t-334624ea618cdc5f.json"
+      source_record_digest: "2b02babc7b8a1b8a25f60817291241e38d96230592ca8fdf1833d54fe218d879"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-19T17:59:17Z"
 
 metrics:
   sessions_total: 3
