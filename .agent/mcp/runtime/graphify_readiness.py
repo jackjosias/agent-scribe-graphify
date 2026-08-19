@@ -222,6 +222,12 @@ def _iter_source_files(
             path = Path(entry.path)
             try:
                 if entry.is_dir(follow_symlinks=False):
+                    relative_dir = path.relative_to(root).as_posix()
+                    if any(
+                        relative_dir == item or relative_dir.startswith(item + "/")
+                        for item in _INTERNAL_AGENT_DIRS
+                    ):
+                        continue
                     stack.append(path)
                     continue
                 if not entry.is_file(follow_symlinks=False):

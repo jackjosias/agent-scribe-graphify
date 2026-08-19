@@ -163,6 +163,31 @@ class GraphifyReadinessTest(unittest.TestCase):
         after = readiness.workspace_fingerprint(self.root)
         self.assertEqual(after["fingerprint"], before["fingerprint"])
 
+    def test_workspace_fingerprint_excludes_internal_agent_state(self) -> None:
+        self.write_real()
+        baseline = readiness.workspace_fingerprint(self.root)
+        runtime_py = (
+            self.root
+            / ".agent"
+            / "state"
+            / "runtime"
+            / "toolchains"
+            / "graphify"
+            / "0.9.26"
+            / "site"
+            / "graphify"
+            / "cli.py"
+        )
+        runtime_py.parent.mkdir(parents=True)
+        runtime_py.write_text("VALUE = 1\n", encoding="utf-8")
+        (self.root / ".agent" / "state" / "runtime" / "launcher.py").write_text(
+            "VALUE = 2\n",
+            encoding="utf-8",
+        )
+        after = readiness.workspace_fingerprint(self.root)
+        self.assertEqual(after["fingerprint"], baseline["fingerprint"])
+        self.assertEqual(after["source_file_count"], baseline["source_file_count"])
+
     def test_same_size_content_change_is_detected(self) -> None:
         self.write_real()
         source = self.root / "app.py"
