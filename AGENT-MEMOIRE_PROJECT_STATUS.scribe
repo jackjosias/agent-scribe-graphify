@@ -637,6 +637,27 @@ canonical:
       source_record_digest: "38e3e1adc25e76a8745bc26d4866fc5180096544a36f4f4b4381d6d6589cefc5"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-19T21:49:33Z"
+  - id: "CANON-23BC0DBFC8E52E85"
+    date: "2026-08-20"
+    schema_patch_date: "2026-08-20"
+    type: "validation"
+    scope: ".agent/mcp/runtime/tenor_jobs.py and .agent/mcp/tests/test_tenor_jobs.py"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-20T00:07:12Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787184432-cli-164356-t-48a3cf457501d029.json"
+    summary: "Fix two CI regressions from scheduler-ergonomics: (1) debounce gate in launch_queued_jobs now only applies to auto rebuilds (request_id LIKE 'graphify-rebuild-%'), so explicit graphify_project_build requests launch immediately; (2) queued_order and launch use SQLite rowid for deterministic FIFO instead of (created_at, uuid job_id). Adds regression test test_explicit_graphify_build_ignores_debounce_gate."
+    l0_abstract: "Fix two CI regressions from scheduler-ergonomics: (1) debounce gate in launch_queued_jobs now only applies to auto rebuilds (request_id LIKE 'graphify-rebuild-%'), so explicit graphify_project_build requests launch immediately; (2) queued_order and launch use SQLite rowid for deterministic FIFO instead of (created_at, uuid job_id). Adds regression test test_explicit_graphify_build_ignores_debounce_gate."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787184432-cli-164356-t-48a3cf457501d029.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787184432-cli-164356-t-48a3cf457501d029.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787184432-cli-164356-t-48a3cf457501d029.json"
+      source_record_digest: "62ac28f2ef4307dec643de08ec8bc5615cb767adc8500ad1ce29924b0b68a1c7"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-20T00:07:12Z"
 
 metrics:
   sessions_total: 3
