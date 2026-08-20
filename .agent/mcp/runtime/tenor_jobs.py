@@ -748,7 +748,7 @@ def job_snapshot(
             SELECT job_id FROM {JOB_TABLE}
             WHERE status='queued' AND fence_token<=?
             ORDER BY CASE WHEN kind='graphify_build' THEN 0 ELSE 1 END,
-                     created_at,job_id
+                     created_at,rowid
             """,
             (MAX_JOB_ATTEMPTS,),
         ).fetchall()
@@ -1080,9 +1080,13 @@ def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
                 f"""
                 SELECT job_id FROM {JOB_TABLE}
                 WHERE status='queued' AND fence_token<=?
-                  AND (kind != 'graphify_build' OR created_at <= ?)
+                  AND (
+                    kind != 'graphify_build'
+                    OR request_id NOT LIKE 'graphify-rebuild-%'
+                    OR created_at <= ?
+                  )
                 ORDER BY CASE WHEN kind='graphify_build' THEN 0 ELSE 1 END,
-                         created_at,job_id
+                         created_at,rowid
                 LIMIT ?
                 """,
                 (
