@@ -658,6 +658,48 @@ canonical:
       source_record_digest: "62ac28f2ef4307dec643de08ec8bc5615cb767adc8500ad1ce29924b0b68a1c7"
       memory_policy: "canonical_required"
       promoted_at: "2026-08-20T00:07:12Z"
+  - id: "CANON-3F61951B2315AF3B"
+    date: "2026-08-20"
+    schema_patch_date: "2026-08-20"
+    type: "validation"
+    scope: ".agent/mcp/runtime/tenor_jobs.py"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-20T00:37:41Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787186261-cli-164356-t-21f3a7221dc66ea0.json"
+    summary: "Make _spawn_worker tolerant to fence loss before spawn publication: if the worker already claimed the job (status running, exact worker+fence) treat publish as success; otherwise (lease expired or fence reclaimed) requeue guarded by our exact fence and return benign TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION instead of raising/failing. launch_queued_jobs skips benign FENCE_LOST results instead of fail_job."
+    l0_abstract: "Make _spawn_worker tolerant to fence loss before spawn publication: if the worker already claimed the job (status running, exact worker+fence) treat publish as success; otherwise (lease expired or fence reclaimed) requeue guarded by our exact fence and return benign TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION instead of raising/failing. launch_queued_jobs skips benign FENCE_LOST results instead of fail_job."
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787186261-cli-164356-t-21f3a7221dc66ea0.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787186261-cli-164356-t-21f3a7221dc66ea0.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787186261-cli-164356-t-21f3a7221dc66ea0.json"
+      source_record_digest: "eb0c09254cb682bf26c194bbd8548c6c91961562832fc3226a255cb08c172bbc"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-20T00:37:41Z"
+  - id: "CANON-00815B0FD8E7D61D"
+    date: "2026-08-20"
+    schema_patch_date: "2026-08-20"
+    type: "validation"
+    scope: "scribe_bundle_graph publish preservation"
+    status: "PASS"
+    status_log:
+      - at: "2026-08-20T08:08:23Z"
+        status: "PASS"
+        source: ".agent/state/outputs/scribe-out/records/1787213302-cli-46100-te-50535712834d0e99.json"
+    summary: "Preserve canonical files (migrated legacy outputs) during graphify publish in build_project_graph"
+    l0_abstract: "Preserve canonical files (migrated legacy outputs) during graphify publish in build_project_graph"
+    evidence:
+      - ".agent/state/outputs/scribe-out/records/1787213302-cli-46100-te-50535712834d0e99.json"
+    result:
+      canonical_memory_promoted: true
+      source_record: "1787213302-cli-46100-te-50535712834d0e99.json"
+      source_record_path: ".agent/state/outputs/scribe-out/records/1787213302-cli-46100-te-50535712834d0e99.json"
+      source_record_digest: "9b238b5f8a68bc39d098f0d05f75d5ff69d3028ead723747c7defce315c74d47"
+      memory_policy: "canonical_required"
+      promoted_at: "2026-08-20T08:08:23Z"
 
 metrics:
   sessions_total: 3

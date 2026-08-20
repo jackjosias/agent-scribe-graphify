@@ -292,6 +292,10 @@ def build_project_graph(timeout: int = PROJECT_BUILD_TIMEOUT) -> int:
         _restore_project_graph(canonical, previous)
         raise
     if previous is not None and previous.exists():
+        for prev_item in sorted(previous.iterdir(), key=lambda item: item.name):
+            target = canonical / prev_item.name
+            if not target.exists():
+                os.replace(prev_item, target)
         shutil.rmtree(previous, ignore_errors=True)
     migrate_legacy_output(PROJECT_ROOT, "graphify-out")
     print(
