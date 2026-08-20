@@ -360,6 +360,37 @@ class TenorJobsTest(unittest.TestCase):
             else:
                 os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = previous
 
+    def test_explicit_graphify_build_ignores_debounce_gate(self) -> None:
+        previous = os.environ.get("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS")
+        os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = "3"
+        try:
+            explicit = tenor_jobs.submit_job(
+                self.root,
+                kind="graphify_build",
+                agent_id="",
+                task_id="",
+                request_id="graphify-explicit-request",
+                payload={"timeout_seconds": 30},
+                max_runtime_seconds=30,
+                auto_launch=True,
+            )
+            self.assertEqual(explicit["verdict"], "TENOR_JOB_ACCEPTED", explicit)
+            snapshot = tenor_jobs.job_snapshot(
+                self.root,
+                job_id=str(explicit["job_id"]),
+                limit=1,
+            )
+            self.assertNotEqual(
+                snapshot["jobs"][0]["status"],
+                "queued",
+                "an explicit graphify build must not be debounced",
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS", None)
+            else:
+                os.environ["AGENT_TENOR_GRAPHIFY_REBUILD_DEBOUNCE_SECONDS"] = previous
+
     def test_snapshot_reports_blocked_by_and_queue_position(self) -> None:
         graphify = tenor_jobs.submit_job(
             self.root,
