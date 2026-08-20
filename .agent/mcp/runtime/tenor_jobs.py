@@ -1045,9 +1045,51 @@ def _spawn_worker(
             ),
         ).rowcount
     if not updated:
-        process.terminate()
-        process.wait(timeout=5)
-        raise RuntimeError("TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION")
+        with db.connect(project_root) as con:
+            row = con.execute(
+                f"SELECT * FROM {JOB_TABLE} WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is not None and row["status"] == "running" and _fence_matches(
+            row,
+            worker_fence.worker_instance_id,
+            worker_fence.fence_token,
+            require_live_lease=False,
+        ):
+            updated = 1
+        else:
+            requeued = 0
+            if row is not None and row["status"] == "launching":
+                with db.connect(project_root) as con:
+                    requeued = con.execute(
+                        f"""
+                        UPDATE {JOB_TABLE}
+                        SET status='queued',owner_pid=0,recovery_prepared=0,
+                            heartbeat_at=?,updated_at=?
+                        WHERE job_id=? AND status='launching'
+                          AND worker_instance_id=? AND fence_token=?
+                          AND lease_expires_at<=?
+                        """,
+                        (
+                            now,
+                            now,
+                            job_id,
+                            worker_fence.worker_instance_id,
+                            worker_fence.fence_token,
+                            now,
+                        ),
+                    ).rowcount
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except Exception:
+                pass
+            return {
+                "ok": False,
+                "verdict": "TENOR_JOB_FENCE_LOST_BEFORE_SPAWN_PUBLICATION",
+                "job_id": job_id,
+                "requeued": bool(requeued),
+            }
     _register_child_process(project_root, job_id, process)
     threading.Thread(
         target=_reap_process,
@@ -1101,7 +1143,7 @@ def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
             if worker_fence is None:
                 continue
             try:
-                launched.append(_spawn_worker(root, job_id, worker_fence))
+                spawned = _spawn_worker(root, job_id, worker_fence)
             except Exception as exc:
                 fail_job(
                     root,
@@ -1110,6 +1152,10 @@ def launch_queued_jobs(project_root: Path | str) -> dict[str, Any]:
                     worker_instance_id=worker_fence.worker_instance_id,
                     fence_token=worker_fence.fence_token,
                 )
+                continue
+            if isinstance(spawned, dict) and spawned.get("ok") is False:
+                continue
+            launched.append(spawned)
     return {
         "ok": True,
         "verdict": "TENOR_JOBS_LAUNCHED",
