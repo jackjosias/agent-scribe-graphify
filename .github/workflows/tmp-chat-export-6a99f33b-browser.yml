@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tmp_browser_recovery
-          cat > /tmp/recover.mjs <<'JS'
+          cat > recover-6a99f33b.mjs <<'JS'
           import fs from 'node:fs';
           import { chromium } from 'playwright';
 
@@ -63,17 +63,23 @@ jobs:
           await page.waitForTimeout(15000);
           console.log('TITLE', await page.title());
           const bodyText = await page.locator('body').innerText().catch(() => '');
+          const messages = await page.locator('[data-message-author-role]').evaluateAll(nodes => nodes.map(n => ({
+            role: n.getAttribute('data-message-author-role'),
+            text: n.innerText || ''
+          }))).catch(() => []);
           fs.writeFileSync(`${out}/body.txt`, bodyText);
+          fs.writeFileSync(`${out}/messages.json`, JSON.stringify(messages, null, 2));
           fs.writeFileSync(`${out}/page.html`, await page.content());
           fs.writeFileSync(`${out}/network.json`, JSON.stringify(captures, null, 2));
           console.log('BODY_BYTES', bodyText.length);
+          console.log('MESSAGE_NODES', messages.length);
           console.log('BODY_PREVIEW', bodyText.slice(0, 1000).replace(/\n/g, ' | '));
           console.log('CAPTURES', captures.map(c => [c.status, c.url, c.body.length]));
           console.log('BACKEND_EXISTS', fs.existsSync(`${out}/backend-share.json`));
           await browser.close();
-          if (!fs.existsSync(`${out}/backend-share.json`) && bodyText.length < 5000) process.exit(3);
+          if (!fs.existsSync(`${out}/backend-share.json`) && messages.length < 2 && bodyText.length < 5000) process.exit(3);
           JS
-          node /tmp/recover.mjs
+          node ./recover-6a99f33b.mjs
       - name: Upload browser evidence
         if: always()
         uses: actions/upload-artifact@v4
