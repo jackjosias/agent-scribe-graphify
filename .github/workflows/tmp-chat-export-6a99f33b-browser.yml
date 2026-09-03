@@ -1,0 +1,85 @@
+name: Temporary ChatGPT browser recovery 6a99f33b
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  browser-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Load share in real Chromium and capture snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tmp_browser_recovery
+          cat > /tmp/recover.mjs <<'JS'
+          import fs from 'node:fs';
+          import { chromium } from 'playwright';
+
+          const share = 'https://chatgpt.com/share/6a99f33b-6bf8-83ea-80e3-ba4a0b6ce712';
+          const id = '6a99f33b-6bf8-83ea-80e3-ba4a0b6ce712';
+          const out = 'tmp_browser_recovery';
+          const browser = await chromium.launch({
+            headless: true,
+            args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+          });
+          const context = await browser.newContext({
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            locale: 'fr-FR',
+            viewport: { width: 1440, height: 1000 },
+            extraHTTPHeaders: { 'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.7' },
+          });
+          await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+          });
+          const page = await context.newPage();
+          const captures = [];
+          page.on('response', async (response) => {
+            const url = response.url();
+            if (url.includes('/backend-api/share/') || url.includes(id)) {
+              let body = '';
+              try { body = await response.text(); } catch {}
+              captures.push({ url, status: response.status(), headers: await response.allHeaders(), body });
+              if (url.includes('/backend-api/share/') && body.trim().startsWith('{')) {
+                fs.writeFileSync(`${out}/backend-share.json`, body);
+              }
+            }
+          });
+          const resp = await page.goto(share, { waitUntil: 'domcontentloaded', timeout: 120000 });
+          console.log('NAV', resp?.status(), page.url());
+          await page.waitForTimeout(15000);
+          console.log('TITLE', await page.title());
+          const bodyText = await page.locator('body').innerText().catch(() => '');
+          fs.writeFileSync(`${out}/body.txt`, bodyText);
+          fs.writeFileSync(`${out}/page.html`, await page.content());
+          fs.writeFileSync(`${out}/network.json`, JSON.stringify(captures, null, 2));
+          console.log('BODY_BYTES', bodyText.length);
+          console.log('BODY_PREVIEW', bodyText.slice(0, 1000).replace(/\n/g, ' | '));
+          console.log('CAPTURES', captures.map(c => [c.status, c.url, c.body.length]));
+          console.log('BACKEND_EXISTS', fs.existsSync(`${out}/backend-share.json`));
+          await browser.close();
+          if (!fs.existsSync(`${out}/backend-share.json`) && bodyText.length < 5000) process.exit(3);
+          JS
+          node /tmp/recover.mjs
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-public-6a99f33b-browser
+          path: tmp_browser_recovery/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
