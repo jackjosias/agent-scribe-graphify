@@ -1,0 +1,57 @@
+name: Temporary ChatGPT share probe 6a99f33b
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check curl-cffi
+      - name: Warm share session then call backend snapshot
+        shell: bash
+        run: |
+          python - <<'PY'
+          from curl_cffi import requests
+          share='https://chatgpt.com/share/6a99f33b-6bf8-83ea-80e3-ba4a0b6ce712'
+          api='https://chatgpt.com/backend-api/share/6a99f33b-6bf8-83ea-80e3-ba4a0b6ce712'
+          nav={
+            'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language':'en-US,en;q=0.9',
+            'sec-ch-ua':'"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+            'sec-ch-ua-mobile':'?0',
+            'sec-ch-ua-platform':'"Windows"',
+            'sec-fetch-dest':'document',
+            'sec-fetch-mode':'navigate',
+            'sec-fetch-site':'none',
+            'sec-fetch-user':'?1',
+            'upgrade-insecure-requests':'1',
+          }
+          s=requests.Session(impersonate='chrome131')
+          r=s.get(share,headers=nav,timeout=120)
+          print('share',r.status_code,len(r.content),r.headers.get('content-type'))
+          print('cookies',list(s.cookies.keys()))
+          api_headers=dict(nav)
+          api_headers['Accept']='application/json'
+          api_headers['Referer']=share
+          api_headers['sec-fetch-site']='same-origin'
+          r2=s.get(api,headers=api_headers,timeout=120)
+          print('api',r2.status_code,len(r2.content),r2.headers.get('content-type'))
+          print('body',r2.text[:500].replace('\n',' '))
+          if r2.status_code != 200:
+              raise SystemExit(2)
+          data=r2.json()
+          print('keys',sorted(data.keys()))
+          print('linear',len(data.get('linear_conversation') or []))
+          print('title',data.get('title'))
+          PY
