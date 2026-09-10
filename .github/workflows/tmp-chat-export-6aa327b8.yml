@@ -1,9 +1,9 @@
 name: Temporary stabilized ChatGPT transcript export 6aa327b8
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - tmp-export-6aa327b8
 
 permissions:
   contents: read
