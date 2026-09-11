@@ -1,0 +1,65 @@
+name: Temporary stabilized ChatGPT transcript export 6aa41e78
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout temporary branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install extraction dependencies
+        run: python -m pip install --disable-pip-version-check curl-cffi beautifulsoup4
+
+      - name: Recover validated extractor
+        run: curl -fsSL https://raw.githubusercontent.com/jackjosias/agent-scribe-graphify/0bd945a9c6040c867224faa8307c2d19adb7a760/tmp_chat_export_6a61d60a/export_stabilized.py -o /tmp/export_stabilized.py
+
+      - name: Extract and stabilize complete visible conversation
+        env:
+          SHARE_URL: https://chatgpt.com/share/6aa41e78-5f28-83ea-8245-2af893d8a107
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p tmp_chat_export_6a61d60a/result
+          python /tmp/export_stabilized.py 2>&1 | tee tmp_chat_export_6a61d60a/result/run.log
+
+      - name: Verify integrity and proven end
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIR="tmp_chat_export_6a61d60a/result"
+          DIAG="$DIR/diagnostics.txt"
+          CMP="$DIR/double-fetch-comparison.txt"
+          TXT="$DIR/conversation-chatgpt-public-6aa41e78-5f28-83ea-8245-2af893d8a107-INTEGRALE.txt"
+          test -s "$DIAG"
+          test -s "$CMP"
+          test -s "$TXT"
+          grep -q '^share_url=https://chatgpt.com/share/6aa41e78-5f28-83ea-8245-2af893d8a107$' "$DIAG"
+          grep -q '^double_fetch_stabilization=PASS$' "$DIAG"
+          grep -q '^real_end_verified=YES$' "$DIAG"
+          grep -q '^integral_export_validated=YES$' "$DIAG"
+          grep -q '^DOUBLE_FETCH_STABILIZATION=PASS$' "$CMP"
+          grep -q '^FIN_REELLE_DU_PARTAGE_VERIFIEE=OUI$' "$CMP"
+
+      - name: Upload transcript and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-public-6aa41e78-integrale
+          path: tmp_chat_export_6a61d60a/result/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
